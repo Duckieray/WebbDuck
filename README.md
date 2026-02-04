@@ -16,14 +16,21 @@ git clone https://github.com/yourusername/webbduck.git
 cd webbduck
 ```
 
-Create virtual environment:
+### Method 1: Conda (Recommended for Blackwell/WSL)
+
+This method ensures compatibility with the specific CUDA versions required for Blackwell GPUs.
+
+```bash
+conda create -n webbduck python=3.10
+conda activate webbduck
+pip install -r requirements.txt
+```
+
+### Method 2: Standard Python Venv
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
