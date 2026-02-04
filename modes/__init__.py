@@ -14,16 +14,17 @@ MODES = [
 ]
 
 
-def select_mode(settings, pipe, img2img):
+def select_mode(settings, pipe, img2img, base_img2img):
     """Select appropriate generation mode based on settings."""
     log.debug("=== MODE SELECTION START ===")
     log.debug(f"experimental_compress = {settings.get('experimental_compress')}")
     log.debug(f"img2img loaded = {img2img is not None}")
+    log.debug(f"input_image = {settings.get('input_image') is not None}")
 
     for mode in MODES:
         name = mode.__class__.__name__
         try:
-            can_run = mode.can_run(settings, pipe, img2img)
+            can_run = mode.can_run(settings, pipe, img2img, base_img2img)
         except Exception as e:
             log.error(f"[MODE CHECK ERROR] {name}: {e}")
             continue

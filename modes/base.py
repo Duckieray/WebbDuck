@@ -8,9 +8,9 @@ class GenerationMode(ABC):
     """
 
     @abstractmethod
-    def can_run(self, settings, pipe, img2img) -> bool:
+    def can_run(self, settings, pipe, img2img, base_img2img) -> bool:
         pass
 
     @abstractmethod
-    def run(self, *, settings, pipe, img2img, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, generator):
         pass

@@ -26,7 +26,8 @@ from transformers import (
 
 from safetensors.torch import load_file
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
-from webbduck.server.state import update_stage, update_progress
+
+from webbduck.core.schedulers import create_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -364,8 +365,11 @@ class PipelineManager:
     def __init__(self):
         self.pipe = None
         self.img2img = None
+        self.base_img2img = None
         self.trigger_phrase = ""
         self.key = None
+        self.scheduler_name = None
+        self.base_scheduler_config = None
         self.last_used = 0
         self.lock = threading.Lock()
 
@@ -466,20 +470,47 @@ class PipelineManager:
             self.img2img.unet.to("cuda")
             self.img2img.vae.to("cuda")
 
-    def get(self, base_model, second_pass_model=None, loras=None):
+            self.img2img.unet.to("cuda")
+            self.img2img.vae.to("cuda")
+
+    def get(self, base_model, second_pass_model=None, loras=None, scheduler_name="UniPC"):
         """Get or create pipeline with specified configuration."""
         with self.lock:
             if self.key != base_model:
+                from webbduck.server.state import update_stage, update_progress
                 update_stage("Loading base model")
                 update_progress(0.05)
 
                 if self.pipe:
+                    # Move to CPU first to help allocator
+                    try:
+                        self.pipe.to("cpu")
+                        if self.base_img2img:
+                            self.base_img2img.to("cpu")
+                    except Exception:
+                        pass
+                        
                     destroy_pipeline(self.pipe, self.img2img)
+                    self.base_img2img = None
+                    self.pipe = None
+                    self.img2img = None
+
+                    # Force clearing of global caches for heavy components to ensure clean switch
+                    global _UNET_CACHE, _REFINER_UNET_CACHE
+                    _UNET_CACHE.clear()
+                    _REFINER_UNET_CACHE.clear()
+                    
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
                 self.pipe, _, _ = build_pipeline(
                     base_model_name=base_model,
                     second_pass_model_name=None,
                     lora_names=None,
+                )
+                
+                self.base_img2img = StableDiffusionXLImg2ImgPipeline(
+                    **self.pipe.components
                 )
 
                 self.shared = {
@@ -494,8 +525,27 @@ class PipelineManager:
                 self.key = base_model
                 self.current_second_pass_model = None
                 self.current_loras = {}
+                self.current_loras = {}
                 self.trigger_phrase = ""
+                self.scheduler_name = None # Reset scheduler tracking
+                self.base_scheduler_config = self.pipe.scheduler.config
+            
+            # Switch scheduler if needed
+            if scheduler_name and scheduler_name != self.scheduler_name:
+                from webbduck.server.state import update_stage # Redundant if already imported but safe
+                update_stage(f"Switching scheduler to {scheduler_name}")
+                
+                # Always use the base config to prevent drift
+                config_source = self.base_scheduler_config or self.pipe.scheduler.config
+                new_scheduler = create_scheduler(scheduler_name, config_source)
+                
+                self.pipe.scheduler = new_scheduler
+                self.base_img2img.scheduler = new_scheduler
+                if self.img2img:
+                    self.img2img.scheduler = new_scheduler
+                self.scheduler_name = scheduler_name
 
+            from webbduck.server.state import update_stage, update_progress
             update_stage("Attaching second pass model")
             update_progress(0.15)
             self.attach_second_pass_model(second_pass_model)
@@ -513,7 +563,10 @@ class PipelineManager:
             torch.cuda.synchronize()
             self.last_used = time.time()
 
-            return self.pipe, self.img2img, self.trigger_phrase
+            torch.cuda.synchronize()
+            self.last_used = time.time()
+
+            return self.pipe, self.img2img, self.base_img2img, self.trigger_phrase
 
 
 pipeline_manager = PipelineManager()

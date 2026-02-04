@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <title>WebbDuck</title>
@@ -22,7 +23,22 @@
           <div class="toggle"></div>
         </label>
       </section>
-      
+
+      <section>
+        <label>Input Image (Optional)</label>
+        <div class="image-upload" id="image-upload-area" tabindex="0">
+          <input type="file" id="input_image" accept="image/*" style="display:none">
+          <div id="upload_placeholder">Drop image here or click</div>
+          <img id="input_image_preview" style="display:none">
+          <button id="clear_input_image" style="display:none">✕</button>
+        </div>
+
+        <div id="img2img-settings" style="display:none; margin-top: 10px;">
+          <label>Denoising Strength <span id="strength_val">0.75</span></label>
+          <input type="range" id="strength" min="0.05" max="1.0" step="0.01" value="0.75">
+        </div>
+      </section>
+
       <section>
         <label>Prompt</label>
         <textarea id="prompt" placeholder="A beautiful landscape..."></textarea>
@@ -38,12 +54,12 @@
         <textarea id="negative_prompt" placeholder="ugly, blurry, distorted..."></textarea>
       </section>
 
-      <section>
-        <label>Base Model</label>
+      <section id="base-model-section">
+        <label id="base-model-label">Base Model</label>
         <select id="base_model"></select>
       </section>
 
-      <section>
+      <section id="second-pass-model-section">
         <label>Second Pass Model</label>
         <select id="second_pass_model">
           <option value="None">None</option>
@@ -57,6 +73,15 @@
           <option value="refiner">Force Refiner</option>
           <option value="img2img">Force Img2Img</option>
         </select>
+
+        <div style="margin-top: 10px;">
+          <label>Refinement Strength</label>
+          <div class="row">
+            <input id="refinement_strength" type="range" class="slider" min="0" max="1" step="0.05" value="0.3"
+              style="flex:1">
+            <span id="refinement_strength_val" style="width: 30px; text-align: right; font-size: 12px;">0.3</span>
+          </div>
+        </div>
       </section>
 
       <section>
@@ -72,6 +97,10 @@
       </section>
 
       <section class="row">
+        <div>
+          <label>Scheduler</label>
+          <select id="scheduler"></select>
+        </div>
         <div>
           <label>Steps</label>
           <input id="steps" type="number" value="30" min="1" max="150" />
@@ -140,4 +169,5 @@
   <script src="/ui/ws.js"></script>
   <script src="/ui/app.js"></script>
 </body>
+
 </html>

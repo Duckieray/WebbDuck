@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
-from fastapi import FastAPI, Form, WebSocket
+import shutil
+from fastapi import FastAPI, Form, WebSocket, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -11,7 +13,12 @@ from webbduck.server.state import snapshot
 from webbduck.server.events import broadcast_state, active_sockets
 from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_path
 from webbduck.core.worker import gpu_worker
+from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
+from webbduck.core.schedulers import SCHEDULERS
+
+INPUTS_DIR = Path("inpaint_input")
+INPUTS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI()
 
@@ -79,6 +86,7 @@ app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui"))
 # Mount dynamic output directory
 from webbduck.server.storage import BASE
 app.mount("/outputs", StaticFiles(directory=str(BASE)), name="outputs")
+app.mount("/inputs", StaticFiles(directory=str(INPUTS_DIR)), name="inputs")
 
 
 @app.websocket("/ws")
@@ -97,7 +105,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.post("/test")
 async def test(
-    prompt: str = Form(...),
+    prompt: str = Form(""),
     prompt_2: str = Form(""),
     negative_prompt: str = Form(""),
     steps: int = Form(30),
@@ -150,7 +158,7 @@ async def test(
 
 @app.post("/generate")
 async def generate(
-    prompt: str = Form(...),
+    prompt: str = Form(""),
     prompt_2: str = Form(""),
     negative_prompt: str = Form(""),
     steps: int = Form(30),
@@ -163,7 +171,12 @@ async def generate(
     second_pass_model: str = Form("None"),
     second_pass_mode: str = Form("auto"),
     loras: str = Form("[]"),
+
     experimental_compress: bool = Form(False),
+    scheduler: str = Form("UniPC"),
+    strength: float = Form(0.75),
+    refinement_strength: float = Form(0.3),
+    image: UploadFile = File(None),
 ):
     """Generate batch of images."""
     lora_list = json.loads(loras)
@@ -185,7 +198,23 @@ async def generate(
         "seed": seed,
         "loras": lora_list,
         "experimental_compress": experimental_compress,
+        "experimental_compress": experimental_compress,
+        "scheduler": scheduler,
+        "strength": strength,
+        "refinement_strength": refinement_strength,
     }
+
+    if image:
+        # Use UUID to prevent file locking issues on Windows
+        ext = Path(image.filename).suffix
+        if not ext:
+            ext = ".png" # default
+        unique_name = f"{uuid.uuid4()}{ext}"
+        
+        file_path = INPUTS_DIR / unique_name
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        settings["image"] = str(file_path.absolute())
 
     job = {
         "type": "batch",
@@ -222,13 +251,14 @@ def gallery():
 
 
 @app.get("/models")
+@app.get("/models")
 def list_models():
-    """List available base models."""
+    """List available models."""
     return [
         {
             "name": name,
+            "type": info.get("type"),
             "defaults": info.get("defaults", {}),
-            "type": info.get("type", "unknown"),
         }
         for name, info in MODEL_REGISTRY.items()
     ]
@@ -238,6 +268,12 @@ def list_models():
 def list_second_pass_models():
     """List available second pass models."""
     return list(MODEL_REGISTRY.keys())
+
+
+@app.get("/schedulers")
+def list_schedulers():
+    """List available schedulers."""
+    return list(SCHEDULERS.keys())
 
 
 @app.get("/models/{base_model}/loras")
@@ -323,14 +359,14 @@ def health():
 
 @app.post("/tokenize")
 async def tokenize_prompt(
-    text: str = Form(...),
+    text: str = Form(""),
     base_model: str = Form(...),
     which: str = Form("prompt"),
 ):
     """Count tokens in prompt."""
     from webbduck.core.pipeline import pipeline_manager
 
-    pipe, _, _ = pipeline_manager.get(
+    pipe, _, _, _ = pipeline_manager.get(
         base_model=base_model,
         second_pass_model=None,
         loras=[],

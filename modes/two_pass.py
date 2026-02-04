@@ -65,12 +65,12 @@ def decode_latents(pipe, latents):
 
 
 class TwoPassMode(GenerationMode):
-    def can_run(self, settings, pipe, img2img):
+    def can_run(self, settings, pipe, img2img, base_img2img):
         second_pass = settings.get("second_pass_model")
         has_second_pass = second_pass not in (None, "", "None")
         return has_second_pass and img2img is not None
 
-    def run(self, *, settings, pipe, img2img, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, generator):
         log.info("Entering two-pass generation")
         
         pipeline_manager.set_active_unet("base")
@@ -191,7 +191,7 @@ class TwoPassMode(GenerationMode):
                     negative_pooled_prompt_embeds=r_neg_pooled_prompt_embeds,
                     guidance_scale=settings["cfg"],
                     num_inference_steps=int(settings["steps"] * 0.7),
-                    strength=0.3,
+                    strength=settings.get("refinement_strength", 0.3),
                     output_type="latent",
                     generator=generator,
                     **extra_args,
@@ -231,7 +231,7 @@ class TwoPassMode(GenerationMode):
                     negative_pooled_prompt_embeds=n_pooled,
                     guidance_scale=settings["cfg"],
                     num_inference_steps=int(settings["steps"] * 0.7),
-                    strength=0.3,
+                    strength=settings.get("refinement_strength", 0.3),
                     generator=generator,
                     output_type="latent",
                     original_size=(height, width),

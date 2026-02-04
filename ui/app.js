@@ -8,8 +8,32 @@ const steps = document.getElementById("steps");
 const cfg = document.getElementById("cfg");
 const width = document.getElementById("width");
 const height = document.getElementById("height");
+
 const num_images = document.getElementById("num_images");
+const scheduler = document.getElementById("scheduler");
 const secondPassSection = document.getElementById("second-pass-section");
+
+// Image Upload Elements
+const imageUploadArea = document.getElementById("image-upload-area");
+const inputImageInput = document.getElementById("input_image");
+const inputImagePreview = document.getElementById("input_image_preview");
+const uploadPlaceholder = document.getElementById("upload_placeholder");
+const clearInputImageBtn = document.getElementById("clear_input_image");
+const img2imgSettings = document.getElementById("img2img-settings");
+const strengthSlider = document.getElementById("strength");
+const strengthVal = document.getElementById("strength_val");
+const baseModelLabel = document.getElementById("base-model-label");
+const secondPassModelSection = document.getElementById("second-pass-model-section");
+let selectedImageFile = null;
+
+// Refinement Strength
+const refinementStrength = document.getElementById("refinement_strength");
+const refinementStrengthVal = document.getElementById("refinement_strength_val");
+
+refinementStrength.oninput = () => {
+  refinementStrengthVal.textContent = refinementStrength.value;
+  saveState();
+};
 
 let lastSeed = null;
 let previewState = {
@@ -40,7 +64,9 @@ function saveState() {
       name: card.dataset.lora,
       weight: parseFloat(card.querySelector("input[type=range]").value),
       enabled: card.querySelector("input[type=checkbox]").checked,
-    }))
+    })),
+    scheduler: scheduler.value,
+    refinement_strength: refinementStrength.value,
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -97,6 +123,11 @@ async function populateSelect(id, url, includeNone = true) {
         </option>`;
     }
   });
+
+  if (id === "scheduler" && !includeNone) {
+    // Set default if available
+    if (el.options.length > 0) el.selectedIndex = 0;
+  }
 }
 
 async function updateTokenCount(el, which) {
@@ -254,6 +285,7 @@ function applyModelDefaults() {
   if (defs.cfg) cfg.value = defs.cfg;
   if (defs.width) width.value = defs.width;
   if (defs.height) height.value = defs.height;
+  if (defs.scheduler) scheduler.value = defs.scheduler;
 
   // Trigger input event to update local storage
   saveState();
@@ -359,6 +391,16 @@ async function send(endpoint) {
     d.append("base_model", base_model.value);
     d.append("second_pass_model", second_pass_model.value);
     d.append("second_pass_mode", second_pass_mode.value);
+    d.append("scheduler", scheduler.value);
+    d.append("strength", strengthSlider.value);
+    d.append("refinement_strength", refinementStrength.value);
+
+    if (selectedImageFile) {
+      d.append("image", selectedImageFile);
+      // In Img2Img, we ignore the second pass model selection to effectively "disable" it
+      // and use the base model as the refiner/processor
+      d.set("second_pass_model", "None");
+    }
 
     if (seedMode.value === "reuse" && lastSeed !== null) {
       d.append("seed", lastSeed);
@@ -502,6 +544,84 @@ base_model.addEventListener("change", () => {
 second_pass_model.addEventListener("change", saveState);
 document.getElementById("experimental_compress").addEventListener("change", saveState);
 
+
+// Image Upload Logic
+function handleImageSelect(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+
+  selectedImageFile = file;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    inputImagePreview.src = e.target.result;
+    inputImagePreview.style.display = "block";
+    uploadPlaceholder.style.display = "none";
+    clearInputImageBtn.style.display = "block";
+    clearInputImageBtn.style.display = "block";
+    img2imgSettings.style.display = "block";
+
+    // Img2Img Mode: Hide second pass, rename Base Model
+    secondPassModelSection.style.display = "none";
+    secondPassSection.style.display = "none";
+    baseModelLabel.textContent = "Model";
+
+    // Ensure we don't accidentally send a second pass model
+    // (We don't change the value to allow restoring it, but we can handle in send())
+  };
+  reader.readAsDataURL(file);
+}
+
+imageUploadArea.onclick = (e) => {
+  if (e.target !== clearInputImageBtn) {
+    inputImageInput.click();
+  }
+};
+
+inputImageInput.onchange = (e) => {
+  if (e.target.files && e.target.files[0]) {
+    handleImageSelect(e.target.files[0]);
+  }
+};
+
+imageUploadArea.ondragover = (e) => {
+  e.preventDefault();
+  imageUploadArea.style.borderColor = "var(--accent)";
+};
+
+imageUploadArea.ondragleave = (e) => {
+  e.preventDefault();
+  imageUploadArea.style.borderColor = "";
+};
+
+imageUploadArea.ondrop = (e) => {
+  e.preventDefault();
+  imageUploadArea.style.borderColor = "";
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    handleImageSelect(e.dataTransfer.files[0]);
+  }
+};
+
+clearInputImageBtn.onclick = (e) => {
+  e.stopPropagation();
+  selectedImageFile = null;
+  inputImageInput.value = "";
+  inputImagePreview.src = "";
+  inputImagePreview.style.display = "none";
+  uploadPlaceholder.style.display = "block";
+  clearInputImageBtn.style.display = "none";
+  img2imgSettings.style.display = "none";
+
+  // Restore Text2Img Mode
+  secondPassModelSection.style.display = "block";
+  updateSecondPassVisibility(); // Restore second pass section if model selected
+  baseModelLabel.textContent = "Base Model";
+};
+
+strengthSlider.oninput = () => {
+  strengthVal.textContent = strengthSlider.value;
+  saveState();
+};
+
 window.addEventListener("DOMContentLoaded", async () => {
 
   // Load base models manually to capture defaults
@@ -522,6 +642,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   await populateSelect("second_pass_model", "/second_pass_models", true);
+  await populateSelect("scheduler", "/schedulers", false);
 
 
   const state = loadState();
@@ -542,6 +663,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     height.value = state.height ?? 1024;
     num_images.value = state.num_images ?? 4;
     setSeed(state.seed);
+
+    if (state.scheduler) scheduler.value = state.scheduler;
+    if (state.refinement_strength) {
+      refinementStrength.value = state.refinement_strength;
+      refinementStrengthVal.textContent = state.refinement_strength;
+    }
 
     if (state.experimental_compress) {
       document.getElementById("experimental_compress").checked = true;

@@ -9,10 +9,10 @@ log = logging.getLogger(__name__)
 
 
 class Text2ImgMode(GenerationMode):
-    def can_run(self, settings, pipe, img2img):
+    def can_run(self, settings, pipe, img2img, base_img2img):
         return settings.get("input_image") is None
 
-    def run(self, *, settings, pipe, img2img, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, generator):
         num_images = settings["num_images"]
         prompt = settings["prompt"]
         prompt_2 = settings.get("prompt_2")

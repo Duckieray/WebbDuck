@@ -94,16 +94,21 @@ async def gpu_worker(queue):
             update_stage("Idle")
             await broadcast_state(snapshot())
 
-            job["future"].set_result({
-                "seed": seed,
-                "images": paths,
-            })
+            # Sanitize settings for session log
+            log_settings = job["settings"].copy()
+            if "input_image" in log_settings:
+                del log_settings["input_image"]
 
             append_session_entry({
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "mode": job["type"],
                 "seed": seed,
-                "settings": job["settings"],
+                "settings": log_settings,
+                "images": paths,
+            })
+
+            job["future"].set_result({
+                "seed": seed,
                 "images": paths,
             })
 

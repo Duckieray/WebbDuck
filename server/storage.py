@@ -49,7 +49,11 @@ def save_images(images, settings):
         paths.append(to_web_path(p))
 
     with open(run / "meta.json", "w") as f:
-        json.dump(settings, f, indent=2)
+        # Sanitize settings for JSON
+        clean_settings = settings.copy()
+        if "input_image" in clean_settings:
+            del clean_settings["input_image"]
+        json.dump(clean_settings, f, indent=2)
 
     return paths
 
