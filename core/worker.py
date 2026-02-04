@@ -98,6 +98,8 @@ async def gpu_worker(queue):
             log_settings = job["settings"].copy()
             if "input_image" in log_settings:
                 del log_settings["input_image"]
+            if "mask_image" in log_settings:
+                del log_settings["mask_image"]
 
             append_session_entry({
                 "timestamp": datetime.utcnow().isoformat() + "Z",

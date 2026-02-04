@@ -49,11 +49,14 @@ def save_images(images, settings):
         paths.append(to_web_path(p))
 
     with open(run / "meta.json", "w") as f:
-        # Sanitize settings for JSON
+        # Sanitize settings for JSON (remove PIL Image objects)
         clean_settings = settings.copy()
         if "input_image" in clean_settings:
             del clean_settings["input_image"]
+        if "mask_image" in clean_settings:
+            del clean_settings["mask_image"]
         json.dump(clean_settings, f, indent=2)
+
 
     return paths
 

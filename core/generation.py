@@ -15,7 +15,7 @@ def run_generation(settings):
     if second_pass_model == "None":
         second_pass_model = None
 
-    pipe, img2img, base_img2img, _ = pipeline_manager.get(
+    pipe, img2img, base_img2img, base_inpaint, _ = pipeline_manager.get(
         base_model=settings["base_model"],
         second_pass_model=second_pass_model,
         loras=settings.get("loras", []),
@@ -38,17 +38,37 @@ def run_generation(settings):
                 pil_image = ImageOps.fit(pil_image, (target_w, target_h), method=Image.LANCZOS)
                 
             settings["input_image"] = pil_image
+            
+            # Load mask if present
+            if settings.get("mask_image"):
+                mask_path = Path(settings["mask_image"])
+                if mask_path.exists():
+                    try:
+                        mask_pil = Image.open(mask_path).convert("L") # Mask should be grayscale
+                        
+                        if mask_pil.size != pil_image.size:
+                             mask_pil = ImageOps.fit(mask_pil, pil_image.size, method=Image.NEAREST)
+                             
+                        settings["mask_image"] = mask_pil
+                    except Exception as e:
+                         print(f"Failed to load mask: {e}")
+                         del settings["mask_image"]
+                else:
+                    # Path implies existence, but if not found, remove it
+                    del settings["mask_image"]
+
 
     seed = settings.get("seed") or random.randint(0, 2**32 - 1)
     generator = torch.Generator(pipe.device).manual_seed(seed)
 
-    mode = select_mode(settings, pipe, img2img, base_img2img)
+    mode = select_mode(settings, pipe, img2img, base_img2img, base_inpaint)
 
     images, out_seed = mode.run(
         settings=settings,
         pipe=pipe,
         img2img=img2img,
         base_img2img=base_img2img,
+        base_inpaint=base_inpaint,
         generator=generator,
     )
 

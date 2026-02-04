@@ -138,8 +138,8 @@ button.secondary {
   overflow: hidden;
 }
 
-.preview > .preview-inner img,
-.preview > .preview-compare img {
+.preview>.preview-inner img,
+.preview>.preview-compare img {
   max-width: 100%;
   max-height: 100%;
 }
@@ -352,8 +352,8 @@ button.secondary {
 
 .preview-wipe:hover .wipe-handle::after {
   box-shadow:
-    0 8px 22px rgba(0,0,0,0.6),
-    inset 0 0 0 1px rgba(0,0,0,0.35);
+    0 8px 22px rgba(0, 0, 0, 0.6),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .preview-wipe:active .wipe-handle::after {
@@ -388,12 +388,10 @@ button.secondary {
   bottom: 0;
   left: var(--wipe);
   width: 2px;
-  background: linear-gradient(
-    to bottom,
-    rgba(88,166,255,0.0),
-    rgba(88,166,255,0.9),
-    rgba(88,166,255,0.0)
-  );
+  background: linear-gradient(to bottom,
+      rgba(88, 166, 255, 0.0),
+      rgba(88, 166, 255, 0.9),
+      rgba(88, 166, 255, 0.0));
   transform: translateX(-50%);
   cursor: col-resize;
   z-index: 20;
@@ -414,8 +412,8 @@ button.secondary {
     radial-gradient(circle at 30% 30%, #ffffff, #cfd8ff);
 
   box-shadow:
-    0 6px 18px rgba(0,0,0,0.45),
-    inset 0 0 0 1px rgba(0,0,0,0.25);
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.25);
 
   transform: translate(-50%, -50%);
 }
@@ -431,18 +429,16 @@ button.secondary {
   height: 14px;
 
   background:
-    linear-gradient(
-      to right,
-      rgba(0,0,0,0.35) 0%,
-      rgba(0,0,0,0.35) 20%,
+    linear-gradient(to right,
+      rgba(0, 0, 0, 0.35) 0%,
+      rgba(0, 0, 0, 0.35) 20%,
       transparent 20%,
       transparent 40%,
-      rgba(0,0,0,0.35) 40%,
-      rgba(0,0,0,0.35) 60%,
+      rgba(0, 0, 0, 0.35) 40%,
+      rgba(0, 0, 0, 0.35) 60%,
       transparent 60%,
       transparent 80%,
-      rgba(0,0,0,0.35) 80%
-    );
+      rgba(0, 0, 0, 0.35) 80%);
 
   transform: translate(-50%, -50%);
   pointer-events: none;
@@ -490,11 +486,11 @@ button.secondary {
   transition: transform 0.2s ease, background 0.2s ease;
 }
 
-.toggle-row input:checked + .toggle {
+.toggle-row input:checked+.toggle {
   background: #238636;
 }
 
-.toggle-row input:checked + .toggle::after {
+.toggle-row input:checked+.toggle::after {
   transform: translateX(16px);
   background: #ffffff;
 }
@@ -524,7 +520,7 @@ button.secondary {
 }
 
 .image-upload:focus-within {
-    border-color: var(--accent);
+  border-color: var(--accent);
 }
 
 .image-upload img {
@@ -541,7 +537,7 @@ button.secondary {
   width: 24px;
   height: 24px;
   padding: 0;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0, 0, 0, 0.6);
   color: white;
   border-radius: 50%;
   border: none;
@@ -552,5 +548,137 @@ button.secondary {
 }
 
 #clear_input_image:hover {
-    background: rgba(255, 0, 0, 0.7);
+  background: rgba(255, 0, 0, 0.7);
+}
+
+#edit_mask_btn {
+  position: absolute;
+  top: 5px;
+  right: 35px;
+  /* Left of clear button */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border-radius: 50%;
+  border: none;
+  font-size: 14px;
+  line-height: 24px;
+  cursor: pointer;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#edit_mask_btn:hover {
+  background: var(--accent);
+}
+
+/* MASK EDITOR OVERLAY */
+.mask-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.mask-editor-container {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+
+.mask-canvas-wrapper {
+  position: relative;
+  background: repeating-conic-gradient(#202020 0% 25%, #2a2a2a 0% 50%) 50% / 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 70vh;
+  display: flex;
+  justify-content: center;
+}
+
+.mask-canvas-wrapper canvas {
+  max-width: 100%;
+  max-height: 70vh;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.mask-toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mask-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.brush-size-preview {
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Preview-based Mask Editor */
+.preview-mask-editor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-conic-gradient(#202020 0% 25%, #2a2a2a 0% 50%) 50% / 20px 20px;
+}
+
+.preview-mask-editor canvas {
+  cursor: crosshair;
+  touch-action: none;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.mask-toolbar-inline {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.mask-tools-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mask-tools-inline label {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.mask-tools-inline input,
+.mask-tools-inline select {
+  width: auto;
+  padding: 4px 8px;
+  font-size: 12px;
 }

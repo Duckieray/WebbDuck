@@ -65,12 +65,12 @@ def decode_latents(pipe, latents):
 
 
 class TwoPassMode(GenerationMode):
-    def can_run(self, settings, pipe, img2img, base_img2img):
+    def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         second_pass = settings.get("second_pass_model")
         has_second_pass = second_pass not in (None, "", "None")
         return has_second_pass and img2img is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
         log.info("Entering two-pass generation")
         
         pipeline_manager.set_active_unet("base")

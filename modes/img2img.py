@@ -6,10 +6,10 @@ from webbduck.core.pipeline import pipeline_manager
 
 
 class Img2ImgMode(GenerationMode):
-    def can_run(self, settings, pipe, img2img, base_img2img):
+    def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         return settings.get("input_image") is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
         # Prefer second pass model (refiner) if available, per user request
         if img2img is not None:
             active_pipe = img2img

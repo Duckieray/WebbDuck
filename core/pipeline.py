@@ -13,6 +13,7 @@ from pathlib import Path
 from diffusers import (
     StableDiffusionXLPipeline,
     StableDiffusionXLImg2ImgPipeline,
+    StableDiffusionXLInpaintPipeline,
     UNet2DConditionModel,
     AutoencoderKL,
     UniPCMultistepScheduler,
@@ -366,6 +367,7 @@ class PipelineManager:
         self.pipe = None
         self.img2img = None
         self.base_img2img = None
+        self.base_inpaint = None
         self.trigger_phrase = ""
         self.key = None
         self.scheduler_name = None
@@ -513,6 +515,10 @@ class PipelineManager:
                     **self.pipe.components
                 )
 
+                self.base_inpaint = StableDiffusionXLInpaintPipeline(
+                    **self.pipe.components
+                )
+
                 self.shared = {
                     "vae": self.pipe.vae,
                     "tokenizer": self.pipe.tokenizer,
@@ -524,7 +530,6 @@ class PipelineManager:
 
                 self.key = base_model
                 self.current_second_pass_model = None
-                self.current_loras = {}
                 self.current_loras = {}
                 self.trigger_phrase = ""
                 self.scheduler_name = None # Reset scheduler tracking
@@ -541,6 +546,7 @@ class PipelineManager:
                 
                 self.pipe.scheduler = new_scheduler
                 self.base_img2img.scheduler = new_scheduler
+                self.base_inpaint.scheduler = new_scheduler
                 if self.img2img:
                     self.img2img.scheduler = new_scheduler
                 self.scheduler_name = scheduler_name
@@ -563,10 +569,7 @@ class PipelineManager:
             torch.cuda.synchronize()
             self.last_used = time.time()
 
-            torch.cuda.synchronize()
-            self.last_used = time.time()
-
-            return self.pipe, self.img2img, self.base_img2img, self.trigger_phrase
+            return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase
 
 
 pipeline_manager = PipelineManager()
