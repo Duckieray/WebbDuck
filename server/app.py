@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 import shutil
 from fastapi import FastAPI, Form, WebSocket, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from webbduck.server.state import snapshot
@@ -177,6 +177,9 @@ async def generate(
     strength: float = Form(0.75),
     refinement_strength: float = Form(0.3),
     image: UploadFile = File(None),
+    mask: UploadFile = File(None),
+    inpainting_fill: str = Form("replace"),
+    mask_blur: int = Form(8),
 ):
     """Generate batch of images."""
     lora_list = json.loads(loras)
@@ -198,10 +201,11 @@ async def generate(
         "seed": seed,
         "loras": lora_list,
         "experimental_compress": experimental_compress,
-        "experimental_compress": experimental_compress,
         "scheduler": scheduler,
         "strength": strength,
         "refinement_strength": refinement_strength,
+        "inpainting_fill": inpainting_fill,
+        "mask_blur": mask_blur,
     }
 
     if image:
@@ -216,6 +220,13 @@ async def generate(
             shutil.copyfileobj(image.file, buffer)
         settings["image"] = str(file_path.absolute())
 
+    if mask:
+        unique_mask_name = f"{uuid.uuid4()}_mask.png"
+        mask_path = INPUTS_DIR / unique_mask_name
+        with open(mask_path, "wb") as buffer:
+            shutil.copyfileobj(mask.file, buffer)
+        settings["mask_image"] = str(mask_path.absolute())
+
     job = {
         "type": "batch",
         "settings": settings,
@@ -224,13 +235,20 @@ async def generate(
 
     try:
         validate_second_pass(settings)
+        return await enqueue(job)
     except ValueError as e:
         return {
             "error": str(e),
             "type": "validation_error"
         }
-
-    return await enqueue(job)
+    except Exception as e:
+        import traceback
+        trace = traceback.format_exc()
+        print(trace) # Ensure it shows in server log
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Generation failed: {str(e)}", "trace": trace}
+        )
 
 
 @app.get("/gallery")
@@ -366,7 +384,7 @@ async def tokenize_prompt(
     """Count tokens in prompt."""
     from webbduck.core.pipeline import pipeline_manager
 
-    pipe, _, _, _ = pipeline_manager.get(
+    pipe, _, _, _, _ = pipeline_manager.get(
         base_model=base_model,
         second_pass_model=None,
         loras=[],

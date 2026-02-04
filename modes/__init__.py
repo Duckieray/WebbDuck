@@ -7,14 +7,17 @@ import logging
 
 log = logging.getLogger(__name__)
 
+from .inpaint import InpaintMode
+
 MODES = [
+    InpaintMode(),
     TwoPassMode(),
     Img2ImgMode(),
     Text2ImgMode(),  # fallback
 ]
 
 
-def select_mode(settings, pipe, img2img, base_img2img):
+def select_mode(settings, pipe, img2img, base_img2img, base_inpaint=None):
     """Select appropriate generation mode based on settings."""
     log.debug("=== MODE SELECTION START ===")
     log.debug(f"experimental_compress = {settings.get('experimental_compress')}")
@@ -24,7 +27,7 @@ def select_mode(settings, pipe, img2img, base_img2img):
     for mode in MODES:
         name = mode.__class__.__name__
         try:
-            can_run = mode.can_run(settings, pipe, img2img, base_img2img)
+            can_run = mode.can_run(settings, pipe, img2img, base_img2img, base_inpaint)
         except Exception as e:
             log.error(f"[MODE CHECK ERROR] {name}: {e}")
             continue
@@ -39,4 +42,4 @@ def select_mode(settings, pipe, img2img, base_img2img):
     raise RuntimeError("No valid generation mode found")
 
 
-__all__ = ["select_mode", "Text2ImgMode", "Img2ImgMode", "TwoPassMode"]
+__all__ = ["select_mode", "Text2ImgMode", "Img2ImgMode", "TwoPassMode", "InpaintMode"]

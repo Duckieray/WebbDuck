@@ -30,6 +30,7 @@
           <input type="file" id="input_image" accept="image/*" style="display:none">
           <div id="upload_placeholder">Drop image here or click</div>
           <img id="input_image_preview" style="display:none">
+          <button id="edit_mask_btn" style="display:none" title="Edit Mask">🖌️</button>
           <button id="clear_input_image" style="display:none">✕</button>
         </div>
 
@@ -164,6 +165,49 @@
       <div class="gallery" id="gallery"></div>
     </main>
 
+  </div>
+
+  <!-- MASK EDITOR OVERLAY (Hidden by default) -->
+  <div id="mask_overlay" class="mask-overlay" style="display: none;">
+    <div class="mask-editor-container">
+      <div class="mask-toolbar">
+        <div class="mask-tools">
+          <label>Brush Size</label>
+          <input type="range" id="mask_brush_size" min="5" max="100" value="30">
+          <div id="mask_brush_preview" class="brush-size-preview"></div>
+        </div>
+
+        <div class="mask-tools">
+          <button class="secondary" id="mask_clear_btn">Clear</button>
+          <button class="secondary" id="mask_invert_btn">Invert</button>
+        </div>
+      </div>
+
+      <div class="mask-canvas-wrapper" id="mask_canvas_wrapper">
+        <canvas id="mask_canvas"></canvas>
+      </div>
+
+      <div class="mask-toolbar">
+        <div class="mask-tools">
+          <label>Mode:</label>
+          <select id="inpainting_fill">
+            <option value="replace">Replace Masked (Inpaint)</option>
+            <option value="keep">Keep Masked (Protect)</option>
+          </select>
+        </div>
+
+        <div class="mask-tools">
+          <label>Blur:</label>
+          <input type="range" id="mask_blur" min="0" max="64" value="8" style="width: 80px;">
+          <span id="mask_blur_val">8</span>
+        </div>
+
+        <div class="buttons" style="flex: 0 0 auto;">
+          <button class="secondary" id="mask_cancel_btn">Cancel</button>
+          <button class="primary" id="mask_save_btn">Save Mask</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/ui/ws.js"></script>

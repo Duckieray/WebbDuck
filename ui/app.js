@@ -95,6 +95,161 @@ function updateSecondPassVisibility() {
   }
 }
 
+
+// --- MASK EDITOR LOGIC ---
+let currentMaskBlob = null;
+
+const maskOverlay = document.getElementById("mask_overlay");
+const maskCanvas = document.getElementById("mask_canvas");
+const maskCtx = maskCanvas.getContext("2d");
+const maskBrushSize = document.getElementById("mask_brush_size");
+const maskBrushPreview = document.getElementById("mask_brush_preview");
+const maskClearBtn = document.getElementById("mask_clear_btn");
+const maskInvertBtn = document.getElementById("mask_invert_btn");
+const maskCancelBtn = document.getElementById("mask_cancel_btn");
+const maskSaveBtn = document.getElementById("mask_save_btn");
+const editMaskBtn = document.getElementById("edit_mask_btn");
+
+let isDrawing = false;
+let lastX = 0;
+let lastY = 0;
+
+function updateBrushPreview() {
+  const size = maskBrushSize.value;
+  maskBrushPreview.style.width = size + "px";
+  maskBrushPreview.style.height = size + "px";
+}
+
+maskBrushSize.addEventListener("input", updateBrushPreview);
+updateBrushPreview();
+
+function openMaskEditor() {
+  if (!selectedImageFile) return;
+
+  // Use the main preview area as the mask editor
+  previewState.mode = "mask";
+  renderPreview();
+}
+
+function closeMaskEditor() {
+  maskOverlay.style.display = "none";
+}
+
+editMaskBtn.onclick = (e) => {
+  e.stopPropagation();
+  openMaskEditor();
+};
+
+maskCancelBtn.onclick = closeMaskEditor;
+
+maskClearBtn.onclick = () => {
+  maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+};
+
+maskInvertBtn.onclick = () => {
+  // Invert alpha/white logic? 
+  // We are drawing WHITE on TRANSPARENT.
+  // Inverting would mean making transparent->white and white->transparent.
+
+  const w = maskCanvas.width;
+  const h = maskCanvas.height;
+
+  const imageData = maskCtx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    // Alpha determines the mask
+    // Standard: 0 (Transparent) -> Unmasked, 255 (Opaque White) -> Masked
+    // Invert: 0 -> 255, 255 -> 0
+    // We only care about Alpha really if we use white brush
+
+    const alpha = data[i + 3];
+    data[i + 3] = 255 - alpha;
+
+    // Ensure color is white
+    data[i] = 255;
+    data[i + 1] = 255;
+    data[i + 2] = 255;
+  }
+
+  maskCtx.putImageData(imageData, 0, 0);
+};
+
+// Drawing Logic
+function getPos(e) {
+  const rect = maskCanvas.getBoundingClientRect();
+  const scaleX = maskCanvas.width / rect.width;
+  const scaleY = maskCanvas.height / rect.height;
+
+  // Standardize mouse/touch
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+function draw(e) {
+  if (!isDrawing) return;
+  e.preventDefault(); // Prevent scrolling on touch
+
+  const { x, y } = getPos(e);
+
+  maskCtx.beginPath();
+  maskCtx.moveTo(lastX, lastY);
+  maskCtx.lineTo(x, y);
+  maskCtx.strokeStyle = "rgba(255, 255, 255, 1)";
+  maskCtx.lineCap = "round";
+  maskCtx.lineJoin = "round";
+  maskCtx.lineWidth = maskBrushSize.value; // Use scale?
+  // Since we scaled coordinates, standard line width applies to internal resolution
+  // We might want to scale linewidth if canvas resolution is huge
+  // but `value` is screen pixels.
+  // Actually line width is in canvas coordinate space.
+  const rect = maskCanvas.getBoundingClientRect();
+  const scale = maskCanvas.width / rect.width;
+  maskCtx.lineWidth = maskBrushSize.value * scale;
+
+  maskCtx.stroke();
+
+  lastX = x;
+  lastY = y;
+}
+
+maskCanvas.addEventListener("mousedown", (e) => {
+  isDrawing = true;
+  const pos = getPos(e);
+  lastX = pos.x;
+  lastY = pos.y;
+  // Dot logic
+  draw(e);
+});
+
+maskCanvas.addEventListener("mousemove", draw);
+window.addEventListener("mouseup", () => isDrawing = false);
+
+// Touch support
+maskCanvas.addEventListener("touchstart", (e) => {
+  isDrawing = true;
+  const pos = getPos(e);
+  lastX = pos.x;
+  lastY = pos.y;
+  draw(e);
+}, { passive: false });
+maskCanvas.addEventListener("touchmove", draw, { passive: false });
+window.addEventListener("touchend", () => isDrawing = false);
+
+maskSaveBtn.onclick = () => {
+  maskCanvas.toBlob((blob) => {
+    currentMaskBlob = blob;
+    // Visual indicator that mask is present?
+    editMaskBtn.style.color = "var(--green)";
+    closeMaskEditor();
+  });
+};
+
 second_pass_model.addEventListener("change", () => {
   updateSecondPassVisibility();
   saveState();
@@ -160,6 +315,140 @@ async function updateTokenCount(el, which) {
 function renderPreview() {
   const el = document.getElementById("preview");
 
+  // --- MASK EDITING MODE ---
+  if (previewState.mode === "mask" && selectedImageFile) {
+    el.innerHTML = `
+      <div class="preview-mask-editor">
+        <canvas id="preview_mask_canvas"></canvas>
+      </div>
+
+      <div class="preview-toolbar mask-toolbar-inline">
+        <div class="mask-tools-inline">
+          <label>Brush</label>
+          <input type="range" id="preview_brush_size" min="5" max="100" value="30">
+        </div>
+        <div class="mask-tools-inline">
+          <label>Mode</label>
+          <select id="preview_inpainting_fill">
+            <option value="replace">Replace Masked</option>
+            <option value="keep">Keep Masked</option>
+          </select>
+        </div>
+        <div class="mask-tools-inline">
+          <label>Blur</label>
+          <input type="range" id="preview_mask_blur" min="0" max="64" value="8" style="width:60px">
+        </div>
+        <button id="maskClearBtn">Clear</button>
+        <button id="maskInvertBtn">Invert</button>
+        <button id="maskSaveBtn" class="primary">Save Mask</button>
+        <button id="maskCancelBtn">Cancel</button>
+      </div>
+    `;
+
+    const canvas = document.getElementById("preview_mask_canvas");
+    const ctx = canvas.getContext("2d");
+    const brushSlider = document.getElementById("preview_brush_size");
+
+    // Load image and size canvas to fill preview
+    const img = new Image();
+    img.onload = () => {
+      const container = el.querySelector(".preview-mask-editor");
+      const maxW = container.clientWidth;
+      const maxH = container.clientHeight - 10; // Leave some padding
+
+      let w = img.width;
+      let h = img.height;
+      const ratio = w / h;
+
+      // Scale UP to fill the container (not down)
+      if (ratio > maxW / maxH) {
+        // Image is wider than container ratio
+        w = maxW;
+        h = w / ratio;
+      } else {
+        // Image is taller than container ratio
+        h = maxH;
+        w = h * ratio;
+      }
+
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      canvas.style.backgroundImage = `url(${inputImagePreview.src})`;
+      canvas.style.backgroundSize = "100% 100%";
+      ctx.clearRect(0, 0, w, h);
+    };
+    img.src = inputImagePreview.src;
+
+    // Drawing state
+    let drawing = false;
+    let lx = 0, ly = 0;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: (cx - rect.left) * scaleX, y: (cy - rect.top) * scaleY };
+    }
+
+    function drawLine(e) {
+      if (!drawing) return;
+      e.preventDefault();
+      const { x, y } = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = "rgba(255,255,255,1)";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const rect = canvas.getBoundingClientRect();
+      ctx.lineWidth = brushSlider.value * (canvas.width / rect.width);
+      ctx.stroke();
+      lx = x; ly = y;
+    }
+
+    canvas.onmousedown = (e) => { drawing = true; const p = getPos(e); lx = p.x; ly = p.y; drawLine(e); };
+    canvas.onmousemove = drawLine;
+    window.addEventListener("mouseup", () => drawing = false);
+    canvas.ontouchstart = (e) => { drawing = true; const p = getPos(e); lx = p.x; ly = p.y; drawLine(e); };
+    canvas.ontouchmove = drawLine;
+    window.addEventListener("touchend", () => drawing = false);
+
+    document.getElementById("maskClearBtn").onclick = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    document.getElementById("maskInvertBtn").onclick = () => {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < imgData.data.length; i += 4) {
+        imgData.data[i + 3] = 255 - imgData.data[i + 3];
+        imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = 255;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    };
+
+    document.getElementById("maskSaveBtn").onclick = () => {
+      canvas.toBlob((blob) => {
+        currentMaskBlob = blob;
+        // Store settings from inline controls
+        window._maskInpaintingFill = document.getElementById("preview_inpainting_fill").value;
+        window._maskBlur = document.getElementById("preview_mask_blur").value;
+        editMaskBtn.style.color = "var(--green)";
+        previewState.mode = "original";
+        renderPreview();
+      });
+    };
+
+    document.getElementById("maskCancelBtn").onclick = () => {
+      previewState.mode = "original";
+      renderPreview();
+    };
+
+    return;
+  }
+
+  // --- NORMAL PREVIEW MODES ---
   if (!previewState.original) {
     el.innerHTML = "<span>No image yet</span>";
     return;
@@ -267,6 +556,7 @@ function renderPreview() {
 
   document.getElementById("upscaleBtn").onclick = runUpscale;
 }
+
 
 base_model.addEventListener("change", loadLoras);
 
@@ -400,6 +690,16 @@ async function send(endpoint) {
       // In Img2Img, we ignore the second pass model selection to effectively "disable" it
       // and use the base model as the refiner/processor
       d.set("second_pass_model", "None");
+
+      // Mask support
+      if (currentMaskBlob) {
+        d.append("mask", currentMaskBlob, "mask.png");
+        // Use stored values from preview editor, or fall back to overlay elements
+        const fill = window._maskInpaintingFill || document.getElementById("inpainting_fill")?.value || "replace";
+        const blur = window._maskBlur || document.getElementById("mask_blur")?.value || "8";
+        d.append("inpainting_fill", fill);
+        d.append("mask_blur", blur);
+      }
     }
 
     if (seedMode.value === "reuse" && lastSeed !== null) {
@@ -425,6 +725,14 @@ async function send(endpoint) {
     d.append("loras", JSON.stringify(loras));
 
     const r = await fetch(endpoint, { method: "POST", body: d });
+
+    if (!r.ok) {
+      const text = await r.text();
+      console.error("Server error:", r.status, text);
+      alert(`Server Error ${r.status}: ${text.slice(0, 200)}`);
+      return;
+    }
+
     const data = await r.json();
 
     if (data.seed !== undefined) {
@@ -432,7 +740,7 @@ async function send(endpoint) {
       saveState();
     }
 
-    if (data?.type === "validation_error") {
+    if (data?.type === "validation_error" || data?.error) {
       alert(data.error);
       throw new Error(data.error);
     }
@@ -441,7 +749,7 @@ async function send(endpoint) {
 
   } catch (e) {
     console.error("Generation failed:", e);
-    alert("Generation failed – check console");
+    alert(`Client Error: ${e.message}\n${e.stack || ""}`);
   }
 }
 
@@ -520,7 +828,31 @@ document.getElementById("genBtn").onclick = async () => {
 
       renderPreview();
     };
-    g.appendChild(img);
+
+    // Add "Fix / Inpaint" overlay button
+    const container = document.createElement("div");
+    container.style.position = "relative";
+    container.appendChild(img);
+
+    const sendBtn = document.createElement("button");
+    sendBtn.innerText = "🎨 Fix";
+    sendBtn.className = "gallery-action";
+    sendBtn.onclick = async (e) => {
+      e.stopPropagation();
+      // Fetch blob and set as input
+      const blob = await fetch(i).then(r => r.blob());
+      const file = new File([blob], "generated.png", { type: "image/png" });
+      handleImageSelect(file);
+
+      // Open Editor Immediately
+      setTimeout(() => editMaskBtn.click(), 100);
+
+      // Populate inputs if meta available? (Maybe later)
+      // For now, just setting the image is main goal.
+    };
+
+    container.appendChild(sendBtn);
+    g.appendChild(container);
   });
 };
 
@@ -559,6 +891,8 @@ function handleImageSelect(file) {
     clearInputImageBtn.style.display = "block";
     clearInputImageBtn.style.display = "block";
     img2imgSettings.style.display = "block";
+    // Force flex display for centering icon
+    editMaskBtn.style.display = "flex";
 
     // Img2Img Mode: Hide second pass, rename Base Model
     secondPassModelSection.style.display = "none";
@@ -615,6 +949,11 @@ clearInputImageBtn.onclick = (e) => {
   secondPassModelSection.style.display = "block";
   updateSecondPassVisibility(); // Restore second pass section if model selected
   baseModelLabel.textContent = "Base Model";
+
+  // Clear Mask
+  currentMaskBlob = null;
+  editMaskBtn.style.display = "none";
+  editMaskBtn.style.color = "";
 };
 
 strengthSlider.oninput = () => {
