@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Project specific
+outputs/
+checkpoint/
+lora/
+weights/
+*.pth
+*.ckpt
+*.safetensors
+PROJECT_DUMP.txt
+dump_project.sh
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Session data
+session_log.json
