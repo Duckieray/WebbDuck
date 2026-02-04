@@ -1,0 +1,14 @@
+# Enforce consistent line endings for cross-platform compatibility
+* text=auto
+
+# Explicitly declare text files
+*.py text
+*.js text
+*.html text
+*.css text
+*.md text
+*.txt text
+*.json text
+
+# Scripts that must be LF (for Linux/WSL)
+*.sh text eol=lf
