@@ -96,3 +96,11 @@ def first_available_model(available_models):
     if not available_models:
         pytest.skip("No models available in registry")
     return next(iter(available_models.keys()))
+
+
+@pytest.fixture
+def client():
+    """Create test client for FastAPI app (shared fixture)."""
+    from fastapi.testclient import TestClient
+    from webbduck.server.app import app
+    return TestClient(app)

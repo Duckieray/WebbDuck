@@ -4,12 +4,7 @@ import pytest
 from pathlib import Path
 
 
-@pytest.fixture
-def client():
-    """Create test client for FastAPI app."""
-    from fastapi.testclient import TestClient
-    from webbduck.server.app import app
-    return TestClient(app)
+
 
 
 class TestHealthEndpoint:
