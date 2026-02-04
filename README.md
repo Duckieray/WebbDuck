@@ -9,17 +9,37 @@
 - Linux (tested on Ubuntu 24)
 
 ## Installation
-```bashClone the repository
+
+Clone the repository:
+```bash
 git clone https://github.com/yourusername/webbduck.git
-cd webbduckCreate virtual environment
+cd webbduck
+```
+
+Create virtual environment:
+```bash
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activateInstall dependencies
-pip install -r requirements.txtCreate necessary directories
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Create necessary directories:
+```bash
 mkdir -p checkpoint/sdxl lora outputs weights
+```
 
 ## Quick Start
-```bashStart the server
-python server.pyOpen browser to http://localhost:8000
+
+Start the server:
+```bash
+python server.py
+```
+
+Open browser to http://localhost:8000
 
 ## Project Goals
 
@@ -54,11 +74,15 @@ The second pass may use either:
 - ✅ Optional experimental prompt compression (disabled by default)
 - ✅ Built-in upscaling with Real-ESRGAN
 
-## Project Structure├── core/                  # Generation logic, pipelines, prompt routing
+## Project Structure
+
+```text
+├── core/                  # Generation logic, pipelines, prompt routing
 ├── modes/                 # Generation strategies (text2img, img2img, two-pass)
 ├── experimental_prompt/   # Opt-in experimental features
 ├── webui/                 # Web interface
 └── docs/                  # Design documents and philosophy
+```
 
 ## Status
 
