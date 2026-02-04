@@ -9,13 +9,18 @@ from fastapi import FastAPI, Form, WebSocket, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from webbduck.server.state import snapshot
+from webbduck.server.state import snapshot, update_stage, update_progress
 from webbduck.server.events import broadcast_state, active_sockets
 from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_path
 from webbduck.core.worker import gpu_worker
-from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
 from webbduck.core.schedulers import SCHEDULERS
+from webbduck.core.captioner import (
+    list_captioners,
+    get_caption_styles,
+    is_captioning_available,
+    generate_caption,
+)
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -382,17 +387,19 @@ async def tokenize_prompt(
     which: str = Form("prompt"),
 ):
     """Count tokens in prompt."""
-    from webbduck.core.pipeline import pipeline_manager
+    from webbduck.core.pipeline import get_tokenizer
+    from webbduck.models.registry import MODEL_REGISTRY
+    
+    # Get model path directly
+    base_entry = MODEL_REGISTRY[base_model]
+    base_path = base_entry["path"]
+    
+    # Use lightweight tokenizer loader
+    tokenizer, tokenizer_2 = get_tokenizer(base_path)
 
-    pipe, _, _, _, _ = pipeline_manager.get(
-        base_model=base_model,
-        second_pass_model=None,
-        loras=[],
-    )
-
-    tokenizer = (
-        pipe.tokenizer_2 if which == "prompt_2"
-        else pipe.tokenizer
+    active_tokenizer = (
+        tokenizer_2 if which == "prompt_2"
+        else tokenizer
     )
 
     tokens = tokenizer(
@@ -406,3 +413,109 @@ async def tokenize_prompt(
         "limit": 77,
         "over": max(0, len(tokens) - 77),
     }
+
+
+@app.get("/captioners")
+def get_captioners():
+    """List available captioning plugins."""
+    return {
+        "available": is_captioning_available(),
+        "captioners": list_captioners(),
+    }
+
+
+@app.get("/caption_styles")
+def get_caption_styles_endpoint():
+    """List available caption styles and their prompts."""
+    return get_caption_styles()
+
+
+@app.post("/caption")
+async def caption_image(
+    image: UploadFile = File(...),
+    style: str = Form("detailed"),
+    captioner: str = Form(None),
+    max_tokens: int = Form(300),
+):
+    """Generate a caption for the uploaded image.
+    
+    This will temporarily unload generation pipelines to free VRAM,
+    then reload them after captioning is complete.
+    """
+    if not is_captioning_available():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "No captioner plugins available",
+                "message": "Install a captioner plugin in ~/.webbduck/plugins/captioners/",
+            }
+        )
+    
+    # Save uploaded image temporarily
+    ext = Path(image.filename).suffix if image.filename else ".png"
+    unique_name = f"{uuid.uuid4()}_caption{ext}"
+    file_path = INPUTS_DIR / unique_name
+    
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        
+        # Update UI status
+        update_stage("Captioning")
+        update_progress(0.3)
+        await broadcast_state(snapshot())
+        
+        # Offload generation pipelines to free VRAM for captioning
+        def offload_and_caption():
+            # Lazy import to avoid circular imports and side effects
+            import torch
+            import gc
+            
+            # Only offload if there's actually a pipeline loaded on GPU
+            try:
+                from webbduck.core.pipeline import pipeline_manager
+                if pipeline_manager.pipe is not None and hasattr(pipeline_manager.pipe, 'unet'):
+                    # Check if UNet is actually on CUDA before offloading
+                    unet_device = next(pipeline_manager.pipe.unet.parameters()).device
+                    if unet_device.type == 'cuda':
+                        pipeline_manager.pipe.unet.to('cpu')
+                        pipeline_manager.pipe.vae.to('cpu')
+                        torch.cuda.empty_cache()
+                        gc.collect()
+            except Exception:
+                pass  # If anything fails, just continue with captioning
+            
+            # Now run captioning
+            return generate_caption(
+                image_path=file_path,
+                style=style,
+                captioner_name=captioner,
+                max_tokens=max_tokens,
+            )
+        
+        # Run captioning in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        caption = await loop.run_in_executor(None, offload_and_caption)
+        
+        update_stage("Idle")
+        update_progress(1.0)
+        await broadcast_state(snapshot())
+        
+        print(f"[Caption] Complete - returning result, no further loading should happen")
+        return {"caption": caption, "style": style}
+        
+    except Exception as e:
+        import traceback
+        update_stage("Error")
+        await broadcast_state(snapshot())
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "trace": traceback.format_exc()}
+        )
+    finally:
+        # Clean up temp file
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception:
+                pass

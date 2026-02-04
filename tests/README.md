@@ -6,7 +6,7 @@ Pytest-based test suite for the webbduck image generation system.
 
 ```bash
 # Activate environment
-conda activate web_img
+# Activate environment (e.g. source .venv/bin/activate)
 
 # Run fast tests only (no GPU required)
 pytest tests/test_modes.py -v

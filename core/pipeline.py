@@ -196,6 +196,35 @@ def build_second_pass_pipeline(model_path: Path, shared):
     
     return pipe
 
+def get_tokenizer(base_path: Path):
+    """Load and cache tokenizers only (lightweight)."""
+    key = str(base_path.resolve()) + "_tokenizers"
+    
+    if key in _TEXT_CACHE:
+        return _TEXT_CACHE[key]
+    
+    tokenizer_path = base_path / "tokenizer"
+    tokenizer_2_path = base_path / "tokenizer_2"
+    
+    # Check if folder structure exists (Diffusers format)
+    if tokenizer_path.exists() and tokenizer_2_path.exists():
+        tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path)
+        tokenizer_2 = CLIPTokenizer.from_pretrained(tokenizer_2_path)
+    else:
+        # Fallback for single-file checkpoints or missing folders: use standard SDXL tokenizers
+        # These are small downloads and cached
+        tokenizer = CLIPTokenizer.from_pretrained(
+            "openai/clip-vit-large-patch14",
+        )
+        tokenizer_2 = CLIPTokenizer.from_pretrained(
+            "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k",
+            pad_token="!", # SDXL uses '!' padding for openclip
+        )
+    
+    _TEXT_CACHE[key] = (tokenizer, tokenizer_2)
+    return tokenizer, tokenizer_2
+
+
 def get_text_components(base_path: Path):
     """Load and cache text encoders and tokenizers."""
     key = str(base_path.resolve())

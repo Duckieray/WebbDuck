@@ -26,6 +26,12 @@ const baseModelLabel = document.getElementById("base-model-label");
 const secondPassModelSection = document.getElementById("second-pass-model-section");
 let selectedImageFile = null;
 
+// Caption controls
+const captionControls = document.getElementById("caption-controls");
+const captionStyleSelect = document.getElementById("caption_style");
+const captionBtn = document.getElementById("caption_btn");
+let captioningAvailable = false;
+
 // Refinement Strength
 const refinementStrength = document.getElementById("refinement_strength");
 const refinementStrengthVal = document.getElementById("refinement_strength_val");
@@ -901,6 +907,11 @@ function handleImageSelect(file) {
 
     // Ensure we don't accidentally send a second pass model
     // (We don't change the value to allow restoring it, but we can handle in send())
+
+    // Show caption controls if captioning is available
+    if (captioningAvailable && captionControls) {
+      captionControls.style.display = "block";
+    }
   };
   reader.readAsDataURL(file);
 }
@@ -954,6 +965,11 @@ clearInputImageBtn.onclick = (e) => {
   currentMaskBlob = null;
   editMaskBtn.style.display = "none";
   editMaskBtn.style.color = "";
+
+  // Hide caption controls
+  if (captionControls) {
+    captionControls.style.display = "none";
+  }
 };
 
 strengthSlider.oninput = () => {
@@ -961,7 +977,59 @@ strengthSlider.oninput = () => {
   saveState();
 };
 
+// Caption generation function
+async function generateCaption() {
+  if (!selectedImageFile || !captioningAvailable) return;
+
+  const style = captionStyleSelect.value;
+  captionBtn.disabled = true;
+  captionBtn.textContent = "🔍 Captioning...";
+
+  try {
+    const fd = new FormData();
+    fd.append("image", selectedImageFile);
+    fd.append("style", style);
+
+    const r = await fetch("/caption", { method: "POST", body: fd });
+    const data = await r.json();
+
+    if (data.error) {
+      console.error("Caption error:", data.error);
+      alert("Captioning failed: " + data.error);
+      return;
+    }
+
+    // Populate prompt with caption
+    promptInput.value = data.caption;
+    saveState();
+
+    // Update token count
+    updateTokenCount(promptInput, "prompt");
+
+  } catch (e) {
+    console.error("Caption failed:", e);
+    alert("Captioning failed: " + e.message);
+  } finally {
+    captionBtn.disabled = false;
+    captionBtn.textContent = "🔍 Caption";
+  }
+}
+
+if (captionBtn) {
+  captionBtn.onclick = generateCaption;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
+
+  // Check if captioning is available
+  try {
+    const captionerData = await fetch("/captioners").then(r => r.json());
+    captioningAvailable = captionerData.available;
+    console.log("Captioning available:", captioningAvailable, "Plugins:", captionerData.captioners);
+  } catch (e) {
+    console.log("Captioner check failed:", e);
+    captioningAvailable = false;
+  }
 
   // Load base models manually to capture defaults
   const models = await fetch("/models").then(r => r.json());

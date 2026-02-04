@@ -6,6 +6,7 @@ import random
 from PIL import Image, ImageOps
 
 from webbduck.core.pipeline import pipeline_manager
+from webbduck.core.captioner import unload_captioners
 from webbduck.modes import select_mode
 
 
@@ -14,6 +15,9 @@ def run_generation(settings):
     second_pass_model = settings.get("second_pass_model")
     if second_pass_model == "None":
         second_pass_model = None
+
+    # Unload any captioner models to free VRAM before loading generation pipelines
+    unload_captioners()
 
     pipe, img2img, base_img2img, base_inpaint, _ = pipeline_manager.get(
         base_model=settings["base_model"],
