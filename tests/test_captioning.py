@@ -10,36 +10,46 @@ import os
 class TestCaptioningConfig:
     """Tests for captioning_config.py."""
 
-    def test_get_plugins_dir_default(self):
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
+    def test_get_plugins_dirs_default(self):
         """Test default plugins directory path."""
-        from webbduck.core.captioning_config import get_plugins_dir
+        from webbduck.core.captioning_config import get_plugins_dirs
         
-        # Without env var, should use home directory
+        # Without env var, should use home directory (and skip local if mocked to non-exist)
         with patch.dict(os.environ, {}, clear=True):
             # Clear any existing WEBBDUCK_PLUGINS_DIR
             if 'WEBBDUCK_PLUGINS_DIR' in os.environ:
                 del os.environ['WEBBDUCK_PLUGINS_DIR']
             
-            result = get_plugins_dir()
-            expected = Path.home() / ".webbduck" / "plugins"
+            result = get_plugins_dirs()
+            expected = [Path.home() / ".webbduck" / "plugins"]
             assert result == expected
 
-    def test_get_plugins_dir_env(self):
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
+    def test_get_plugins_dirs_env(self):
         """Test plugins directory from environment variable."""
-        from webbduck.core.captioning_config import get_plugins_dir
+        from webbduck.core.captioning_config import get_plugins_dirs
         
         custom_path = "/custom/plugins/path"
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": custom_path}):
-            result = get_plugins_dir()
-            assert result == Path(custom_path)
+            result = get_plugins_dirs()
+            # Contains env path AND default home path
+            assert Path(custom_path) in result
+            assert (Path.home() / ".webbduck" / "plugins") in result
 
-    def test_get_captioners_dir(self):
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
+    def test_get_captioners_dirs(self):
         """Test captioners subdirectory path."""
-        from webbduck.core.captioning_config import get_captioners_dir, get_plugins_dir
+        from webbduck.core.captioning_config import get_captioners_dirs, get_plugins_dirs
         
-        result = get_captioners_dir()
-        assert result == get_plugins_dir() / "captioners"
+        captioners_dirs = get_captioners_dirs()
+        plugins_dirs = get_plugins_dirs()
+        
+        assert len(captioners_dirs) == len(plugins_dirs)
+        for i, p_dir in enumerate(plugins_dirs):
+            assert captioners_dirs[i] == p_dir / "captioners"
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_list_available_captioners_empty(self):
         """Test listing captioners when directory doesn't exist."""
         from webbduck.core.captioning_config import list_available_captioners
@@ -75,6 +85,7 @@ class TestCaptioningConfig:
 class TestCaptionerModule:
     """Tests for captioner.py."""
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_is_captioning_available_no_plugins(self):
         """Test availability check with no plugins."""
         from webbduck.core.captioner import is_captioning_available
@@ -83,6 +94,7 @@ class TestCaptionerModule:
             result = is_captioning_available()
             assert result is False
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_list_captioners_empty(self):
         """Test list_captioners returns empty list when no plugins."""
         from webbduck.core.captioner import list_captioners
@@ -114,6 +126,7 @@ class TestCaptionerModule:
 class TestCaptionerManager:
     """Tests for CaptionerManager class."""
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_get_available_empty(self):
         """Test get_available returns empty list with no plugins."""
         from webbduck.core.captioner import CaptionerManager
@@ -124,6 +137,7 @@ class TestCaptionerManager:
             result = manager.get_available()
             assert result == []
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_is_available_false(self):
         """Test is_available returns False when no plugins."""
         from webbduck.core.captioner import CaptionerManager
@@ -133,6 +147,7 @@ class TestCaptionerManager:
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": "/nonexistent/path"}):
             assert manager.is_available() is False
 
+    @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_generate_caption_no_captioner(self):
         """Test generate_caption raises error when no captioner available."""
         from webbduck.core.captioner import CaptionerManager
