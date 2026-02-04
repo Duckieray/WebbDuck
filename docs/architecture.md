@@ -37,6 +37,11 @@ WebbDuck is composed of small, replaceable layers.
   - two-pass generation
   - prompt decomposition
 - Entirely bypassed when disabled
+    
+### Resource Management
+- **Smart Offloading**: Pipelines are automatically moved to CPU when not in use to free up VRAM for other tasks (like captioning).
+- **VRAM Monitoring**: Real-time tracking of memory usage.
+
 
 ---
 

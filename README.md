@@ -1,102 +1,85 @@
 # 🦆 WebbDuck
 
-**WebbDuck** is a lightweight, model-agnostic diffusion UI and workflow engine built on Hugging Face Diffusers.
+**WebbDuck** is a user-friendly, fast, and private AI image generator. It runs on your own computer, giving you unlimited images without subscriptions or cloud delays.
 
-## Requirements
+Designed for simplicity, it hides the complex math of "nodes" and "tensors" while giving you powerful tools like Inpainting (fixing faces, changing backgrounds) and Image-to-Image transformation.
 
-- Python 3.10+
-- CUDA-capable GPU (12GB+ VRAM recommended)
-- Linux (tested on Ubuntu 24)
+## Key Features
+
+*   **Simple & Clean**: A straightforward interface. Type a prompt, get an image.
+*   **Smart & Efficient**: Automatically manages your computer's memory (VRAM) so you can do other things while finding your next masterpiece.
+*   **Powerful Editing**:
+    *   **Inpainting**: drawing masks to fix or change specific parts of an image.
+    *   **Image-to-Image**: Use an existing image as a guide.
+    *   **Two-Pass Generation**: Automatically refine images for sharper details.
+*   **JoyCaption Integration**: (Optional) Use advanced AI to describe your existing images for you.
+*   **Private**: Everything runs locally. Your prompts and images never leave your machine.
+
+## Prerequisites
+
+*   **Operating System**: Windows 10/11 or Linux.
+*   **Graphics Card (GPU)**: NVIDIA GPU with at least 12GB VRAM recommended.
+*   **Python**: Version 3.10 or higher.
+*   **Storage**: Enough space for AI models (typically 10GB+).
 
 ## Installation
 
-Clone the repository:
+### 1. Download WebbDuck
+Open a terminal (Command Prompt or PowerShell on Windows) and run:
 ```bash
-git clone https://github.com/yourusername/webbduck.git
+git clone https://github.com/Duckieray/webbduck.git
 cd webbduck
 ```
 
-### Method 1: Conda (Recommended for Blackwell/WSL)
+### 2. Set up the environment
 
-This method ensures compatibility with the specific CUDA versions required for Blackwell GPUs.
-
-```bash
-conda create -n webbduck python=3.10
-conda activate webbduck
-pip install -r requirements.txt
-```
-
-### Method 2: Standard Python Venv
-
-```bash
+**Windows (PowerShell):**
+```powershell
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Create necessary directories:
+**Linux / Mac:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Create necessary folders
+WebbDuck needs a few places to store your models and images.
+
+**Windows (PowerShell):**
+```powershell
+mkdir checkpoint\sdxl, lora, outputs, weights
+```
+
+**Linux:**
 ```bash
 mkdir -p checkpoint/sdxl lora outputs weights
 ```
 
-## Quick Start
+## How to Run
 
-Start the server:
-```bash
-python server.py
-```
+1.  **Activate your environment** (if not already active):
+    *   Windows: `.\.venv\Scripts\Activate.ps1`
+    *   Linux: `source .venv/bin/activate`
 
-Open browser to http://localhost:8000
+2.  **Start the app**:
+    ```bash
+    python run.py
+    ```
 
-## Project Goals
+3.  **Open in Browser**:
+    Visit [http://localhost:8000](http://localhost:8000)
 
-- Compete with tools like Automatic1111 and ComfyUI on **clarity and efficiency**
-- Stay **Diffusers-first**
-- Make experimental features explicit, optional, and safe to ignore
-- Avoid background compute usage that interferes with generation
+## Documentation
 
-## Two-Pass Generation
-
-WebbDuck supports optional two-pass generation:
-
-- **Pass 1**: Base model establishes global composition
-- **Pass 2**: Optional refinement using a second model
-
-The second pass may use either:
-- A **true SDXL refiner** (special conditioning path), or
-- A **generic SDXL img2img model**
-
-### Second Pass Modes
-
-- **Auto** (default): Inspects the model at runtime and selects correct behavior
-- **Force Refiner**: Requires a true SDXL refiner checkpoint
-- **Force Img2Img**: Treats the second-pass model as standard img2img pipeline
-
-## Features
-
-- ✅ Full control over models (no shipped models or forced filters)
-- ✅ Token-aware prompt handling with explicit truncation
-- ✅ LoRA support with per-model compatibility checking
-- ✅ Real-time VRAM monitoring
-- ✅ Optional experimental prompt compression (disabled by default)
-- ✅ Built-in upscaling with Real-ESRGAN
-
-## Project Structure
-
-```text
-├── core/                  # Generation logic, pipelines, prompt routing
-├── modes/                 # Generation strategies (text2img, img2img, two-pass)
-├── experimental_prompt/   # Opt-in experimental features
-├── webui/                 # Web interface
-└── docs/                  # Design documents and philosophy
-```
-
-## Status
-
-⚠️ **Early development**  
-WebbDuck is under active construction. APIs and workflows may change rapidly.
-
-Experimental features are clearly labeled and disabled by default.
+*   [**Plugins Guide**](docs/PLUGINS.md): How to add the JoyCaption describer.
+*   [**Architecture**](docs/architecture.md): How WebbDuck works under the hood.
+*   [**Experimental Features**](docs/experimental.md): Try out bleeding-edge features.
+*   [**Vision**](docs/vision.md): Our design philosophy.
 
 ## License
 
