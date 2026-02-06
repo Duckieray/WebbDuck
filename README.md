@@ -8,10 +8,12 @@ Designed for simplicity, it hides the complex math of "nodes" and "tensors" whil
 
 *   **Simple & Clean**: A straightforward interface. Type a prompt, get an image.
 *   **Smart & Efficient**: Automatically manages your computer's memory (VRAM) so you can do other things while finding your next masterpiece.
+*   **Modern Web UI**: A fast, zero-build interface with modular architecture. [Read more](ui/README.md).
 *   **Powerful Editing**:
     *   **Inpainting**: drawing masks to fix or change specific parts of an image.
     *   **Image-to-Image**: Use an existing image as a guide.
     *   **Two-Pass Generation**: Automatically refine images for sharper details.
+    *   **Smart Regeneration**: Easily retry prompts with randomized seeds and seamless settings transfer.
 *   **JoyCaption Integration**: (Optional) Use advanced AI to describe your existing images for you.
 *   **Private**: Everything runs locally. Your prompts and images never leave your machine.
 

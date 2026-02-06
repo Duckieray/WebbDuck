@@ -256,8 +256,53 @@ async def generate(
         )
 
 
+@app.post("/delete_image")
+async def delete_image(path: str = Form(...)):
+    """Delete an image file."""
+    try:
+        # Security check: ensure path is within BASE
+        target = resolve_web_path(path)
+        
+        # Double check it is actually a file
+        if not target.is_file():
+             return JSONResponse(status_code=400, content={"error": "Not a file"})
+
+        target.unlink()
+        print(f"[Info] Deleted {target}")
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[Error] Delete failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/delete_run")
+async def delete_run(path: str = Form(...)):
+    """Delete an entire generation run folder."""
+    try:
+        # Resolve the image path first
+        target_file = resolve_web_path(path)
+        
+        # The run directory is the parent of the image file
+        run_dir = target_file.parent
+        
+        # Security: Ensure we are deleting a subdirectory of BASE (outputs)
+        # and not BASE itself or something outside.
+        if run_dir == BASE or not BASE in run_dir.parents:
+             return JSONResponse(status_code=400, content={"error": "Invalid run directory"})
+
+        if not run_dir.exists() or not run_dir.is_dir():
+             return JSONResponse(status_code=400, content={"error": "Run directory not found"})
+
+        shutil.rmtree(run_dir)
+        print(f"[Info] Deleted run {run_dir}")
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[Error] Delete run failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/gallery")
-def gallery():
+def gallery(after: float = 0.0):
     """List all generated image runs."""
     runs = sorted(BASE.iterdir(), reverse=True)
     out = []
@@ -267,9 +312,59 @@ def gallery():
         meta_file = r / "meta.json"
         if not meta_file.exists():
             continue
-        meta = json.load(open(meta_file))
-        imgs = [to_web_path(p) for p in r.glob("*.png")]
-        out.append({"run": r.name, "images": imgs, "meta": meta})
+        
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+                
+            # Fallback for old runs without timestamp
+            if "timestamp" not in meta:
+                try:
+                    # Format: YYYY-MM-DD_HH-MM-SS
+                    import time
+                    from datetime import datetime
+                    dt = datetime.strptime(r.name, "%Y-%m-%d_%H-%M-%S")
+                    meta["timestamp"] = dt.timestamp()
+                except Exception:
+                    pass # Keep as undefined if parsing fails 
+            
+            # Filter by timestamp if provided
+            if after > 0 and meta.get("timestamp", 0) <= after:
+                continue
+
+        except Exception as e:
+            print(f"[Error] Failed to load meta for {r.name}: {e}")
+            continue
+
+        imgs = []
+        variants = {}
+
+        for p in r.glob("*.png"):
+            if p.name.endswith("_upscaled.png"):
+                # Associate variant with original: 0_upscaled.png -> 0.png
+                original_stem = p.name.replace("_upscaled.png", "")
+                original_name = f"{original_stem}.png"
+                variants[original_name] = to_web_path(p)
+            else:
+                imgs.append(to_web_path(p))
+        
+        # Sort main images naturally (0.png, 1.png...)
+        # Sort main images naturally (0.png, 1.png...)
+        def sort_key(x):
+            stem = Path(x).stem
+            # Always return (group, int_val, str_val) so comparisons are type-safe
+            if stem.isdigit():
+                return (0, int(stem), "")
+            return (1, 0, stem)
+
+        imgs.sort(key=sort_key)
+
+        out.append({
+            "run": r.name, 
+            "images": imgs, 
+            "variants": variants,
+            "meta": meta
+        })
     return out
 
 

@@ -29,9 +29,11 @@ def to_web_path(path: Path) -> str:
 
 def resolve_web_path(path_str: str) -> Path:
     """Convert web-accessible path to filesystem path."""
-    if path_str.startswith("outputs/"):
-        rel = path_str[len("outputs/"):]
-        return BASE / rel
+    # Handle full URLs (e.g. http://localhost:8000/outputs/...)
+    if "outputs/" in path_str:
+        rel = path_str.split("outputs/", 1)[1]
+        return BASE / rel.lstrip("/")
+        
     return Path(path_str)
 
 
@@ -55,6 +57,11 @@ def save_images(images, settings):
             del clean_settings["input_image"]
         if "mask_image" in clean_settings:
             del clean_settings["mask_image"]
+        
+        # Add timestamp if not present
+        if "timestamp" not in clean_settings:
+            clean_settings["timestamp"] = time.time()
+            
         json.dump(clean_settings, f, indent=2)
 
 

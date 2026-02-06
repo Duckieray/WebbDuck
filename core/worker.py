@@ -42,7 +42,7 @@ async def run_upscale(job):
     upscaled_rgb = cv2.cvtColor(upscaled_bgr, cv2.COLOR_BGR2RGB)
     out_img = Image.fromarray(upscaled_rgb)
 
-    out_path = image_path.with_name(f"{image_path.stem}_x{scale}.png")
+    out_path = image_path.with_name(f"{image_path.stem}_upscaled.png")
     out_img.save(out_path)
 
     update_progress(1.0)
@@ -79,6 +79,9 @@ async def gpu_worker(queue):
             images, seed = await loop.run_in_executor(
                 None, run_generation, job["settings"]
             )
+
+            # Ensure actual seed is saved in metadata
+            job["settings"]["seed"] = seed
 
             update_stage("Decoding")
             update_progress(0.85)
