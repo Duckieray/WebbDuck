@@ -1,0 +1,95 @@
+/* --- MOBILE / RESPONSIVE OPTIMIZATIONS --- */
+@media (max-width: 800px) {
+    #app {
+        display: flex;
+        flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+        padding-bottom: 60px;
+        /* Space for bottom tab bar */
+    }
+
+    /* Safe area insets */
+    .sidebar,
+    .main,
+    .tab-bar {
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+    }
+
+    /* TAB BAR (Bottom Navigation) */
+    .tab-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        z-index: 1000;
+        background: rgba(22, 27, 34, 0.95);
+        backdrop-filter: blur(10px);
+        border-top: 1px solid var(--border);
+        border-bottom: none;
+        padding: 10px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        justify-content: space-around;
+    }
+
+    .tab-btn {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        font-size: 14px;
+        padding: 6px;
+    }
+
+    /* VIEWS */
+    #studio-view.active,
+    #gallery-view.active {
+        height: auto;
+        display: flex;
+    }
+
+    #studio-view.active {
+        flex-direction: column;
+    }
+
+    /* Hide sidebar experimental toggle */
+    .sidebar {
+        width: 100%;
+        padding-top: max(20px, env(safe-area-inset-top));
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    /* Make inputs easier to tap */
+    input,
+    select,
+    button,
+    textarea {
+        font-size: 16px;
+        min-height: 44px;
+    }
+
+    .main {
+        padding: 20px;
+        width: 100%;
+    }
+
+    /* Sticky Generate Button */
+    .buttons {
+        position: sticky;
+        bottom: 0px;
+        z-index: 100;
+        background: var(--panel);
+        border-top: 1px solid var(--border);
+        padding: 10px;
+        margin: 0 -20px -20px -20px;
+        width: calc(100% + 40px);
+        border-radius: 0;
+    }
+
+    .preview {
+        min-height: 300px;
+        aspect-ratio: 1;
+    }
+}
