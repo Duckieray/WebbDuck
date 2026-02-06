@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>WebbDuck</title>
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e1117" />
+
+  <!-- PWA / Mobile Capable -->
+  <link rel="manifest" href="/ui/manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="WebbDuck" />
+  <link rel="icon" type="image/x-icon" href="/ui/favicon.ico" />
+  <link rel="apple-touch-icon" href="/ui/icon-192.png" />
+
+  <link rel="stylesheet" href="/ui/styles.css?v=2" />
+  <link rel="stylesheet" href="/ui/styles_gallery.css?v=5" />
+  <link rel="stylesheet" href="/ui/styles_mobile.css" />
+  <link rel="stylesheet" href="/ui/lib/photoswipe.css" />
+
+  <style>
+    /* Critical Comparison Styles (Inlined to bypass cache) */
+    .lightbox-content {
+      position: relative !important;
+    }
+
+    .comparison-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 100;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #0e1117;
+      /* Cover background */
+    }
+
+    .comp-img {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .comp-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 110;
+      overflow: hidden;
+      /* Vital for clip-path to make sense conceptually, though clip-path handles visibility */
+    }
+
+    .comp-handle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      /* JS updates this */
+      width: 4px;
+      background: rgba(255, 255, 255, 0.5);
+      cursor: col-resize;
+      z-index: 120;
+      transform: translateX(-50%);
+    }
+
+    .comp-handle::after {
+      content: "↔";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px;
+      height: 32px;
+      background: white;
+      color: black;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="studio">🎨 Studio</button>
+      <button class="tab-btn" data-tab="gallery">🖼️ Gallery</button>
+    </nav>
+
+    <!-- STUDIO VIEW -->
+    <div id="studio-view" class="view active">
+      <!-- LEFT SIDEBAR -->
+      <aside class="sidebar">
+        <h1>🦆 WebbDuck</h1>
+
+        <section>
+          <label class="toggle-row">
+            <span>⚠️ Experimental: Token Compression</span>
+            <input type="checkbox" id="experimental_compress">
+            <div class="toggle"></div>
+          </label>
+        </section>
+
+        <section>
+          <label>Input Image (Optional)</label>
+          <div class="image-upload" id="image-upload-area" tabindex="0">
+            <input type="file" id="input_image" accept="image/*" style="display:none">
+            <div id="upload_placeholder">Drop image here or click</div>
+            <img id="input_image_preview" style="display:none">
+            <button id="edit_mask_btn" style="display:none" title="Edit Mask">🖌️</button>
+            <button id="clear_input_image" style="display:none">✕</button>
+          </div>
+
+          <div id="img2img-settings" style="display:none; margin-top: 10px;">
+            <label>Denoising Strength <span id="strength_val">0.75</span></label>
+            <input type="range" id="strength" min="0.05" max="1.0" step="0.01" value="0.75">
+
+            <div id="caption-controls" class="caption-controls" style="margin-top: 10px; display: block;">
+              <div class="row" style="gap: 8px;">
+                <select id="caption_style" title="Caption Style">
+                  <option value="detailed">Detailed</option>
+                  <option value="sd_prompt">SD Prompt</option>
+                  <option value="short">Short</option>
+                  <option value="midjourney">MidJourney</option>
+                  <option value="booru">Tags</option>
+                </select>
+                <button id="caption_btn" class="secondary" title="Generate a caption from the image">🔍 Caption <span
+                    class="warning-label">⚠️ Heavy</span></button>
+              </div>
+              <div class="row" style="margin-top: 8px;">
+                <button id="img2img_copy_prompt_btn" onclick="copyPromptToInput()" class="secondary">📋 Use
+                  Prompt</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <label>Prompt</label>
+          <textarea id="prompt" placeholder="A beautiful landscape..."></textarea>
+        </section>
+
+        <section>
+          <label>Prompt 2 (Optional)</label>
+          <textarea id="prompt_2" placeholder="Leave empty to use main prompt"></textarea>
+        </section>
+
+        <section>
+          <label>Negative Prompt</label>
+          <textarea id="negative_prompt" placeholder="ugly, blurry, distorted..."></textarea>
+        </section>
+
+        <section id="base-model-section">
+          <label id="base-model-label">Base Model</label>
+          <select id="base_model"></select>
+        </section>
+
+        <section id="second-pass-model-section">
+          <label>Second Pass Model</label>
+          <select id="second_pass_model">
+            <option value="None">None</option>
+          </select>
+        </section>
+
+        <section id="second-pass-section" style="display:none;">
+          <label>Second Pass Mode</label>
+          <select id="second_pass_mode">
+            <option value="auto">Auto (Detect)</option>
+            <option value="refiner">Force Refiner</option>
+            <option value="img2img">Force Img2Img</option>
+          </select>
+
+          <div style="margin-top: 10px;">
+            <label>Refinement Strength</label>
+            <div class="row">
+              <input id="refinement_strength" type="range" class="slider" min="0" max="1" step="0.05" value="0.3"
+                style="flex:1">
+              <span id="refinement_strength_val" style="width: 30px; text-align: right; font-size: 12px;">0.3</span>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <label>LoRAs</label>
+
+          <select id="lora-select" class="lora-add">
+            <option value="">➕ Add LoRA…</option>
+          </select>
+
+          <div class="lora-group">
+            <div id="lora-selected" class="lora-selected"></div>
+          </div>
+        </section>
+
+        <section class="row">
+          <div>
+            <label>Scheduler</label>
+            <select id="scheduler"></select>
+          </div>
+          <div>
+            <label>Steps</label>
+            <input id="steps" type="number" value="30" min="1" max="150" />
+          </div>
+          <div>
+            <label>CFG Scale</label>
+            <input id="cfg" type="number" step="0.5" value="7.5" min="1" max="20" />
+          </div>
+        </section>
+
+        <section class="row">
+          <div>
+            <label>Width</label>
+            <input id="width" type="number" value="1024" step="64" min="512" max="2048" />
+          </div>
+          <div>
+            <label>Height</label>
+            <input id="height" type="number" value="1024" step="64" min="512" max="2048" />
+          </div>
+        </section>
+
+        <section>
+          <label>Seed</label>
+          <div class="row">
+            <select id="seed_mode">
+              <option value="random">🎲 Random</option>
+              <option value="reuse">♻️ Reuse Last</option>
+              <option value="manual">✍️ Manual</option>
+            </select>
+            <input id="seed_input" type="number" placeholder="Seed" disabled />
+          </div>
+        </section>
+
+        <section>
+          <label>Batch Size</label>
+          <input id="num_images" type="number" value="4" min="1" max="16" />
+        </section>
+
+        <div class="buttons">
+          <button class="secondary" id="testBtn">🧪 Test (1 image)</button>
+          <button class="primary" id="genBtn">🚀 Generate Batch</button>
+        </div>
+      </aside>
+
+      <!-- MAIN VIEW -->
+      <main class="main">
+        <div class="hud">
+          <div id="stage">Idle</div>
+
+          <div class="progress-track">
+
+
+            <div id="toast-container"></div>
+          </div>
+
+          <div id="vram">VRAM: --</div>
+        </div>
+
+        <div class="preview" id="preview">
+          <span>No image yet</span>
+        </div>
+
+        <div class="gallery" id="gallery"></div>
+      </main>
+    </div>
+
+    <!-- GALLERY VIEW -->
+    <div id="gallery-view" class="view" style="display: none;">
+      <div class="gallery-toolbar">
+        <h2>History</h2>
+        <button id="refresh_gallery_btn" class="secondary">🔄 Refresh</button>
+      </div>
+
+      <div id="full-gallery-grid" class="full-gallery-grid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <!-- LIGHTBOX -->
+  <div id="lightbox" class="lightbox" style="display: none;">
+
+    <div class="lightbox-content">
+      <img id="lightbox-img" src="" alt="Full view">
+
+      <!-- Comparison Overlay -->
+      <div id="lightbox-comparison" class="comparison-container" style="display: none;">
+        <img id="comp-original" class="comp-img" src="">
+        <div id="comp-overlay" class="comp-overlay">
+          <img id="comp-modified" class="comp-img" src="">
+        </div>
+        <div id="comp-handle" class="comp-handle"></div>
+      </div>
+    </div>
+
+    <button id="lightbox-info-toggle">Hide Info</button>
+
+    <div class="lightbox-info">
+      <div class="lightbox-header">
+        <h3 id="lightbox-prompt" style="flex:1;"></h3>
+        <div style="display: flex; gap: 10px;">
+          <button id="lightbox-upscale" class="secondary compact" title="Upscale (2x)">✨ Upscale</button>
+          <button id="lightbox-view-hd" class="secondary compact" style="display:none;"
+            title="View Full Upscaled Image">HD</button>
+          <button id="lightbox-compare" class="secondary compact" style="display:none;" title="Interactive Comparison">↔
+            Compare</button>
+          <button id="lightbox-regen" class="primary compact">♻️ Regenerate</button>
+          <button id="lightbox-delete" class="compact" style="background: var(--danger); color: white;">🗑️</button>
+        </div>
+      </div>
+
+      <div class="lightbox-grid">
+        <div class="meta-item">
+          <label>Negative Prompt</label>
+          <span id="lightbox-negative"></span>
+        </div>
+        <div class="meta-item">
+          <label>Model</label>
+          <span id="lightbox-model"></span>
+        </div>
+        <div class="meta-item">
+          <label>Seed</label>
+          <span id="lightbox-seed"></span>
+        </div>
+        <div class="meta-item">
+          <label>Settings</label>
+          <span id="lightbox-settings"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MASK EDITOR OVERLAY (Hidden by default) -->
+    <div id="mask_overlay" class="mask-overlay" style="display: none;">
+      <div class="mask-editor-container">
+        <div class="mask-toolbar">
+          <div class="mask-tools">
+            <label>Brush Size</label>
+            <input type="range" id="mask_brush_size" min="5" max="100" value="30">
+            <div id="mask_brush_preview" class="brush-size-preview"></div>
+          </div>
+
+          <div class="mask-tools">
+            <button class="secondary" id="mask_clear_btn">Clear</button>
+            <button class="secondary" id="mask_invert_btn">Invert</button>
+          </div>
+        </div>
+
+        <div class="mask-canvas-wrapper" id="mask_canvas_wrapper">
+          <canvas id="mask_canvas"></canvas>
+        </div>
+
+        <div class="mask-toolbar">
+          <div class="mask-tools">
+            <label>Mode:</label>
+            <select id="inpainting_fill">
+              <option value="replace">Replace Masked (Inpaint)</option>
+              <option value="keep">Keep Masked (Protect)</option>
+            </select>
+          </div>
+
+          <div class="mask-tools">
+            <label>Blur:</label>
+            <input type="range" id="mask_blur" min="0" max="64" value="8" style="width: 80px;">
+            <span id="mask_blur_val">8</span>
+          </div>
+
+          <div class="buttons" style="flex: 0 0 auto;">
+            <button class="secondary" id="mask_cancel_btn">Cancel</button>
+            <button class="primary" id="mask_save_btn">Save Mask</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- Confirmation Modal (Moved to top level) -->
+    <div id="confirmation-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <h3>Delete Image?</h3>
+        <p>You can delete just this image, or the entire generation folder (all images from this run).</p>
+        <div class="modal-actions">
+          <button id="modal-delete-img" class="danger">Delete Image</button>
+          <button id="modal-delete-run" class="danger-outline">Delete Folder</button>
+          <button id="modal-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/ui/ws.js"></script>
+    <script type="module" src="/ui/app.js?v=58"></script>
+</body>
+
+</html>
