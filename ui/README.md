@@ -1,33 +1,133 @@
-# WebbDuck UI
+# WebbDuck UI Module
 
 The frontend interface for WebbDuck AI Image Generator.
+Built with modern Vanilla JS (ES Modules) and CSS Variables. Zero build steps required.
 
-## Structure
+## 📂 Project Structure
 
-The UI is built with vanilla HTML/CSS/JS (ES6 Modules) for maximum performance and zero build steps.
+```
+ui/
+├── index.html          # Main entry point and DOM structure
+├── app.js              # Application bootstrapper and orchestrator
+├── core/               # Shared utilities
+│   ├── api.js          # API client
+│   ├── events.js       # Event bus & WebSocket handler
+│   ├── state.js        # Global state with persistence
+│   └── utils.js        # DOM helpers (byId, listen, etc.)
+├── modules/            # Feature-specific Logic
+│   ├── LightboxManager.js  # Gallery & PhotoSwipe integration
+│   ├── LoraManager.js      # LoRA selection & loading
+│   ├── MaskEditor.js       # Inpainting canvas logic
+│   └── ProgressManager.js  # WebSocket progress visualization
+└── styles/             # CSS Architecture
+    ├── main.css        # Entry point
+    ├── design-tokens.css # Global variables
+    └── components/     # Reusable UI components
+```
 
-- **index.html**: Main entry point and layout.
-- **app.js**: Main orchestrator script. Imports modules and initializes the app.
-- **styles.css**: Core application styles.
-- **modules/**: Logic split into functional areas.
+## 🛠️ Development Guide
 
-### Modules
+### 1. How to Add a New Button
 
-| Module | Description |
-|--------|-------------|
-| `state.js` | Manages global state (prompt, settings) and LocalStorage persistence. |
-| `gallery.js` | Handles history view, incremental loading, and PhotoSwipe integration. |
-| `generation.js` | API communication for `/generate`, `/test`, and `/upscale`. |
-| `mask-editor.js` | Canvas-based mask drawing logic for inpainting. |
-| `preview.js` | Manages the main image preview area, including wipe comparisons. |
-| `lora.js` | Handles fetching, displaying, and managing LoRA models. |
-| `upload.js` | Image upload handling, drag-and-drop, and captioning. |
-| `utils.js` | Shared helpers (token counting, select population). |
+Buttons should receive classes from `styles/components/buttons.css`.
 
-## Key Features
+**Example HTML (`index.html`):**
+```html
+<!-- Primary Action -->
+<button class="btn btn-primary" id="btn-save">
+  <svg>...</svg>
+  Save Project
+</button>
 
-- **Zero-Build**: Files are served directly. No webpack/vite required.
-- **State Persistence**: Settings are automatically saved to LocalStorage.
-- **PhotoSwipe**: Advanced gallery viewer with zoom/pan and metadata support.
-- **Mask Editor**: Built-in canvas editor for inpainting masks.
-- **Wipe Preview**: "Before/After" slider for upscaled images.
+<!-- Secondary / Tool -->
+<button class="btn btn-secondary btn-icon" id="btn-tool" title="Tool Name">
+  <svg>...</svg>
+</button>
+```
+
+**Common Classes:**
+- `.btn`: Base class (required)
+- `.btn-primary`: Gradient accent background (Main actions)
+- `.btn-secondary`: Glassmorphism background (Tools/Toggles)
+- `.btn-ghost`: Transparent (Icon-only buttons)
+- `.btn-sm`: Small variant
+
+### 2. How to Add a Handler
+
+Event listeners are standard `addEventListener` calls, but we use the `listen` helper from `core/utils.js` for cleaner code.
+
+**In `app.js` (for global buttons):**
+```javascript
+import { listen, byId } from './core/utils.js';
+
+// Inside init() or setupHandlers()
+listen(byId('btn-save'), 'click', async () => {
+    // Your logic here
+    console.log('Saved!');
+});
+```
+
+**In a Module (e.g., `MyModule.js`):**
+```javascript
+export class MyModule {
+    constructor() {
+        this.btn = byId('btn-tool');
+        this.init();
+    }
+
+    init() {
+        if (this.btn) {
+            // Bind 'this' context !
+            listen(this.btn, 'click', this.handleClick.bind(this));
+        }
+    }
+
+    handleClick() {
+        // Logic
+    }
+}
+```
+
+### 3. State Management
+
+All persistent settings (prompt, dimensions, toggles) are managed in `core/state.js`.
+
+**Reading State:**
+```javascript
+import { getState } from './core/state.js';
+const { prompt, width } = getState();
+```
+
+**Writing State:**
+```javascript
+import { setState } from './core/state.js';
+
+// Updates state, saves to localStorage, and triggers subscribers
+setState({ width: 512, height: 768 });
+```
+
+### 4. Event Bus
+
+Use the Event Bus to communicate between modules without tight coupling.
+
+```javascript
+import { emit, on, Events } from './core/events.js';
+
+// Dispatching
+emit(Events.GENERATION_START, { mode: 'test' });
+
+// Listening
+on(Events.GENERATION_START, (data) => {
+    console.log('Generation started:', data.mode);
+});
+```
+
+### 5. API Interactions
+
+Add new endpoints to `core/api.js`. Use the `postForm` helper for FormData interactions.
+
+```javascript
+export async function myNewAction(formData) {
+    return postForm('/my_action', formData);
+}
+```

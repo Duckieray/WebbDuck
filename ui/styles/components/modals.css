@@ -4,16 +4,17 @@
  */
 
 /* ═══════════════════════════════════════════════════════════════
-   MODAL BACKDROP
+   MODAL OVERLAY (Backdrop)
    ═══════════════════════════════════════════════════════════════ */
 
-.modal-backdrop {
+.modal-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.75);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    z-index: var(--z-modal-backdrop);
+    z-index: var(--z-modal-backdrop) !important;
+    /* Force above PhotoSwipe (100000) */
 
     display: flex;
     align-items: center;
@@ -27,9 +28,14 @@
         visibility var(--transition-normal);
 }
 
-.modal-backdrop.active {
+.modal-overlay.active {
     opacity: 1;
     visibility: visible;
+}
+
+/* Helper for simple toggling if needed, though .active handles opacity */
+.modal-overlay.hidden {
+    display: none !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -60,7 +66,8 @@
     overflow: hidden;
 }
 
-.modal-backdrop.active .modal {
+.modal-overlay.active .modal,
+.modal-overlay:not(.hidden) .modal {
     transform: scale(1) translateY(0);
     opacity: 1;
 }
@@ -270,6 +277,13 @@
     padding: var(--space-5) var(--space-6);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
+
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100600;
+    /* Ensure above everything else in lightbox */
 
     max-height: 35vh;
     overflow-y: auto;

@@ -4,62 +4,109 @@
  */
 
 import * as api from './core/api.js';
+import { MaskEditor } from './modules/MaskEditor.js';
+import { LoraManager } from './modules/LoraManager.js';
 import { initState, getState, setState, setSeed, setLastUsedSeed, syncFromDOM, syncToDOM } from './core/state.js';
-import { on, emit, Events } from './core/events.js';
+import { on, emit, Events, initWebSocket } from './core/events.js';
+import { ProgressManager } from './modules/ProgressManager.js';
 import { $, $$, byId, listen, show, hide, toggleClass, populateSelect, toast, debounce, buildFormData } from './core/utils.js';
-import PhotoSwipeLightbox from './lib/photoswipe-lightbox.esm.js';
-import PhotoSwipe from './lib/photoswipe.esm.js';
+import { LightboxManager } from './modules/LightboxManager.js';
+import { GalleryManager } from './modules/GalleryManager.js';
 
 // ═══════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🦆 WebbDuck UI Initializing...');
+    try {
+        console.log('🦆 WebbDuck UI Initializing...');
 
-    // Initialize state from localStorage
-    initState();
+        // Initialize state from localStorage
+        initState();
 
-    // Setup event listeners
-    setupNavigation();
-    setupSliders();
-    setupPresetChips();
-    setupFormHandlers();
-    setupGenerationButtons();
-    setupUploadHandling();
-    setupGallerySearch();
-    setupPreviewToolbarV2();
-    initLightboxActions();
-    initCompareSlider();
+        // Initialize Managers
+        window.progressManager = new ProgressManager();
+        window.maskEditor = new MaskEditor();
+        window.loraManager = new LoraManager();
+        window.lightboxManager = new LightboxManager({
+            onUpscale: (src) => { /* Upscale handler */ },
+            onInpaint: (src) => { /* Inpaint handler */ }
+        });
+        window.galleryManager = new GalleryManager();
+        window.galleryManager.init();
+        window.galleryManager.load();
 
-    // Load initial data
-    await loadModels();
-    await loadSchedulers();
-    loadGallery(); // Pre-load gallery data
+        // Setup event listeners
+        setupNavigation();
+        setupSliders();
+        setupPresetChips();
+        setupFormHandlers();
+        setupGenerationButtons();
+        setupUploadHandling();
+        setupUploadHandling();
 
-    // Sync state to DOM
-    syncToDOM();
+        // Load initial data
+        await loadModels();
+        await loadSchedulers();
+        await loadModels();
+        await loadSchedulers();
 
-    // Count tokens for pre-filled prompt
-    const promptEl = byId('prompt');
-    if (promptEl && promptEl.value.trim()) {
-        const count = await countTokens(promptEl.value);
-        const counterEl = byId('token-count');
-        if (counterEl) {
-            counterEl.textContent = `${count} tokens`;
-            toggleClass(counterEl, 'warning', count > 60);
-            toggleClass(counterEl, 'danger', count > 75);
+        // Sync state to DOM
+        syncToDOM();
+
+        // Initialize Mask Editor
+        window.maskEditor = new MaskEditor();
+
+        // Initialize LoRA Manager
+        window.loraManager = new LoraManager();
+
+        // Initialize Lightbox Manager
+        window.lightboxManager = new LightboxManager({
+            onUpscale: (src, cb) => startUpscale(src, cb),
+            onInpaint: (src) => {
+                // Switch to studio, set image as input, set mode to inpaint?
+                // Existing sendToInpaint does this
+                if (typeof sendToInpaint === 'function') {
+                    sendToInpaint(src);
+                } else {
+                    console.error('sendToInpaint not defined');
+                }
+            },
+            onRegenerate: handleRegenerateFromLightbox,
+            onRegenerate: handleRegenerateFromLightbox,
+            onDelete: (src, type) => window.galleryManager.handleDelete(src, type)
+        });
+
+        // Initialize Progress Manager
+        window.progressManager = new ProgressManager();
+
+        // Start WebSocket Connection for real-time updates
+        initWebSocket();
+
+        // Count tokens for pre-filled prompt
+        const promptEl = byId('prompt');
+        if (promptEl && promptEl.value.trim()) {
+            const count = await countTokens(promptEl.value);
+            const counterEl = byId('token-count');
+            if (counterEl) {
+                counterEl.textContent = `${count} tokens`;
+                toggleClass(counterEl, 'warning', count > 60);
+                toggleClass(counterEl, 'danger', count > 75);
+            }
         }
-    }
 
-    // Display last used seed if available
-    const state = getState();
-    if (state.lastSeed) {
-        const lastSeedEl = byId('last-seed');
-        if (lastSeedEl) lastSeedEl.textContent = state.lastSeed;
-    }
+        // Display last used seed if available
+        const state = getState();
+        if (state.lastSeed) {
+            const lastSeedEl = byId('last-seed');
+            if (lastSeedEl) lastSeedEl.textContent = state.lastSeed;
+        }
 
-    console.log('🦆 WebbDuck UI Ready!');
+        console.log('🦆 WebbDuck UI Ready!');
+    } catch (fatalError) {
+        console.error('CRITICAL UI INIT FAILURE:', fatalError);
+        alert('CRITICAL UI ERROR: ' + fatalError.message);
+    }
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -94,10 +141,9 @@ function switchView(viewName) {
 
     // If switching to gallery, refresh it
     if (viewName === 'gallery') {
-        loadGallery();
+        window.galleryManager.load();
+        emit(Events.VIEW_CHANGE, viewName);
     }
-
-    emit(Events.VIEW_CHANGE, viewName);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -182,7 +228,7 @@ function setupFormHandlers() {
     listen(byId('base_model'), 'change', async () => {
         const modelName = byId('base_model').value;
         if (modelName) {
-            await loadLoras(modelName);
+            await window.loraManager.loadForModel(modelName);
             emit(Events.MODEL_CHANGE, modelName);
         }
     });
@@ -217,7 +263,7 @@ async function startGeneration(mode) {
     if (isGenerating) return;
 
     isGenerating = true;
-    showProgress();
+    window.progressManager.showProgress('Starting...', 0);
     emit(Events.GENERATION_START, mode);
 
     try {
@@ -236,7 +282,8 @@ async function startGeneration(mode) {
 
     } finally {
         isGenerating = false;
-        hideProgress();
+        // Ensure progress is hidden if error/complete
+        window.progressManager.hideProgress();
     }
 }
 
@@ -259,7 +306,7 @@ function collectFormData() {
     formData.append('base_model', byId('base_model').value);
 
     // LoRAs
-    const loras = getSelectedLoras();
+    const loras = window.loraManager.getSelected();
     if (loras.length > 0) {
         // Send as JSON for backend to parse
         formData.append('loras', JSON.stringify(loras));
@@ -361,35 +408,12 @@ function updateBatchStrip(images) {
     });
 }
 
-function showProgress() {
-    const progressEl = byId('generation-progress');
-    const placeholder = byId('preview-placeholder');
-    const previewImg = byId('preview-image');
 
-    hide(placeholder);
-    hide(previewImg);
-    show(progressEl);
-
-    // Update status
-    byId('status-indicator').classList.remove('ready');
-    byId('status-indicator').classList.add('busy');
-    byId('status-text').textContent = 'Generating...';
-}
-
-function hideProgress() {
-    const progressEl = byId('generation-progress');
-    hide(progressEl);
-
-    // Update status
-    byId('status-indicator').classList.remove('busy');
-    byId('status-indicator').classList.add('ready');
-    byId('status-text').textContent = 'Ready';
-}
 
 function cancelGeneration() {
     // TODO: Implement actual cancel via API
     isGenerating = false;
-    hideProgress();
+    window.progressManager.hideProgress();
     toast('Generation cancelled', 'warning');
     emit(Events.GENERATION_CANCEL);
 }
@@ -474,50 +498,12 @@ function setupUploadHandling() {
             return;
         }
 
-        const maskOverlay = byId('mask_overlay');
-        if (!maskOverlay) return;
-
-        // Load image into mask canvas
-        const maskCanvas = byId('mask_canvas');
-        const wrapper = byId('mask_canvas_wrapper');
-
-        if (maskCanvas && wrapper) {
-            const img = new Image();
-            img.onload = () => {
-                // Determine optimal display size (max 80% viewport)
-                const vw = window.innerWidth * 0.8;
-                const vh = window.innerHeight * 0.7;
-                const ratio = Math.min(vw / img.width, vh / img.height, 1);
-
-                const dispW = Math.round(img.width * ratio);
-                const dispH = Math.round(img.height * ratio);
-
-                // Set canvas resolution to full image size
-                maskCanvas.width = img.width;
-                maskCanvas.height = img.height;
-
-                // Set wrapper display size and background
-                wrapper.style.width = `${dispW}px`;
-                wrapper.style.height = `${dispH}px`;
-                wrapper.style.margin = 'auto'; // Center in flex container
-                wrapper.style.backgroundImage = `url(${img.src})`;
-                wrapper.style.backgroundSize = 'contain';
-                wrapper.style.backgroundRepeat = 'no-repeat';
-                wrapper.style.backgroundPosition = 'center';
-                wrapper.style.boxShadow = '0 0 20px rgba(0,0,0,0.5)';
-                wrapper.style.border = '1px solid rgba(255,255,255,0.2)';
-
-                // Clear any previous mask
-                const ctx = maskCanvas.getContext('2d');
-                ctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
-
-                // Store the image for the mask editor
-                window._maskSourceImage = img;
-
-                maskOverlay.classList.remove('hidden');
-                toast('Draw to mask areas', 'info');
-            };
-            img.src = byId('preview-img').src;
+        // Open mask editor with current preview image
+        // The MaskEditor handles UI and Canvas setup
+        if (window.maskEditor) {
+            const src = byId('preview-img').src;
+            window.maskEditor.open(src);
+            toast('Draw to mask areas', 'info');
         }
     });
 
@@ -534,153 +520,7 @@ function setupUploadHandling() {
         byId('inpaint-replace').classList.remove('active');
     });
 
-    // MASK EDITOR LOGIC
-    // -----------------------------------------------------------
-    const maskCanvas = byId('mask_canvas');
-    const maskCtx = maskCanvas ? maskCanvas.getContext('2d') : null;
-    let isDrawing = false;
-    let isErasing = false;
-    let lastX = 0;
-    let lastY = 0;
 
-    if (maskCanvas && maskCtx) {
-        // Drawing helpers
-        const getPos = (e) => {
-            const rect = maskCanvas.getBoundingClientRect();
-            const scaleX = maskCanvas.width / rect.width;
-            const scaleY = maskCanvas.height / rect.height;
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            return {
-                x: (clientX - rect.left) * scaleX,
-                y: (clientY - rect.top) * scaleY
-            };
-        };
-
-        const draw = (e) => {
-            if (!isDrawing) return;
-            e.preventDefault();
-            const { x, y } = getPos(e);
-
-            maskCtx.beginPath();
-            maskCtx.moveTo(lastX, lastY);
-            maskCtx.lineTo(x, y);
-
-            if (isErasing) {
-                maskCtx.globalCompositeOperation = 'destination-out';
-                maskCtx.strokeStyle = 'rgba(0,0,0,1)'; // Color doesn't matter for dest-out
-            } else {
-                maskCtx.globalCompositeOperation = 'source-over';
-                maskCtx.strokeStyle = 'rgba(255, 255, 255, 1)';
-            }
-
-            maskCtx.lineCap = 'round';
-            maskCtx.lineJoin = 'round';
-            maskCtx.lineWidth = (byId('mask_brush_size')?.value || 30) * (maskCanvas.width / maskCanvas.getBoundingClientRect().width);
-            maskCtx.stroke();
-
-            // Reset to default
-            maskCtx.globalCompositeOperation = 'source-over';
-
-            lastX = x;
-            lastY = y;
-        };
-
-        // Drawing events
-        listen(maskCanvas, 'mousedown', (e) => {
-            isDrawing = true;
-            const { x, y } = getPos(e);
-            lastX = x;
-            lastY = y;
-            draw(e);
-        });
-        listen(maskCanvas, 'mousemove', draw);
-        listen(window, 'mouseup', () => isDrawing = false);
-
-        // Touch events
-        listen(maskCanvas, 'touchstart', (e) => {
-            isDrawing = true;
-            const { x, y } = getPos(e);
-            lastX = x;
-            lastY = y;
-            draw(e);
-        });
-        listen(maskCanvas, 'touchmove', draw);
-        listen(window, 'touchend', () => isDrawing = false);
-    }
-
-    // Mask UI Controls
-    listen(byId('mask_cancel_btn'), 'click', () => byId('mask_overlay').classList.add('hidden'));
-
-    listen(byId('mask_erase_btn'), 'click', () => {
-        isErasing = !isErasing;
-        const btn = byId('mask_erase_btn');
-        if (isErasing) {
-            btn.textContent = '✏️ Draw';
-            btn.classList.add('btn-primary');
-            btn.classList.remove('btn-secondary');
-        } else {
-            btn.textContent = '🧽 Erase';
-            btn.classList.remove('btn-primary');
-            btn.classList.add('btn-secondary');
-        }
-    });
-
-    listen(byId('mask_clear_btn'), 'click', () => {
-        if (maskCanvas) {
-            const ctx = maskCanvas.getContext('2d');
-            ctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
-        }
-    });
-
-    listen(byId('mask_save_btn'), 'click', () => {
-        if (maskCanvas) {
-            maskCanvas.toBlob((blob) => {
-                window._maskBlob = blob;
-                byId('mask_overlay').classList.add('hidden');
-                byId('edit-mask-btn').style.color = 'var(--green)';
-                toast('Mask saved!', 'success');
-                show(byId('inpaint-options'));
-            });
-        }
-    });
-
-    listen(byId('mask_invert_btn'), 'click', () => {
-        if (!maskCanvas) return;
-        const ctx = maskCanvas.getContext('2d');
-        const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-        const data = imageData.data;
-        for (let i = 0; i < data.length; i += 4) {
-            // Invert alpha: 0 -> 255, 255 -> 0
-            // If alpha > 0, make it 0. If alpha == 0, make it 255.
-            // Simplified: fully transparent becomes fully white, fully white becomes transparent
-            const alpha = data[i + 3];
-            data[i + 3] = 255 - alpha;
-            data[i] = 255; // R
-            data[i + 1] = 255; // G
-            data[i + 2] = 255; // B
-        }
-        ctx.putImageData(imageData, 0, 0);
-    });
-
-    // Mask Sliders
-    const brushSlider = byId('mask_brush_size');
-    const brushPreview = byId('mask_brush_preview');
-    if (brushSlider && brushPreview) {
-        listen(brushSlider, 'input', (e) => {
-            const size = e.target.value;
-            brushPreview.style.width = `${size}px`;
-            brushPreview.style.height = `${size}px`;
-        });
-    }
-
-    const blurSlider = byId('mask_blur');
-    const blurVal = byId('mask_blur_val');
-    if (blurSlider && blurVal) {
-        listen(blurSlider, 'input', (e) => {
-            blurVal.textContent = e.target.value;
-        });
-    }
 }
 
 async function handleImageUpload(file) {
@@ -776,112 +616,17 @@ async function loadModels() {
         populateSelect('second_pass_model', secondPassModels, true);
 
         // Load LoRAs for first model (models are objects with .name property)
-        if (models.length > 0) {
+        if (models && models.length > 0) {
             const firstModelName = typeof models[0] === 'string' ? models[0] : models[0].name;
-            await loadLoras(firstModelName);
+            await window.loraManager.loadForModel(firstModelName);
         }
     } catch (error) {
-        console.error('Failed to load models:', error);
-        toast('Failed to load models', 'error');
+        console.warn('Model load warning:', error);
+        // Don't show toast for initial load failures to avoid annoyance, just log
     }
 }
 
-async function loadLoras(modelName) {
-    try {
-        const loras = await api.getLoras(modelName);
-        const select = byId('lora-select');
-        if (!select) return;
 
-        // Clear previous cache
-        availableLorasMap.clear();
-
-        // Preserve first option and add loras
-        select.innerHTML = '<option value="">➕ Add LoRA...</option>';
-        loras.forEach(lora => {
-            const name = typeof lora === 'string' ? lora : lora.name;
-
-            // Store metadata
-            if (typeof lora === 'string') {
-                availableLorasMap.set(name, { name, strength_default: 1.0 });
-            } else {
-                availableLorasMap.set(name, lora);
-            }
-
-            const opt = document.createElement('option');
-            opt.value = name;
-            opt.textContent = name;
-            select.appendChild(opt);
-        });
-
-        // Setup selection handler
-        select.onchange = () => {
-            if (select.value) {
-                addLoraCard(select.value);
-                select.value = ''; // Reset to placeholder
-            }
-        };
-    } catch (error) {
-        console.error('Failed to load LoRAs:', error);
-    }
-}
-
-// Track selected LoRAs
-const selectedLoras = new Map();
-// Cache available LoRAs for metadata (defaults)
-const availableLorasMap = new Map();
-
-function addLoraCard(loraName, weight = null) {
-    if (selectedLoras.has(loraName)) {
-        toast(`${loraName} already added`, 'info');
-        return;
-    }
-
-    // Use provided weight, or look up default, or fallback to 1.0
-    if (weight === null) {
-        const info = availableLorasMap.get(loraName);
-        weight = info && info.strength_default !== undefined ? info.strength_default : 1.0;
-    }
-
-    selectedLoras.set(loraName, weight);
-
-    const container = byId('lora-selected');
-    if (!container) return;
-
-    const card = document.createElement('div');
-    card.className = 'lora-card';
-    card.dataset.lora = loraName;
-    card.innerHTML = `
-        <div class="lora-card-header">
-            <span class="lora-card-name">${loraName}</span>
-            <button class="btn btn-ghost btn-icon btn-sm lora-remove" title="Remove">✕</button>
-        </div>
-        <div class="lora-card-slider">
-            <input type="range" class="slider lora-weight" min="0" max="2" step="0.1" value="${weight}" />
-            <span class="lora-weight-val">${weight.toFixed(1)}</span>
-        </div>
-    `;
-
-    // Weight slider handler
-    const slider = card.querySelector('.lora-weight');
-    const valDisplay = card.querySelector('.lora-weight-val');
-    slider.oninput = () => {
-        const val = parseFloat(slider.value);
-        valDisplay.textContent = val.toFixed(1);
-        selectedLoras.set(loraName, val);
-    };
-
-    // Remove handler
-    card.querySelector('.lora-remove').onclick = () => {
-        selectedLoras.delete(loraName);
-        card.remove();
-    };
-
-    container.appendChild(card);
-}
-
-function getSelectedLoras() {
-    return Array.from(selectedLoras.entries()).map(([name, weight]) => ({ name, weight }));
-}
 
 async function loadSchedulers() {
     try {
@@ -892,631 +637,7 @@ async function loadSchedulers() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// GALLERY
-// ═══════════════════════════════════════════════════════════════
 
-let galleryData = [];
-let galleryPage = 0;
-const SESSIONS_PER_PAGE = 30;
-
-async function loadGallery() {
-    try {
-        galleryPage = 0;
-        const data = await api.getGallery();
-        // API returns array directly, not {sessions: [...]}
-        galleryData = Array.isArray(data) ? data : (data.sessions || []);
-        // Sort newest first
-        galleryData.sort((a, b) => {
-            const tsA = (a.meta?.timestamp || a.timestamp || 0);
-            const tsB = (b.meta?.timestamp || b.timestamp || 0);
-            return tsB - tsA;
-        });
-
-        // Render with current search term if exists
-        const searchTerm = byId('gallery-search')?.value || '';
-        renderGallery(searchTerm);
-    } catch (error) {
-        console.error('Failed to load gallery:', error);
-        toast('Failed to load gallery', 'error');
-    }
-}
-
-// Search filter state
-let currentSearchTerm = '';
-
-function renderGallery(filterText = '') {
-    currentSearchTerm = filterText.toLowerCase();
-    const container = byId('gallery-sessions');
-    const emptyState = byId('gallery-empty');
-    const countEl = byId('gallery-count');
-
-    // Filter data
-    let filteredData = galleryData;
-    if (currentSearchTerm) {
-        filteredData = galleryData.filter(session => {
-            const prompt = (session.meta?.prompt || session.prompt || '').toLowerCase();
-            return prompt.includes(currentSearchTerm);
-        });
-    }
-
-    if (!filteredData.length) {
-        hide(container);
-        show(emptyState);
-        countEl.textContent = '0 images';
-        // If searching but no results
-        if (currentSearchTerm) {
-            byId('gallery-empty').innerHTML = `
-                <div class="gallery-empty-content">
-                    <h3>No matches found</h3>
-                    <p>Try a different search term</p>
-                </div>
-            `;
-        }
-        return;
-    }
-
-    show(container);
-    hide(emptyState);
-
-    // Count total images
-    const totalImages = filteredData.reduce((sum, session) => sum + (session.images?.length || 0), 0);
-    countEl.textContent = `${totalImages} image${totalImages !== 1 ? 's' : ''}`;
-
-    // Render only current page of sessions
-    const startIdx = 0;
-    const endIdx = (galleryPage + 1) * SESSIONS_PER_PAGE;
-    const sessionsToRender = filteredData.slice(startIdx, endIdx);
-
-    container.innerHTML = sessionsToRender.map(session => renderSession(session)).join('');
-
-    // Add "Load More" button if there are more sessions
-    if (endIdx < filteredData.length) {
-        container.innerHTML += `
-            <div class="gallery-load-more">
-                <button class="btn btn-secondary" id="load-more-btn">
-                    Load More (${filteredData.length - endIdx} more sessions)
-                </button>
-            </div>
-        `;
-        listen(byId('load-more-btn'), 'click', loadMoreSessions);
-    }
-
-    // Setup click handlers
-    container.querySelectorAll('.session-header').forEach(header => {
-        listen(header, 'click', (e) => {
-            if (!e.target.closest('button')) {
-                header.closest('.session-group').classList.toggle('collapsed');
-            }
-        });
-    });
-
-    container.querySelectorAll('.image-item').forEach((item, index) => {
-        listen(item, 'click', (e) => {
-            if (e) e.stopPropagation();
-            // Recalculate index based on full filtered list if needed, but here we just pass elements
-            // Note: lightbox needs context of all images in current view
-            const allImages = Array.from(container.querySelectorAll('.image-item img'));
-            const clickedImg = item.querySelector('img');
-            const realIndex = allImages.indexOf(clickedImg);
-            openLightbox(allImages, realIndex);
-        });
-    });
-}
-
-function loadMoreSessions() {
-    galleryPage++;
-    renderGallery(currentSearchTerm);
-}
-
-function setupGallerySearch() {
-    const searchInput = byId('gallery-search');
-    if (!searchInput) return;
-
-    let timeout;
-    listen(searchInput, 'input', (e) => {
-        const val = e.target.value; // Capture value immediately
-        clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            galleryPage = 0;
-            renderGallery(val);
-        }, 300);
-    });
-}
-
-function renderSession(session) {
-    const images = session.images || [];
-    const variants = session.variants || {}; // Map of original filename -> upscaled URL
-    // Meta is nested in session.meta
-    const meta = session.meta || {};
-    const prompt = meta.prompt || session.prompt || 'No prompt';
-    const model = meta.base_model || session.model || 'Unknown';
-    const seed = meta.seed || session.seed || '-';
-    const timestamp = meta.timestamp || session.timestamp || Date.now() / 1000;
-
-    // Embed full session metadata for lightbox
-    const sessionJson = encodeURIComponent(JSON.stringify(session));
-
-    return `
-    <div class="session-group" data-json="${sessionJson}">
-      <div class="session-header">
-        <div class="session-header-left">
-          <div class="session-expand">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-          <div class="session-info">
-            <div class="session-prompt">${escapeHtml(prompt.substring(0, 100))}</div>
-            <div class="session-meta">
-              <span class="session-meta-item">${model}</span>
-              <span class="session-meta-item">Seed: ${seed}</span>
-              <span class="session-meta-item">${timeAgo(timestamp)}</span>
-            </div>
-          </div>
-        </div>
-        <div class="session-header-right">
-          <span class="session-image-count">${images.length} image${images.length !== 1 ? 's' : ''}</span>
-        </div>
-      </div>
-      <div class="session-body">
-        <div class="image-grid">
-          ${images.map((img, i) => {
-        const url = img.url || img;
-        // Extract filename from URL to check variants
-        const filename = url.split('/').pop();
-        const variantUrl = variants[filename];
-        return `
-            <div class="image-item" data-src="${url}" data-index="${i}" ${variantUrl ? `data-variant="${variantUrl}"` : ''}>
-              <img src="${url}" alt="Generated image" loading="lazy" />
-              ${variantUrl ? '<span class="hd-badge">HD</span>' : ''}
-            </div>
-          `;
-    }).join('')}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function timeAgo(timestamp) {
-    const seconds = Math.floor((Date.now() - timestamp * 1000) / 1000);
-    if (seconds < 60) return 'Just now';
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-/**
- * Open PhotoSwipe lightbox with full features
- */
-let currentPswpInstance = null;
-
-function openLightbox(dataSource, startIndex = 0) {
-    let items;
-
-    // Check if dataSource is DOM elements (NodeList or Array of Elements)
-    if (dataSource.length > 0 && (dataSource[0].tagName || dataSource[0] instanceof Element)) {
-        items = Array.from(dataSource).map(img => {
-            const item = img.closest('.image-item');
-            const sessionGroup = img.closest('.session-group');
-            const sessionMeta = sessionGroup ? extractSessionMeta(sessionGroup) : {};
-
-            // Check for pre-existing upscaled variant from data attribute
-            const variantUrl = item?.dataset.variant || null;
-
-            return {
-                src: img.src.replace('/thumbs/', '/').replace('_thumb', ''),
-                width: img.naturalWidth || 1024,
-                height: img.naturalHeight || 1024,
-                msrc: img.src,
-                alt: img.alt || '',
-                meta: sessionMeta,
-                originalSrc: img.src.replace('/thumbs/', '/').replace('_thumb', ''),
-                variant: variantUrl, // Pre-loaded upscaled version
-                isShowingVariant: false
-            };
-        });
-    } else {
-        // Assume already formatted data objects
-        items = dataSource;
-    }
-
-    const lightbox = new PhotoSwipeLightbox({
-        dataSource: items,
-        pswpModule: PhotoSwipe,
-        index: startIndex,
-        bgOpacity: 0.95,
-        showHideAnimationType: 'fade',
-        closeOnVerticalDrag: true,
-        padding: { top: 20, bottom: 200, left: 20, right: 20 },
-        // Disable default tap actions to prevent conflicts
-        imageClickAction: false,
-        tapAction: false,
-        wheelToZoom: true
-    });
-
-    // Manual DOM Injection Strategy
-    lightbox.on('openingAnimationStart', () => {
-        const pswpEl = lightbox.pswp.element;
-        const infoPanel = byId('lightbox-info');
-        const toggleBtn = byId('lightbox-info-toggle');
-        const comp = byId('lightbox-comparison');
-
-        // Move UI elements INTO the PhotoSwipe container
-        if (pswpEl) {
-            if (infoPanel) {
-                pswpEl.appendChild(infoPanel);
-                infoPanel.style.display = 'block';
-                infoPanel.classList.remove('hidden');
-                // force-visible removed to allow toggling
-
-                // Stop propagation to prevent closing
-                listen(infoPanel, 'pointerdown', (e) => e.stopPropagation());
-                listen(infoPanel, 'mousedown', (e) => e.stopPropagation());
-                listen(infoPanel, 'click', (e) => e.stopPropagation());
-            }
-            if (toggleBtn) {
-                pswpEl.appendChild(toggleBtn);
-                toggleBtn.style.display = 'block';
-            }
-            if (comp) {
-                pswpEl.appendChild(comp);
-            }
-        }
-    });
-
-    lightbox.on('destroy', () => {
-        const infoPanel = byId('lightbox-info');
-        const toggleBtn = byId('lightbox-info-toggle');
-        const comp = byId('lightbox-comparison');
-        const viewHdBtn = byId('lightbox-view-hd');
-        const compareBtn = byId('lightbox-compare');
-
-        // Safely move back to body and hide
-        if (infoPanel) {
-            document.body.appendChild(infoPanel);
-            infoPanel.classList.add('hidden');
-        }
-        if (toggleBtn) {
-            document.body.appendChild(toggleBtn);
-            toggleBtn.style.display = 'none';
-        }
-        if (comp) {
-            document.body.appendChild(comp);
-            comp.style.display = 'none';
-        }
-
-        // Reset button text states to default
-        if (viewHdBtn) {
-            viewHdBtn.textContent = '👁️ View HD';
-            viewHdBtn.style.display = 'none';
-        }
-        if (compareBtn) {
-            compareBtn.textContent = '↔ Compare';
-            compareBtn.style.display = 'none';
-        }
-
-        currentPswpInstance = null;
-    });
-
-    // Removed closingAnimationStart to prevent premature hiding
-
-    // Ensure content is updated
-    lightbox.on('contentActivate', ({ content }) => {
-        if (content && content.data) {
-            try {
-                updateLightboxMeta(content.data.meta || content.data);
-                updateLightboxButtons(content.data);
-            } catch (e) {
-                console.error('Failed to update lightbox meta:', e);
-            }
-        }
-    });
-
-    // Update metadata panel on slide change
-    lightbox.on('change', () => {
-        const curr = lightbox.pswp.currSlide.data;
-        updateLightboxMeta(curr.meta);
-        updateLightboxButtons(curr);
-    });
-
-    lightbox.init();
-    lightbox.loadAndOpen(startIndex);
-
-    // Store instance for external access
-    currentPswpInstance = lightbox;
-}
-
-function extractSessionMeta(sessionGroup) {
-    // Extract metadata from session group DOM via data attribute
-    const json = sessionGroup.dataset.json;
-    if (json) {
-        try {
-            const session = JSON.parse(decodeURIComponent(json));
-            return session.meta || session;
-        } catch (e) {
-            console.warn('Failed to parse session meta', e);
-        }
-    }
-
-    // Fallback to DOM scraping
-    const promptEl = sessionGroup.querySelector('.session-prompt');
-    const metaItems = sessionGroup.querySelectorAll('.session-meta-item');
-
-    return {
-        prompt: promptEl?.textContent || '',
-        base_model: metaItems[0]?.textContent || '',
-        seed: metaItems[1]?.textContent?.replace('Seed: ', '') || '',
-        timestamp: metaItems[2]?.textContent || ''
-    };
-}
-
-function updateLightboxMeta(meta) {
-    if (!meta) return;
-
-    const setText = (id, text) => {
-        const el = byId(id);
-        if (el) el.textContent = text || '--';
-    };
-
-    setText('lightbox-prompt', meta.prompt || 'No prompt');
-    setText('lightbox-negative', meta.negative || meta.negative_prompt || 'None');
-    setText('lightbox-model', meta.base_model || meta.model || 'Unknown');
-    setText('lightbox-seed', meta.seed || '--');
-
-    const settings = [];
-    if (meta.steps) settings.push(`Steps: ${meta.steps}`);
-    if (meta.cfg) settings.push(`CFG: ${meta.cfg}`);
-    if (meta.scheduler) settings.push(meta.scheduler);
-    if (meta.width && meta.height) settings.push(`${meta.width}×${meta.height}`);
-
-    setText('lightbox-settings', settings.join(' · ') || '--');
-}
-
-function updateLightboxButtons(curr) {
-    const viewHdBtn = byId('lightbox-view-hd');
-    const compareBtn = byId('lightbox-compare');
-
-    if (viewHdBtn) {
-        viewHdBtn.style.display = curr.variant ? 'inline-flex' : 'none';
-    }
-    if (compareBtn) {
-        compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
-    }
-}
-
-// Setup lightbox action buttons
-function initLightboxActions() {
-    // Toggle info panel
-    listen(byId('lightbox-info-toggle'), 'click', () => {
-        const info = byId('lightbox-info');
-        if (info) {
-            info.style.display = info.style.display === 'none' ? 'block' : 'none';
-        }
-    });
-
-    // Regenerate button
-    listen(byId('lightbox-regen'), 'click', async () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-        if (!curr.meta) {
-            toast('No metadata available', 'error');
-            return;
-        }
-
-        // Copy settings to form
-        const setVal = (id, val) => {
-            const el = byId(id);
-            if (el && val !== undefined) el.value = val;
-            // Trigger change event for sliders/selects
-            if (el) el.dispatchEvent(new Event('change'));
-            if (el && el.type === 'range') el.dispatchEvent(new Event('input'));
-        };
-
-        const m = curr.meta;
-        setVal('prompt', m.prompt);
-        setVal('negative', m.negative || m.negative_prompt);
-        setVal('steps', m.steps);
-        setVal('cfg', m.cfg);
-        setVal('width', m.width);
-        setVal('height', m.height);
-        setVal('base_model', m.base_model || m.model);
-        setVal('scheduler', m.scheduler);
-
-        // Set seed to random for variation
-        byId('seed_input').value = '';
-        if (typeof setSeed === 'function') setSeed(null);
-
-        toast('Settings copied! Generating...', 'success');
-
-        // Trigger generation
-        const genBtn = byId('btn-generate');
-        if (genBtn) {
-            // Switch to studio view
-            const studioTab = document.querySelector('[data-view="studio"]');
-            if (studioTab) studioTab.click();
-
-            // Allow UI to update then click
-            setTimeout(() => genBtn.click(), 100);
-        }
-    });
-
-    // Upscale button
-    listen(byId('lightbox-upscale'), 'click', () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-        startUpscale(curr.src, (upscaledUrl) => {
-            curr.variant = upscaledUrl;
-            updateLightboxButtons(curr);
-        });
-    });
-
-    // Inpaint button - send gallery image to inpainting
-    listen(byId('lightbox-inpaint'), 'click', () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-
-        // Close lightbox first
-        currentPswpInstance.pswp.close();
-
-        // Send image to inpaint workflow
-        sendToInpaint(curr.src);
-    });
-
-    // View HD toggle
-    listen(byId('lightbox-view-hd'), 'click', () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-        if (!curr.variant) return;
-
-        const btn = byId('lightbox-view-hd');
-
-        if (curr.isShowingVariant) {
-            curr.src = curr.originalSrc;
-            curr.isShowingVariant = false;
-            btn.textContent = '👁️ View HD';
-        } else {
-            curr.src = curr.variant;
-            curr.isShowingVariant = true;
-            btn.textContent = '↩️ Original';
-        }
-
-        currentPswpInstance.pswp.refreshSlideContent(currentPswpInstance.pswp.currSlide.index);
-    });
-
-    // Compare slider toggle
-    listen(byId('lightbox-compare'), 'click', () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-        if (!curr.variant) return;
-
-        const compContainer = byId('lightbox-comparison');
-        const compOriginal = byId('comp-original');
-        const compModified = byId('comp-modified');
-        const compHandle = byId('comp-handle');
-        const btn = byId('lightbox-compare');
-
-        const isOpen = compContainer.style.display !== 'none';
-
-        if (isOpen) {
-            compContainer.style.display = 'none';
-            btn.textContent = '↔ Compare';
-        } else {
-            compContainer.style.display = 'flex';
-            compOriginal.src = curr.originalSrc;
-            compModified.src = curr.variant;
-            compHandle.style.left = '50%';
-            byId('comp-modified').style.clipPath = 'inset(0 0 0 50%)';
-            btn.textContent = '✕ Close';
-
-            initCompareSlider();
-        }
-    });
-
-    // Delete button
-    listen(byId('lightbox-delete'), 'click', () => {
-        toggleClass(byId('confirmation-modal'), 'hidden', false);
-    });
-
-    // Modal cancel
-    listen(byId('modal-cancel'), 'click', () => {
-        toggleClass(byId('confirmation-modal'), 'hidden', true);
-    });
-
-    // Modal delete image
-    listen(byId('modal-delete-img'), 'click', async () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-
-        try {
-            const formData = new FormData();
-            formData.append('path', curr.src);
-            const res = await fetch('/delete_image', { method: 'POST', body: formData });
-
-            if (res.ok) {
-                currentPswpInstance.pswp.close();
-                toggleClass(byId('confirmation-modal'), 'hidden', true);
-                loadGallery();
-                toast('Image deleted', 'success');
-            } else {
-                toast('Failed to delete', 'error');
-            }
-        } catch (e) {
-            toast('Delete failed', 'error');
-        }
-    });
-
-    // Modal delete run
-    listen(byId('modal-delete-run'), 'click', async () => {
-        if (!currentPswpInstance?.pswp) return;
-        const curr = currentPswpInstance.pswp.currSlide.data;
-
-        try {
-            const formData = new FormData();
-            formData.append('path', curr.src);
-            const res = await fetch('/delete_run', { method: 'POST', body: formData });
-
-            if (res.ok) {
-                currentPswpInstance.pswp.close();
-                toggleClass(byId('confirmation-modal'), 'hidden', true);
-                loadGallery();
-                toast('Run deleted', 'success');
-            } else {
-                toast('Failed to delete', 'error');
-            }
-        } catch (e) {
-            toast('Delete failed', 'error');
-        }
-    });
-}
-
-// Compare slider drag handling
-function initCompareSlider() {
-    const compContainer = byId('lightbox-comparison');
-    const compHandle = byId('comp-handle');
-    const compModified = byId('comp-modified');
-
-    if (!compContainer) return;
-
-    let isDragging = false;
-
-    const setSliderPos = (pct) => {
-        pct = Math.max(0, Math.min(100, pct));
-        compHandle.style.left = `${pct}%`;
-        compModified.style.clipPath = `inset(0 0 0 ${pct}%)`;
-    };
-
-    const onMove = (e) => {
-        if (!isDragging) return;
-        e.preventDefault();
-        const rect = compContainer.getBoundingClientRect();
-        const x = (e.clientX || e.touches?.[0]?.clientX || 0) - rect.left;
-        setSliderPos((x / rect.width) * 100);
-    };
-
-    const onUp = () => {
-        isDragging = false;
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-    };
-
-    compContainer.addEventListener('pointerdown', (e) => {
-        isDragging = true;
-        onMove(e);
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-    });
-}
-
-// Setup gallery refresh button
-listen(byId('refresh-gallery'), 'click', loadGallery);
 
 // ═══════════════════════════════════════════════════════════════
 // PREVIEW TOOLBAR
@@ -1628,3 +749,52 @@ async function sendToInpaint(imageSrc) {
         toast('Failed to load image', 'error');
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// LIGHTBOX ACTION HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+function handleRegenerateFromLightbox(curr) {
+    if (!curr.meta) {
+        toast('No metadata available', 'error');
+        return;
+    }
+
+    // Helper to set value and trigger events
+    const setVal = (id, val) => {
+        const el = byId(id);
+        if (el && val !== undefined) el.value = val;
+        if (el) el.dispatchEvent(new Event('change'));
+        if (el && el.type === 'range') el.dispatchEvent(new Event('input'));
+    };
+
+    const m = curr.meta;
+    setVal('prompt', m.prompt);
+    setVal('negative', m.negative || m.negative_prompt);
+    setVal('steps', m.steps);
+    setVal('cfg', m.cfg);
+    setVal('width', m.width);
+    setVal('height', m.height);
+    setVal('base_model', m.base_model || m.model);
+    setVal('scheduler', m.scheduler);
+
+    // Set seed to random for variation
+    byId('seed_input').value = '';
+    if (typeof setSeed === 'function') setSeed(null);
+
+    toast('Settings copied! Generating...', 'success');
+
+    // Trigger generation
+    const genBtn = byId('btn-generate');
+    if (genBtn) {
+        // Switch to studio view
+        const studioTab = document.querySelector('[data-view="studio"]');
+        if (studioTab) studioTab.click();
+
+        // Allow UI to update then click
+        setTimeout(() => genBtn.click(), 100);
+    }
+}
+
+
+

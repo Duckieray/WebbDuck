@@ -127,7 +127,57 @@ export const Events = {
     MODAL_CLOSE: 'modal:close',
     SECTION_TOGGLE: 'section:toggle',
 
-    // State events
     STATE_CHANGE: 'state:change',
     STATE_RESET: 'state:reset',
+
+    // System events
+    STATUS_UPDATE: 'status:update',
 };
+
+// ═══════════════════════════════════════════════════════════════
+// WEBSOCKET HANDLING
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Initialize WebSocket connection for real-time updates
+ */
+export function initWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws`;
+
+    console.log('🔌 Connecting to WebSocket:', wsUrl);
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connect() {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log('🔌 WebSocket Connected');
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                emit(Events.STATUS_UPDATE, data);
+            } catch (e) {
+                console.warn('Failed to parse WebSocket message:', e);
+            }
+        };
+
+        ws.onclose = () => {
+            // console.log('🔌 WebSocket Closed. Reconnecting in 3s...');
+            clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connect, 3000);
+        };
+
+        ws.onerror = (err) => {
+            console.error('🔌 WebSocket Error:', err);
+            ws.close(); // Trigger onclose
+        };
+    }
+
+    connect();
+}

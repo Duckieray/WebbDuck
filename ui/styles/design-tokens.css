@@ -203,11 +203,13 @@
     --z-dropdown: 100;
     --z-sticky: 200;
     --z-fixed: 300;
-    --z-modal-backdrop: 400;
-    --z-modal: 500;
-    --z-popover: 600;
-    --z-tooltip: 700;
-    --z-toast: 800;
+
+    /* Boosted significantly above PhotoSwipe (100000) */
+    --z-modal-backdrop: 9999999;
+    --z-modal: 10000000;
+    --z-popover: 10000100;
+    --z-tooltip: 10000200;
+    --z-toast: 10000300;
 
     /* ═══════════════════════════════════════════════════════════════
      LAYOUT
@@ -224,12 +226,4 @@
     /* --bp-lg: 1024px;  */
     /* --bp-xl: 1280px;  */
     /* --bp-2xl: 1536px; */
-}
-
-/* Dark mode is default, but support light mode override if needed */
-@media (prefers-color-scheme: light) {
-    :root {
-        /* Light mode overrides would go here */
-        /* Currently WebbDuck is dark-only */
-    }
 }

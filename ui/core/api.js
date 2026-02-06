@@ -143,8 +143,8 @@ export async function tokenize(prompt, baseModel) {
 /**
  * Fetch gallery data
  */
-export async function getGallery(since = 0) {
-    const url = since ? `/gallery?since=${since}` : '/gallery';
+export async function getGallery(since = 0, limit = 50) {
+    const url = since ? `/gallery?since=${since}&limit=${limit}` : `/gallery?limit=${limit}`;
     return get(url);
 }
 

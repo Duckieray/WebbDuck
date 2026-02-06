@@ -79,6 +79,8 @@ mkdir -p checkpoint/sdxl lora outputs weights
 ## Documentation
 
 *   [**Plugins Guide**](docs/PLUGINS.md): How to add the JoyCaption describer.
+*   [**Development Guide**](docs/DEVELOPMENT.md): How to add new API endpoints and features.
+*   [**Lessons Learned**](docs/LESSONS_LEARNED.md): Architectural insights and retrospective.
 *   [**Architecture**](docs/architecture.md): How WebbDuck works under the hood.
 *   [**Experimental Features**](docs/experimental.md): Try out bleeding-edge features.
 *   [**Vision**](docs/vision.md): Our design philosophy.

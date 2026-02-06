@@ -109,6 +109,8 @@
     /* Studio layout changes */
     .studio-layout {
         flex-direction: column;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
 
     .studio-sidebar {
@@ -118,6 +120,9 @@
         border-right: none;
         border-bottom: 1px solid var(--glass-border);
         overflow: visible;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        transform: none;
     }
 
     .studio-main {
