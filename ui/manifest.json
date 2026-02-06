@@ -1,0 +1,21 @@
+{
+    "name": "WebbDuck",
+    "short_name": "WebbDuck",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0e1117",
+    "theme_color": "#0e1117",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "/ui/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/ui/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}
