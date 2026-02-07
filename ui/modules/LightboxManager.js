@@ -186,10 +186,13 @@ export class LightboxManager {
                 const datasetSrc = item?.dataset.src;
                 const src = datasetSrc || img.src.replace('/thumbs/', '/').replace('_thumb', '');
 
+                const width = item?.dataset.width ? parseInt(item.dataset.width) : (img.naturalWidth || 1024);
+                const height = item?.dataset.height ? parseInt(item.dataset.height) : (img.naturalHeight || 1024);
+
                 return {
                     src: src,
-                    width: img.naturalWidth || 1024,
-                    height: img.naturalHeight || 1024,
+                    width: width,
+                    height: height,
                     msrc: img.src,
                     alt: img.alt || '',
                     meta: sessionMeta,

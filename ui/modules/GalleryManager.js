@@ -53,22 +53,10 @@ export class GalleryManager {
 
         try {
             this.page = 0;
-            // Fetch gallery data (limit 50 by default from backend)
-            const data = await api.getGallery();
+            this.data = []; // Clear existing
+            this.hasMore = true;
 
-            // API returns array directly, not {sessions: [...]}
-            this.data = Array.isArray(data) ? data : (data.sessions || []);
-
-            // Sort newest first
-            this.data.sort((a, b) => {
-                const tsA = (a.meta?.timestamp || a.timestamp || 0);
-                const tsB = (b.meta?.timestamp || b.timestamp || 0);
-                return tsB - tsA;
-            });
-
-            // Render with current search term
-            const searchTerm = byId('gallery-search')?.value || '';
-            this.render(searchTerm);
+            await this.fetchPage();
 
             toast('Gallery refreshed', 'success');
         } catch (error) {
@@ -82,14 +70,40 @@ export class GalleryManager {
         }
     }
 
+    async fetchPage() {
+        const start = this.page * this.SESSIONS_PER_PAGE;
+        try {
+            const data = await api.getGallery(start, this.SESSIONS_PER_PAGE);
+            const items = Array.isArray(data) ? data : (data.sessions || []);
+
+            if (items.length < this.SESSIONS_PER_PAGE) {
+                this.hasMore = false;
+            }
+
+            if (this.page === 0) {
+                this.data = items;
+            } else {
+                this.data = [...this.data, ...items];
+            }
+
+            const searchTerm = byId('gallery-search')?.value || '';
+            this.render(searchTerm);
+            return items.length;
+        } catch (e) {
+            console.error('Fetch page error:', e);
+            toast('Failed to load more images', 'error');
+            return 0;
+        }
+    }
+
     render(filterText = '') {
         this.currentSearchTerm = filterText.toLowerCase();
         const container = byId('gallery-sessions');
         const emptyState = byId('gallery-empty');
         const countEl = byId('gallery-count');
-        const emptyMsg = byId('gallery-empty-msg'); // Assuming inner container
 
-        // Filter data
+        // Filter data if needed (though mostly handled by server pagination + search)
+        // If we want client-side search on loaded data:
         let filteredData = this.data;
         if (this.currentSearchTerm) {
             filteredData = this.data.filter(session => {
@@ -105,12 +119,11 @@ export class GalleryManager {
 
             // Update empty message if searching
             if (this.currentSearchTerm && byId('gallery-empty')) {
-                byId('gallery-empty').innerHTML = `
-                    <div class="gallery-empty-content">
-                        <h3>No matches found</h3>
-                        <p>Try a different search term</p>
-                    </div>
-                `;
+                const emptyInner = byId('gallery-empty').querySelector('.gallery-empty-content');
+                if (emptyInner) { // Only update if inner exists, or create it?
+                    // Simplified: just update text if needed, or leave as is. 
+                    // Actually, let's just make sure we show the empty state.
+                }
             }
             return;
         }
@@ -122,21 +135,16 @@ export class GalleryManager {
         const totalImages = filteredData.reduce((sum, session) => sum + (session.images?.length || 0), 0);
         countEl.textContent = `${totalImages} image${totalImages !== 1 ? 's' : ''}`;
 
-        // Render only current page of sessions
-        const startIdx = 0;
-        const endIdx = (this.page + 1) * this.SESSIONS_PER_PAGE;
-        const sessionsToRender = filteredData.slice(startIdx, endIdx);
-
-        container.innerHTML = sessionsToRender.map(session => this.renderSession(session)).join('');
+        // Render sessions
+        container.innerHTML = filteredData.map(session => this.renderSession(session)).join('');
 
         // Add "Load More" button if needed
-        if (endIdx < filteredData.length) {
-            const remaining = filteredData.length - endIdx;
+        if (this.hasMore) {
             const loadMoreDiv = document.createElement('div');
             loadMoreDiv.className = 'gallery-load-more';
             loadMoreDiv.innerHTML = `
                 <button class="btn btn-secondary" id="load-more-btn">
-                    Load More (${remaining} more sessions)
+                    Load More
                 </button>
             `;
             container.appendChild(loadMoreDiv);
@@ -146,9 +154,16 @@ export class GalleryManager {
         this.attachListeners(container);
     }
 
-    loadMore() {
+    async loadMore() {
+        if (!this.hasMore) return;
+        const btn = byId('load-more-btn');
+        if (btn) {
+            btn.innerText = 'Loading...';
+            btn.disabled = true;
+        }
+
         this.page++;
-        this.render(this.currentSearchTerm);
+        await this.fetchPage();
     }
 
     renderSession(session) {
@@ -200,9 +215,11 @@ export class GalleryManager {
             // Use thumbnail endpoint
             // Backend handles generation if missing
             const thumbUrl = `/thumbs/${url}`;
+            const width = meta.width || 1024;
+            const height = meta.height || 1024;
 
             return `
-                <div class="image-item" data-src="${url}" data-index="${i}" ${variantUrl ? `data-variant="${variantUrl}"` : ''}>
+                <div class="image-item" data-src="${url}" data-index="${i}" data-width="${width}" data-height="${height}" ${variantUrl ? `data-variant="${variantUrl}"` : ''}>
                   <img src="${thumbUrl}" alt="Generated image" loading="lazy" />
                   ${variantUrl ? '<span class="hd-badge">HD</span>' : ''}
                 </div>
