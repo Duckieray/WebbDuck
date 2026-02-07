@@ -76,8 +76,20 @@ mkdir -p checkpoint/sdxl lora outputs weights
 3.  **Open in Browser**:
     Visit [http://localhost:8000](http://localhost:8000)
 
+## Troubleshooting
+
+### "Broken Pipe" Error during generation
+If you see `[Errno 32] Broken pipe` in your logs, it usually means `tqdm` (progress bars) is conflicting with a background process.
+**Fix**: This is properly handled in `run.py` automatically. Ensure you are running the server via `python run.py` and not directly invoking `uvicorn` or `app.py`.
+
+### UI Stuck on "Initializing..."
+- Check browser console (F12) for errors.
+- Ensure the backend server is running and reachable at `localhost:8000`.
+- Try a hard refresh (`Ctrl+F5`).
+
 ## Documentation
 
+*   **[Simple Guide](docs/SIMPLE_GUIDE.md)**: Easy instructions for beginners! 🐣
 *   [**Plugins Guide**](docs/PLUGINS.md): How to add the JoyCaption describer.
 *   [**Development Guide**](docs/DEVELOPMENT.md): How to add new API endpoints and features.
 *   [**Lessons Learned**](docs/LESSONS_LEARNED.md): Architectural insights and retrospective.
