@@ -12,5 +12,5 @@ class GenerationMode(ABC):
         pass
 
     @abstractmethod
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
         pass

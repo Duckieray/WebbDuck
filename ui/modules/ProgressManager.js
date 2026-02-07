@@ -43,12 +43,12 @@ export class ProgressManager {
     }
 
     handleUpdate(data) {
-        // Data format: { stage: "Denoising", progress: 0.45, vram: {...} }
-        const { stage, progress, vram } = data;
+        // Data format: { stage: "Denoising", progress: 0.45, step: 5, total_steps: 30, vram: {...} }
+        const { stage, progress, vram, step, total_steps } = data;
 
         // Update main progress UI if active
         if (stage && stage !== 'Idle' && stage !== 'Error') {
-            this.showProgress(stage, progress);
+            this.showProgress(stage, progress, step, total_steps);
         } else {
             this.hideProgress();
         }
@@ -57,7 +57,7 @@ export class ProgressManager {
         this.updateStatusBar(stage, vram);
     }
 
-    showProgress(stage, progress) {
+    showProgress(stage, progress, step, totalSteps) {
         if (!this.el) return;
 
         show(this.el);
@@ -75,13 +75,33 @@ export class ProgressManager {
         if (this.valueEl) this.valueEl.textContent = `${Math.round(pct * 100)}%`;
         if (this.messageEl) this.messageEl.textContent = stage;
 
-        // Try to estimate steps if possible? 
-        // Backend only sends 0-1 float, so "Step X/Y" is unavailable unless we infer it or backend sends it.
-        // For now, hide step counter or use it for something else.
+        // Step Counter and Linear Bar
+        const barContainer = byId('progress-bar-container');
+        const barFill = byId('progress-bar-fill');
+
         if (this.stepEl) {
-            // If we had total steps, we could calc current step. 
-            // Without it, just hide or show generic info.
-            this.stepEl.style.display = 'none';
+            if (totalSteps > 0 && step > 0) {
+                this.stepEl.textContent = `${step}/${totalSteps}`;
+                show(this.stepEl);
+            } else {
+                hide(this.stepEl);
+            }
+        }
+
+        if (barContainer && barFill) {
+            if (totalSteps > 0 && step > 0) {
+                // Determine linear progress based on step/total
+                // Use a slightly different logic than the global ring to show "Local" generation progress
+                // or just mirror logic.
+                // Let's make the linear bar show the EXACT step progress 0-100% of the active phase
+
+                const stepPct = Math.min((step / totalSteps) * 100, 100);
+                barFill.style.width = `${stepPct}%`;
+                show(barContainer);
+            } else {
+                hide(barContainer);
+                barFill.style.width = '0%';
+            }
         }
     }
 
