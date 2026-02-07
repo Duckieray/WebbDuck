@@ -9,6 +9,8 @@ Designed for simplicity, it hides the complex math of "nodes" and "tensors" whil
 *   **Simple & Clean**: A straightforward interface. Type a prompt, get an image.
 *   **Smart & Efficient**: Automatically manages your computer's memory (VRAM) so you can do other things while finding your next masterpiece.
 *   **Modern Web UI**: A fast, zero-build interface with modular architecture. [Read more](ui/README.md).
+*   **Instant Gallery**: Optimized loading with smart pagination and background thumbnail generation.
+*   **Developer Friendly**: Server auto-reloads on code changes, making customization easy.
 *   **Powerful Editing**:
     *   **Inpainting**: drawing masks to fix or change specific parts of an image.
     *   **Image-to-Image**: Use an existing image as a guide.
@@ -76,9 +78,23 @@ mkdir -p checkpoint/sdxl lora outputs weights
 3.  **Open in Browser**:
     Visit [http://localhost:8000](http://localhost:8000)
 
+## Troubleshooting
+
+### "Broken Pipe" Error during generation
+If you see `[Errno 32] Broken pipe` in your logs, it usually means `tqdm` (progress bars) is conflicting with a background process.
+**Fix**: This is properly handled in `run.py` automatically. Ensure you are running the server via `python run.py` and not directly invoking `uvicorn` or `app.py`.
+
+### UI Stuck on "Initializing..."
+- Check browser console (F12) for errors.
+- Ensure the backend server is running and reachable at `localhost:8000`.
+- Try a hard refresh (`Ctrl+F5`).
+
 ## Documentation
 
+*   **[Simple Guide](docs/SIMPLE_GUIDE.md)**: Easy instructions for beginners! 🐣
 *   [**Plugins Guide**](docs/PLUGINS.md): How to add the JoyCaption describer.
+*   [**Development Guide**](docs/DEVELOPMENT.md): How to add new API endpoints and features.
+*   [**Lessons Learned**](docs/LESSONS_LEARNED.md): Architectural insights and retrospective.
 *   [**Architecture**](docs/architecture.md): How WebbDuck works under the hood.
 *   [**Experimental Features**](docs/experimental.md): Try out bleeding-edge features.
 *   [**Vision**](docs/vision.md): Our design philosophy.

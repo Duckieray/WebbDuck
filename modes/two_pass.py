@@ -70,7 +70,7 @@ class TwoPassMode(GenerationMode):
         has_second_pass = second_pass not in (None, "", "None")
         return has_second_pass and img2img is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
         log.info("Entering two-pass generation")
         
         pipeline_manager.set_active_unet("base")
@@ -102,6 +102,8 @@ class TwoPassMode(GenerationMode):
 
         log.debug(f"Pass 1 tokens: {len(pipe.tokenizer(base_prompt)['input_ids'])}")
         
+        cb = callback.get_callback() if callback else None
+        
         with torch.no_grad():
             (
                 prompt_embeds,
@@ -130,8 +132,14 @@ class TwoPassMode(GenerationMode):
                 num_images_per_prompt=settings["num_images"],
                 generator=generator,
                 output_type="latent",
+                callback_on_step_end=cb,
+                callback_on_step_end_tensor_inputs=['latents'],
             ).images
 
+        # Pass 1 complete
+        if callback:
+            callback.finish_pass(settings["steps"])
+        
         # Pass 2: Refinement
         if experimental and late_prompt is None and late_prompt_2 is None:
             if settings.get("second_pass_mode") != "img2img":
@@ -194,6 +202,8 @@ class TwoPassMode(GenerationMode):
                     strength=settings.get("refinement_strength", 0.3),
                     output_type="latent",
                     generator=generator,
+                    callback_on_step_end=cb,
+                    callback_on_step_end_tensor_inputs=['latents'],
                     **extra_args,
                 ).images
 
@@ -236,6 +246,8 @@ class TwoPassMode(GenerationMode):
                     output_type="latent",
                     original_size=(height, width),
                     target_size=(height, width),
+                    callback_on_step_end=cb,
+                    callback_on_step_end_tensor_inputs=['latents'],
                 ).images
 
             pipeline_manager.set_active_unet("base")

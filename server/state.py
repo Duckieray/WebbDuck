@@ -10,6 +10,8 @@ state = {
         "used": 0.0,
         "total": 0.0,
     },
+    "step": 0,
+    "total_steps": 0,
     "last_update": time.time(),
 }
 
@@ -20,9 +22,11 @@ def update_stage(stage: str):
     state["last_update"] = time.time()
 
 
-def update_progress(p: float):
-    """Update progress (0.0 to 1.0)."""
+def update_progress(p: float, step: int = 0, total_steps: int = 0):
+    """Update progress (0.0 to 1.0) and step counts."""
     state["progress"] = float(p)
+    state["step"] = step
+    state["total_steps"] = total_steps
     state["last_update"] = time.time()
 
 

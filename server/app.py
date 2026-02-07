@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from webbduck.server.state import snapshot, update_stage, update_progress
 from webbduck.server.events import broadcast_state, active_sockets
 from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_path
+from webbduck.server.thumbnails import ensure_thumbnail
+from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
 from webbduck.core.schedulers import SCHEDULERS
@@ -302,11 +304,26 @@ async def delete_run(path: str = Form(...)):
 
 
 @app.get("/gallery")
-def gallery(after: float = 0.0):
-    """List all generated image runs."""
+def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
+    """List generated image runs with pagination."""
+    # fast scan of directories
     runs = sorted(BASE.iterdir(), reverse=True)
+    
+    # Slice the list of folders to avoid processing everything
+    # We slice slightly more than limit to account for potentially invalid folders
+    # But for simplicity and speed, strict slicing is usually fine if cleanup is good
+    if start >= len(runs):
+        return []
+        
+    runs_slice = runs[start : start + limit + 10] # +10 buffer for non-runs
+    
     out = []
-    for r in runs:
+    count = 0
+    
+    for r in runs_slice:
+        if count >= limit:
+            break
+            
         if not r.is_dir():
             continue
         meta_file = r / "meta.json"
@@ -317,18 +334,17 @@ def gallery(after: float = 0.0):
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
                 
-            # Fallback for old runs without timestamp
+            # Fallback for old runs
             if "timestamp" not in meta:
                 try:
-                    # Format: YYYY-MM-DD_HH-MM-SS
                     import time
                     from datetime import datetime
                     dt = datetime.strptime(r.name, "%Y-%m-%d_%H-%M-%S")
                     meta["timestamp"] = dt.timestamp()
                 except Exception:
-                    pass # Keep as undefined if parsing fails 
+                    pass
             
-            # Filter by timestamp if provided
+            # Legacy 'after' filter (optional, mostly for polling)
             if after > 0 and meta.get("timestamp", 0) <= after:
                 continue
 
@@ -341,18 +357,14 @@ def gallery(after: float = 0.0):
 
         for p in r.glob("*.png"):
             if p.name.endswith("_upscaled.png"):
-                # Associate variant with original: 0_upscaled.png -> 0.png
                 original_stem = p.name.replace("_upscaled.png", "")
                 original_name = f"{original_stem}.png"
                 variants[original_name] = to_web_path(p)
             else:
                 imgs.append(to_web_path(p))
         
-        # Sort main images naturally (0.png, 1.png...)
-        # Sort main images naturally (0.png, 1.png...)
         def sort_key(x):
             stem = Path(x).stem
-            # Always return (group, int_val, str_val) so comparisons are type-safe
             if stem.isdigit():
                 return (0, int(stem), "")
             return (1, 0, stem)
@@ -365,6 +377,8 @@ def gallery(after: float = 0.0):
             "variants": variants,
             "meta": meta
         })
+        count += 1
+        
     return out
 
 
@@ -614,3 +628,15 @@ async def caption_image(
                 file_path.unlink()
             except Exception:
                 pass
+
+
+@app.get("/thumbs/{path:path}")
+async def get_thumbnail(path: str):
+    """Serve a thumbnail, generating it on demand if needed."""
+    try:
+        # Run resizing in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        thumb_path = await loop.run_in_executor(None, ensure_thumbnail, path)
+        return FileResponse(thumb_path)
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "Image not found"})
