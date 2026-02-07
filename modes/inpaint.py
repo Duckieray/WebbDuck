@@ -65,6 +65,8 @@ class InpaintMode(GenerationMode):
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
             num_images_per_prompt=num_images_per_prompt,
+            width=int(settings.get("width", 1024)),
+            height=int(settings.get("height", 1024)),
             generator=generator,
         ).images
 

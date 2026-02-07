@@ -9,7 +9,7 @@ class Img2ImgMode(GenerationMode):
     def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         return settings.get("input_image") is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
         # Prefer second pass model (refiner) if available, per user request
         if img2img is not None:
             active_pipe = img2img
@@ -25,6 +25,8 @@ class Img2ImgMode(GenerationMode):
 
         is_latent = isinstance(image, torch.Tensor)
 
+        cb = callback.get_callback() if callback else None
+
         kwargs = {
             "prompt": prompt,
             "prompt_2": prompt_2,
@@ -34,6 +36,8 @@ class Img2ImgMode(GenerationMode):
             "generator": generator,
             "strength": settings.get("strength", 0.75),
             "num_images_per_prompt": settings["num_images"], # Default strength
+            "callback_on_step_end": cb,
+            "callback_on_step_end_tensor_inputs": ['latents'],
         }
 
         if is_latent:

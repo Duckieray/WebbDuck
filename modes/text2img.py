@@ -12,11 +12,13 @@ class Text2ImgMode(GenerationMode):
     def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         return settings.get("input_image") is None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
         num_images = settings["num_images"]
         prompt = settings["prompt"]
         prompt_2 = settings.get("prompt_2")
         negative = settings["negative_prompt"]
+
+        cb = callback.get_callback() if callback else None
 
         (
             prompt_embeds,
@@ -46,6 +48,8 @@ class Text2ImgMode(GenerationMode):
             guidance_scale=settings["cfg"],
             num_images_per_prompt=num_images,
             generator=generator,
+            callback_on_step_end=cb,
+            callback_on_step_end_tensor_inputs=['latents'],
         ).images
 
         return images, generator.initial_seed()

@@ -18,6 +18,10 @@ logging.basicConfig(
 import argparse
 import os
 
+# Disable progress bars to prevent BrokenPipeError in background execution
+# os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+# os.environ["TQDM_DISABLE"] = "1"
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebbDuck SDXL Server")
     parser.add_argument("--output",type=str, help="Custom output directory for generated images")
