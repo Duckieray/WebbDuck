@@ -5,16 +5,16 @@
 .lightbox-info,
 .mask-editor-container {
   background: linear-gradient(160deg, rgba(12, 15, 24, 0.88), rgba(20, 28, 40, 0.68));
-  border: 1px solid var(--glass-border);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow-soft);
 }
 
 .section {
   border-radius: var(--radius-lg);
-  padding: 14px;
+  padding: 16px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
   position: relative;
 }
 
@@ -26,8 +26,8 @@
   right: 0;
   height: 2px;
   border-radius: 16px 16px 0 0;
-  background: linear-gradient(90deg, rgba(99, 102, 241, 0.85), rgba(34, 211, 238, 0.65), rgba(245, 158, 11, 0.7));
-  opacity: 0.7;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.65), rgba(34, 211, 238, 0.35));
+  opacity: 0.32;
 }
 
 .section-title-row {
@@ -51,6 +51,7 @@
   align-items: center;
   color: #d7ddf0;
   font-weight: 600;
+  min-height: 28px;
   cursor: pointer;
 }
 
@@ -71,6 +72,11 @@
 
 .section.collapsed .section-body {
   display: none;
+}
+
+.section-body {
+  display: grid;
+  gap: 14px;
 }
 
 .upload-drop {
@@ -95,7 +101,7 @@
 
 .upload-preview {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .upload-preview-image {
@@ -109,22 +115,22 @@
 
 .upload-preview-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .lora-selected {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .lora-card {
   border-radius: 10px;
   border: 1px solid var(--glass-border);
   background: linear-gradient(150deg, rgba(8, 11, 19, 0.85), rgba(14, 19, 28, 0.75));
-  padding: 9px;
+  padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .lora-card-header,
@@ -160,7 +166,7 @@
 
 .preview-main {
   border-radius: 20px;
-  min-height: min(66vh, 700px);
+  min-height: min(80vh, 980px);
   position: relative;
   overflow: hidden;
   padding: 14px;
@@ -200,7 +206,7 @@
 #preview-image {
   width: 100%;
   height: 100%;
-  max-height: calc(min(66vh, 700px) - 28px);
+  max-height: calc(min(80vh, 980px) - 28px);
   object-fit: contain;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -363,9 +369,10 @@
 }
 
 .lightbox-toggle-btn {
+  display: none;
   position: fixed;
-  top: 16px;
-  right: 16px;
+  bottom: 226px;
+  right: 18px;
   z-index: var(--z-fixed);
   min-height: 34px;
   border-radius: var(--radius-pill);
@@ -378,9 +385,13 @@
 }
 
 .lightbox-info {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
   display: grid;
   gap: 12px;
-  width: min(540px, calc(100vw - 24px));
+  width: min(940px, calc(100vw - 32px));
   border-radius: 16px;
   padding: 14px;
 }
@@ -391,28 +402,35 @@
   flex-wrap: wrap;
 }
 
+.lightbox-actions .btn {
+  font-size: 12px;
+}
+
 .lightbox-meta-main,
 .lightbox-meta-item {
   display: grid;
   gap: 4px;
+  font-size: 12px;
 }
 
 .lightbox-meta label {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .lightbox-prompt-text {
   color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
   max-height: 120px;
   overflow: auto;
 }
 
 .lightbox-meta-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -420,13 +438,18 @@
   position: fixed;
   inset: 0;
   z-index: var(--z-fixed);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   background: rgba(2, 4, 10, 0.72);
+  overflow: hidden;
 }
 
-.comp-img {
+.comp-bottom {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: auto;
   max-width: 88vw;
   max-height: 88vh;
   object-fit: contain;
@@ -434,8 +457,21 @@
 
 .comp-overlay {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: auto;
+  max-width: 88vw;
+  max-height: 88vh;
   overflow: hidden;
+  pointer-events: none;
+}
+
+.comp-overlay .comp-img {
+  width: auto;
+  max-width: 88vw;
+  max-height: 88vh;
+  object-fit: contain;
 }
 
 .comp-handle {

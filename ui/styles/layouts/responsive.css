@@ -15,6 +15,14 @@
   .preview-main {
     min-height: 58vh;
   }
+
+  .lightbox-info {
+    width: min(860px, calc(100vw - 24px));
+  }
+
+  .lightbox-meta-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -64,6 +72,10 @@
     justify-items: start;
   }
 
+  .preview-main {
+    min-height: 68vh;
+  }
+
   .preview-toolbar {
     opacity: 1;
     transform: none;
@@ -100,5 +112,19 @@
     right: 8px;
     width: auto;
     top: 74px;
+  }
+
+  .lightbox-toggle-btn {
+    bottom: 188px;
+    right: 10px;
+  }
+
+  .lightbox-info {
+    bottom: 8px;
+    width: calc(100vw - 16px);
+  }
+
+  .lightbox-meta-grid {
+    grid-template-columns: 1fr;
   }
 }

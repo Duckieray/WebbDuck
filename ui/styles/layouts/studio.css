@@ -1,31 +1,31 @@
 .studio-grid {
   display: grid;
-  grid-template-columns: minmax(330px, 410px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
 }
 
 .control-panel {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: 14px;
   max-height: calc(100vh - 128px);
 }
 
 .panel-scroll {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: 6px;
 }
 
 .panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
   border-radius: 14px;
   border: 1px solid var(--glass-border);
-  padding: 10px;
+  padding: 12px;
   background: linear-gradient(160deg, rgba(10, 14, 22, 0.9), rgba(19, 25, 35, 0.74));
   backdrop-filter: blur(12px);
 }
@@ -33,4 +33,5 @@
 .workspace-panel {
   display: grid;
   gap: 10px;
+  min-height: calc(100vh - 128px);
 }

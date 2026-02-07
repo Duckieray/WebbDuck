@@ -10,6 +10,24 @@ body {
   overflow-x: hidden;
 }
 
+html {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  forced-color-adjust: none;
+}
+
+input,
+textarea,
+select,
+option {
+  forced-color-adjust: none;
+  color-scheme: dark;
+}
+
 .app-shell {
   position: relative;
   min-height: 100vh;

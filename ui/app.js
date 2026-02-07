@@ -535,19 +535,31 @@ async function startUpscale(imageSrc, onSuccess) {
     try {
         toast('Upscaling...', 'info');
 
-        const formData = new FormData();
         if (imageSrc.startsWith('data:')) {
-            const blob = await (await fetch(imageSrc)).blob();
-            formData.append('image', blob, 'upscale.png');
-        } else {
-            formData.append('image', imageSrc);
+            toast('Upscale requires a saved image from gallery/outputs', 'warning');
+            return;
         }
+
+        const formData = new FormData();
+        const normalizedImagePath = normalizeImagePathForUpscale(imageSrc);
+        formData.append('image', normalizedImagePath);
         formData.append('scale', '2');
 
         const data = await api.upscale(formData);
-        if (data?.upscaled) {
+        const rawUpscaled = data?.upscaled || data?.image || data?.path || data?.url;
+        const upscaledUrl = normalizeUpscaledUrl(rawUpscaled);
+
+        if (upscaledUrl) {
             toast('Upscale complete', 'success');
-            if (onSuccess) onSuccess(data.upscaled);
+            if (onSuccess) {
+                onSuccess(upscaledUrl);
+            } else {
+                const preview = byId('preview-image');
+                const placeholder = byId('preview-placeholder');
+                if (preview) preview.src = upscaledUrl;
+                if (preview) preview.classList.remove('hidden');
+                if (placeholder) placeholder.classList.add('hidden');
+            }
         } else {
             toast('Upscale failed', 'error');
         }
@@ -555,6 +567,34 @@ async function startUpscale(imageSrc, onSuccess) {
         console.error('Upscale error:', error);
         toast('Upscale failed', 'error');
     }
+}
+
+function normalizeImagePathForUpscale(src) {
+    try {
+        const url = new URL(src, window.location.origin);
+        return url.pathname;
+    } catch (_) {
+        return src;
+    }
+}
+
+function normalizeUpscaledUrl(pathOrUrl) {
+    if (!pathOrUrl) return null;
+
+    if (typeof pathOrUrl !== 'string') return null;
+    if (pathOrUrl.startsWith('/')) return pathOrUrl;
+    if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+
+    const normalized = pathOrUrl.replace(/\\/g, '/');
+    const outputMarker = '/outputs/';
+    const idx = normalized.lastIndexOf(outputMarker);
+    if (idx >= 0) return normalized.slice(idx);
+
+    const lower = normalized.toLowerCase();
+    const fallbackIdx = lower.lastIndexOf('outputs/');
+    if (fallbackIdx >= 0) return `/${normalized.slice(fallbackIdx)}`;
+
+    return pathOrUrl;
 }
 
 async function sendToInpaint(imageSrc) {
