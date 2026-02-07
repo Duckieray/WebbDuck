@@ -183,14 +183,17 @@ export class LightboxManager {
                 const sessionMeta = sessionGroup ? this.extractSessionMeta(sessionGroup) : {};
                 const variantUrl = item?.dataset.variant || null;
 
+                const datasetSrc = item?.dataset.src;
+                const src = datasetSrc || img.src.replace('/thumbs/', '/').replace('_thumb', '');
+
                 return {
-                    src: img.src.replace('/thumbs/', '/').replace('_thumb', ''),
+                    src: src,
                     width: img.naturalWidth || 1024,
                     height: img.naturalHeight || 1024,
                     msrc: img.src,
                     alt: img.alt || '',
                     meta: sessionMeta,
-                    originalSrc: img.src.replace('/thumbs/', '/').replace('_thumb', ''),
+                    originalSrc: src,
                     variant: variantUrl,
                     isShowingVariant: false
                 };

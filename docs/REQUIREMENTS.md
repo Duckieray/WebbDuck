@@ -13,7 +13,10 @@ WebbDuck is a modern, high-performance Web UI for Stable Diffusion XL (SDXL) ima
 
 ### 2.2 File Structure
 - `ui/core/`: Essential utilities (api, state, events, utils).
-- `ui/modules/`: Feature-specific classes (MaskEditor, LoraManager, LightboxManager).
+- `ui/core/`: Essential utilities (api, state, events, utils).
+- `ui/modules/`: Feature-specific classes (MaskEditor, LoraManager, LightboxManager, GalleryManager, ProgressManager).
+- `ui/styles/`: Organized CSS architecture (tokens, layouts, components).
+- `ui/app.js`: Main entry point and initialization logic.
 - `ui/styles/`: Organized CSS architecture (tokens, layouts, components).
 - `ui/app.js`: Main entry point and initialization logic.
 
@@ -103,6 +106,16 @@ To prevent "stacking context wars", the following scale MUST be adhered to:
   - Overlay showing Prompt, Negative, Seed, Model, Steps, CFG.
   - Must be collapsible.
 
+### 4.5 Performance & Optimization
+- **Thumbnails**:
+  - Backend must generate reduced-resolution sidecars (`.thumb.jpg`) for the gallery grid.
+  - Frontend must lazy-load these thumbnails to ensure 60fps scrolling performance.
+
+### 4.6 Deployment Stability
+- **Background Execution**:
+  - Server must run robustly in background processes (nohup/systemd).
+  - Must explicitly suppress `tqdm` progress bars (`HF_HUB_DISABLE_PROGRESS_BARS=1`) to prevent `BrokenPipeError` crashes in non-interactive shells.
+
 ### 4.5 Orchestration Features
 - **State Persistence**:
   - All form inputs (Prompt, Steps, CFG, Dims) must auto-save to `localStorage`.
@@ -151,9 +164,6 @@ To prevent "stacking context wars", the following scale MUST be adhered to:
 
 ## 6. Soft Requirements (Future Roadmap)
 
-### 6.1 Performance
-- **Thumbnails**: Backend currently triggers I/O for full images. Future backend should generate `.thumb.jpg` sidecars.
-- **Virtualization**: Frontend should implement virtual scrolling (e.g. `react-window` equivalent logic) for lists > 1000 items.
 
 ### 6.2 Mobile PWA
 - Add `manifest.json` for "Add to Home Screen".

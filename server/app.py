@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from webbduck.server.state import snapshot, update_stage, update_progress
 from webbduck.server.events import broadcast_state, active_sockets
 from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_path
+from webbduck.server.thumbnails import ensure_thumbnail
+from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
 from webbduck.core.schedulers import SCHEDULERS
@@ -614,3 +616,15 @@ async def caption_image(
                 file_path.unlink()
             except Exception:
                 pass
+
+
+@app.get("/thumbs/{path:path}")
+async def get_thumbnail(path: str):
+    """Serve a thumbnail, generating it on demand if needed."""
+    try:
+        # Run resizing in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        thumb_path = await loop.run_in_executor(None, ensure_thumbnail, path)
+        return FileResponse(thumb_path)
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "Image not found"})
