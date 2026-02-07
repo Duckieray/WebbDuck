@@ -9,6 +9,8 @@ Designed for simplicity, it hides the complex math of "nodes" and "tensors" whil
 *   **Simple & Clean**: A straightforward interface. Type a prompt, get an image.
 *   **Smart & Efficient**: Automatically manages your computer's memory (VRAM) so you can do other things while finding your next masterpiece.
 *   **Modern Web UI**: A fast, zero-build interface with modular architecture. [Read more](ui/README.md).
+*   **Instant Gallery**: Optimized loading with smart pagination and background thumbnail generation.
+*   **Developer Friendly**: Server auto-reloads on code changes, making customization easy.
 *   **Powerful Editing**:
     *   **Inpainting**: drawing masks to fix or change specific parts of an image.
     *   **Image-to-Image**: Use an existing image as a guide.

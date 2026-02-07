@@ -85,8 +85,8 @@ To prevent "stacking context wars", the following scale MUST be adhered to:
 ### 4.3 Gallery & History
 - **Data Persistence**: History is stored on the filesystem as individual run folders.
 - **Loading Strategy**:
-  - **limit**: Must fetch only the most recent **50** sessions initially to prevent UI freeze.
-  - **Pagination**: "Load More" button to fetch older sessions.
+  - **limit/start**: Must support server-side slicing via `limit` (default 50) and `start` (offset) parameters.
+  - **Pagination**: "Load More" button to fetch older sessions using the `start` offset.
 - **Display**:
   - Grouped by "Session" (Batch of images).
   - Grid layout.

@@ -25,6 +25,20 @@ webbduck/
 │   ├── img2img.py      # Img2Img implementation
 │   └── inpaint.py      # Inpainting implementation
 └── ui/                 # Frontend (See ui/README.md)
+    ├── core/           # Utilities & State
+    ├── modules/        # Feature blocks (Gallery, Lightbox, etc.)
+    └── styles/         # CSS Architecture
+
+## 🛠️ Development Tips
+
+### Auto-Reload
+The server is configured with `reload=True` in `run.py`. Any changes to python files in `webbduck/` will automatically restart the server.
+
+### Frontend Modules
+The UI uses ES6 modules. No build step is required!
+- Edit `ui/modules/MyManager.js`
+- Refresh browser
+- Done!
 ```
 
 ---
