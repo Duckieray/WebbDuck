@@ -979,6 +979,18 @@ body::before {
 }
 
 @media (max-width: 860px) {
+  html,
+  body {
+    height: auto;
+    overflow-y: auto;
+  }
+
+  .nova-app {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .desktop-only {
     display: none !important;
   }
@@ -1007,6 +1019,7 @@ body::before {
 
   .nova-studio-grid {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .nova-controls,
@@ -1014,6 +1027,11 @@ body::before {
   .gallery-layout {
     min-height: auto;
     max-height: none;
+    height: auto;
+  }
+
+  .view,
+  .view.active {
     height: auto;
   }
 
