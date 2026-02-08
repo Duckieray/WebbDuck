@@ -1,6 +1,6 @@
 import * as api from './core/api.js';
 import { initState, getState, setState, setSeed, setLastUsedSeed, syncFromDOM, syncToDOM } from './core/state.js';
-import { emit, Events, initWebSocket } from './core/events.js';
+import { emit, on, Events, initWebSocket } from './core/events.js';
 import { $$, byId, listen, show, hide, toggleClass, populateSelect, toast, debounce, toggleSection } from './core/utils.js';
 import { ProgressManager } from './modules/ProgressManager.js';
 import { MaskEditor } from './modules/MaskEditor.js';
@@ -9,6 +9,8 @@ import { LightboxManager } from './modules/LightboxManager.js';
 import { GalleryManager } from './modules/GalleryManager.js';
 
 let isGenerating = false;
+const seenCompletedQueueJobs = new Set();
+const queueViewStartedAt = Date.now() / 1000;
 
 window._uploadedImage = null;
 window._maskBlob = null;
@@ -38,6 +40,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupGenerationButtons();
         setupUploadHandling();
         setupPreviewToolbar();
+        setupQueuePanel();
+        setupRealtimeGalleryRefresh();
 
         await Promise.all([loadModels(), loadSchedulers(), window.galleryManager.load()]);
 
@@ -224,27 +228,36 @@ function setupGenerationButtons() {
 }
 
 async function startGeneration(mode) {
-    if (isGenerating) return;
-
-    isGenerating = true;
-    window.progressManager?.showProgress('Starting...', 0);
-    emit(Events.GENERATION_START, mode);
-
     try {
         syncFromDOM();
         const formData = collectFormData();
-        const endpoint = mode === 'test' ? api.testGenerate : api.generate;
-        const result = await endpoint(formData);
 
-        handleGenerationResult(result);
-        emit(Events.GENERATION_COMPLETE, result);
+        if (mode === 'test') {
+            if (isGenerating) return;
+            isGenerating = true;
+            window.progressManager?.showProgress('Starting...', 0);
+            emit(Events.GENERATION_START, mode);
+
+            const result = await api.testGenerate(formData);
+            handleGenerationResult(result);
+            emit(Events.GENERATION_COMPLETE, result);
+            return;
+        }
+
+        formData.append('wait_for_result', 'false');
+        const queued = await api.generate(formData);
+        const pos = queued?.queue_position;
+        toast(pos ? `Queued (position ${pos})` : 'Queued', 'success');
+        emit(Events.GENERATION_START, 'queued');
     } catch (error) {
         console.error('Generation error:', error);
         toast(error.message || 'Generation failed', 'error');
         emit(Events.GENERATION_ERROR, error);
     } finally {
-        isGenerating = false;
-        window.progressManager?.hideProgress();
+        if (mode === 'test') {
+            isGenerating = false;
+            window.progressManager?.hideProgress();
+        }
     }
 }
 
@@ -253,7 +266,10 @@ function collectFormData() {
     const state = getState();
 
     formData.append('prompt', byId('prompt')?.value || '');
-    formData.append('negative', byId('negative')?.value || '');
+    const negative = byId('negative')?.value || '';
+    formData.append('negative_prompt', negative);
+    // Keep legacy key for compatibility with any older handlers.
+    formData.append('negative', negative);
     formData.append('width', state.width || byId('width')?.value || 1024);
     formData.append('height', state.height || byId('height')?.value || 1024);
     formData.append('steps', byId('steps')?.value || 30);
@@ -616,7 +632,7 @@ async function sendToInpaint(imageSrc) {
     }
 }
 
-function handleRegenerateFromLightbox(curr) {
+async function handleRegenerateFromLightbox(curr) {
     if (!curr?.meta) {
         toast('No metadata available', 'error');
         return;
@@ -639,11 +655,38 @@ function handleRegenerateFromLightbox(curr) {
     setValue('cfg', meta.cfg);
     setValue('width', meta.width);
     setValue('height', meta.height);
-    setValue('base_model', meta.base_model || meta.model);
+    const baseModel = meta.base_model || meta.model;
+    setValue('base_model', baseModel);
     setValue('scheduler', meta.scheduler);
 
     byId('seed_input').value = '';
     setSeed(null);
+
+    if (baseModel && window.loraManager) {
+        try {
+            await window.loraManager.loadForModel(baseModel);
+        } catch (_) {
+            // Ignore and continue with best-effort restoration.
+        }
+    }
+
+    if (window.loraManager) {
+        window.loraManager.clear();
+        const loras = Array.isArray(meta.loras) ? meta.loras : [];
+        loras.forEach((lora) => {
+            if (typeof lora === 'string') {
+                window.loraManager.addLora(lora, 1.0);
+                return;
+            }
+
+            const name = lora?.name || lora?.model;
+            if (!name) return;
+            const weightRaw = lora?.weight ?? lora?.strength;
+            const parsedWeight = Number(weightRaw);
+            const weight = Number.isFinite(parsedWeight) ? parsedWeight : 1.0;
+            window.loraManager.addLora(name, weight);
+        });
+    }
 
     syncFromDOM();
     switchView('studio');
@@ -699,4 +742,113 @@ function ensureSelectDefaults() {
     }
 
     syncFromDOM();
+}
+
+function setupQueuePanel() {
+    on(Events.QUEUE_UPDATE, renderQueuePanel);
+    refreshQueuePanel();
+}
+
+function setupRealtimeGalleryRefresh() {
+    on(Events.GENERATION_COMPLETE, () => {
+        // Keep gallery up to date immediately after each finished job.
+        window.galleryManager?.refreshLatest();
+    });
+}
+
+async function refreshQueuePanel() {
+    try {
+        const data = await api.getQueue();
+        renderQueuePanel(data);
+    } catch (_) {
+        const summaryEl = byId('queue-summary');
+        if (summaryEl) summaryEl.textContent = 'Queue unavailable';
+    }
+}
+
+function renderQueuePanel(data) {
+    const summaryEl = byId('queue-summary');
+    const listEl = byId('queue-list');
+    if (!summaryEl || !listEl) return;
+
+    const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+    const recentCompleted = Array.isArray(data?.recent_completed) ? data.recent_completed : [];
+    const queuedCount = data?.queued_count || 0;
+    const activeId = data?.active_job_id;
+
+    summaryEl.textContent = queuedCount > 0
+        ? `${queuedCount} job(s) queued`
+        : (activeId ? '1 job running' : 'No jobs queued');
+
+    applyCompletedQueueResults(recentCompleted);
+
+    if (jobs.length === 0) {
+        listEl.innerHTML = '';
+        return;
+    }
+
+    const recent = jobs.slice(0, 12);
+    listEl.innerHTML = recent.map(job => {
+        const status = job.status || 'unknown';
+        const prompt = (job.settings?.prompt || '').trim();
+        const title = prompt ? escapeHtml(prompt.slice(0, 72)) : '(no prompt)';
+        const dims = `${job.settings?.width || '-'}x${job.settings?.height || '-'}`;
+        const steps = job.settings?.steps ?? '-';
+        const batch = job.settings?.num_images ?? '-';
+        const pos = job.queue_position ? `#${job.queue_position}` : '';
+        const canCancel = status === 'queued';
+
+        return `
+              <div class="queue-item status-${status}">
+                <div class="queue-item-main">
+                  <div class="queue-item-title">${title}</div>
+                  <div class="queue-item-meta">${status}${pos ? ` ${pos}` : ''} | ${dims} | s:${steps} | b:${batch}</div>
+                </div>
+                ${canCancel ? `<button class="btn btn-ghost btn-sm queue-cancel" data-job-id="${job.job_id}" type="button">Cancel</button>` : ''}
+              </div>
+            `;
+    }).join('');
+
+    listEl.querySelectorAll('.queue-cancel').forEach(btn => {
+        listen(btn, 'click', async () => {
+            const jobId = btn.dataset.jobId;
+            if (!jobId) return;
+            try {
+                await api.cancelQueue(jobId);
+                toast('Queued job cancelled', 'info');
+                // Backend pushes fresh queue state via WebSocket.
+            } catch (err) {
+                toast(err.message || 'Cancel failed', 'error');
+            }
+        });
+    });
+}
+
+function applyCompletedQueueResults(jobs) {
+    if (!Array.isArray(jobs) || jobs.length === 0) return;
+
+    const completed = jobs
+        .filter(job => {
+            if (job?.status !== 'completed') return false;
+            if (!job?.job_id || seenCompletedQueueJobs.has(job.job_id)) return false;
+            if ((job.finished_at || 0) < queueViewStartedAt) return false;
+            const images = job?.result?.images;
+            return Array.isArray(images) && images.length > 0;
+        })
+        .sort((a, b) => (a.finished_at || 0) - (b.finished_at || 0));
+
+    completed.forEach(job => {
+        seenCompletedQueueJobs.add(job.job_id);
+        handleGenerationResult(job.result);
+        emit(Events.GENERATION_COMPLETE, job.result);
+    });
+}
+
+function escapeHtml(text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }

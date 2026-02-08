@@ -57,6 +57,20 @@ export class LightboxManager {
             this.callbacks.onInpaint(curr.src);
         });
 
+        listen(byId('lightbox-download'), 'click', () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            const src = curr?.src;
+            if (!src) return;
+
+            const anchor = document.createElement('a');
+            anchor.href = src;
+            anchor.download = `webbduck-${Date.now()}.png`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+        });
+
         listen(byId('lightbox-view-hd'), 'click', () => {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
@@ -301,6 +315,17 @@ export class LightboxManager {
         if (meta.width && meta.height) settings.push(`${meta.width}x${meta.height}`);
 
         setText('lightbox-settings', settings.join(' | ') || '--');
+
+        const loras = Array.isArray(meta.loras) ? meta.loras : [];
+        const loraText = loras.length
+            ? loras.map((lora) => {
+                if (typeof lora === 'string') return lora;
+                const name = lora?.name || lora?.model || 'Unknown';
+                const weight = lora?.weight ?? lora?.strength;
+                return weight !== undefined ? `${name} (${weight})` : name;
+            }).join(' | ')
+            : 'None';
+        setText('lightbox-loras', loraText);
     }
 
     updateButtons(curr) {

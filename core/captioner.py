@@ -96,7 +96,7 @@ class CaptionerManager:
     def generate_caption(
         self,
         image_path: Path,
-        style: str = "detailed",
+        style: str = "sd_prompt",
         captioner_name: Optional[str] = None,
         max_tokens: int = 300,
     ) -> str:
@@ -129,7 +129,7 @@ class CaptionerManager:
             raise ValueError(f"Captioner '{captioner_name}' is not available")
         
         # Get prompt for style
-        prompt = CAPTION_PROMPTS.get(style, CAPTION_PROMPTS["detailed"])
+        prompt = CAPTION_PROMPTS.get(style, CAPTION_PROMPTS["sd_prompt"])
         
         # Load and run captioner
         caption_fn = self._load_captioner(captioner_name)
@@ -147,7 +147,7 @@ captioner_manager = CaptionerManager()
 
 def generate_caption(
     image_path: Path,
-    style: str = "detailed",
+    style: str = "sd_prompt",
     captioner_name: Optional[str] = None,
     max_tokens: int = 300,
 ) -> str:

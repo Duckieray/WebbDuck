@@ -226,6 +226,17 @@
                 </div>
                 <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
               </section>
+
+              <section class="panel section collapsible collapsed" id="section-queue">
+                <button class="section-header" type="button" data-section="section-queue">
+                  <span>Queue</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <div class="queue-summary" id="queue-summary">No jobs queued</div>
+                  <div class="queue-list" id="queue-list"></div>
+                </div>
+              </section>
             </div>
 
             <div class="panel-actions">
@@ -324,6 +335,7 @@
       <button id="lightbox-regen" class="btn btn-primary btn-sm" type="button">Regenerate</button>
       <button id="lightbox-upscale" class="btn btn-secondary btn-sm" type="button">Upscale</button>
       <button id="lightbox-inpaint" class="btn btn-secondary btn-sm" type="button">Inpaint</button>
+      <button id="lightbox-download" class="btn btn-secondary btn-sm" type="button">Download</button>
       <button id="lightbox-view-hd" class="btn btn-secondary btn-sm" type="button" style="display:none;">View HD</button>
       <button id="lightbox-compare" class="btn btn-secondary btn-sm" type="button" style="display:none;">Compare</button>
       <button id="lightbox-delete" class="btn btn-danger btn-sm" type="button">Delete</button>
@@ -339,6 +351,7 @@
         <div class="lightbox-meta-item"><label>Model</label><span id="lightbox-model">Unknown</span></div>
         <div class="lightbox-meta-item"><label>Seed</label><span id="lightbox-seed">--</span></div>
         <div class="lightbox-meta-item"><label>Settings</label><span id="lightbox-settings">--</span></div>
+        <div class="lightbox-meta-item"><label>LoRAs</label><span id="lightbox-loras">None</span></div>
       </div>
     </div>
   </div>
