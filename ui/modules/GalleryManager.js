@@ -11,7 +11,9 @@ export class GalleryManager {
         this.data = [];
         this.page = 0;
         this.SESSIONS_PER_PAGE = 30;
+        this.SEARCH_SESSIONS = 600;
         this.currentSearchTerm = '';
+        this.searchData = null;
 
         // Bind methods
         this.load = this.load.bind(this);
@@ -38,9 +40,15 @@ export class GalleryManager {
         listen(searchInput, 'input', (e) => {
             const val = e.target.value;
             clearTimeout(timeout);
-            timeout = setTimeout(() => {
+            timeout = setTimeout(async () => {
                 this.page = 0;
-                this.render(val);
+                if (val.trim()) {
+                    await this.ensureSearchData();
+                    this.render(val, this.searchData || this.data);
+                    return;
+                }
+
+                this.render('');
             }, 300);
         });
     }
@@ -56,6 +64,7 @@ export class GalleryManager {
             this.page = 0;
             this.data = []; // Clear existing
             this.hasMore = true;
+            this.searchData = null;
 
             await this.fetchPage();
 
@@ -79,9 +88,10 @@ export class GalleryManager {
             this.data = items;
             this.page = 0;
             this.hasMore = items.length >= this.SESSIONS_PER_PAGE;
+            this.searchData = null;
 
             const searchTerm = byId('gallery-search')?.value || '';
-            this.render(searchTerm);
+            this.render(searchTerm, searchTerm.trim() ? (this.searchData || this.data) : this.data);
         } catch (error) {
             console.error('Failed to refresh latest gallery items:', error);
         }
@@ -102,9 +112,10 @@ export class GalleryManager {
             } else {
                 this.data = [...this.data, ...items];
             }
+            this.searchData = null;
 
             const searchTerm = byId('gallery-search')?.value || '';
-            this.render(searchTerm);
+            this.render(searchTerm, searchTerm.trim() ? (this.searchData || this.data) : this.data);
             return items.length;
         } catch (e) {
             console.error('Fetch page error:', e);
@@ -113,20 +124,48 @@ export class GalleryManager {
         }
     }
 
-    render(filterText = '') {
+    async ensureSearchData() {
+        if (this.searchData) return;
+        try {
+            const data = await api.getGallery(0, this.SEARCH_SESSIONS);
+            const items = Array.isArray(data) ? data : (data.sessions || []);
+            this.searchData = items;
+        } catch (error) {
+            console.error('Failed to load search dataset:', error);
+            this.searchData = this.data;
+        }
+    }
+
+    matchesSearch(session, term) {
+        const meta = session?.meta || {};
+        const loras = Array.isArray(meta.loras)
+            ? meta.loras.map((l) => (typeof l === 'string' ? l : (l?.name || l?.model || ''))).join(' ')
+            : '';
+        const parts = [
+            session?.prompt,
+            meta?.prompt,
+            meta?.negative,
+            meta?.negative_prompt,
+            meta?.base_model,
+            meta?.model,
+            meta?.scheduler,
+            meta?.seed,
+            meta?.width && meta?.height ? `${meta.width}x${meta.height}` : '',
+            loras
+        ];
+        const haystack = parts.filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(term);
+    }
+
+    render(filterText = '', sourceData = null) {
         this.currentSearchTerm = filterText.toLowerCase();
         const container = byId('gallery-sessions');
         const emptyState = byId('gallery-empty');
         const countEl = byId('gallery-count');
 
-        // Filter data if needed (though mostly handled by server pagination + search)
-        // If we want client-side search on loaded data:
-        let filteredData = this.data;
+        let filteredData = sourceData || this.data;
         if (this.currentSearchTerm) {
-            filteredData = this.data.filter(session => {
-                const prompt = (session.meta?.prompt || session.prompt || '').toLowerCase();
-                return prompt.includes(this.currentSearchTerm);
-            });
+            filteredData = filteredData.filter(session => this.matchesSearch(session, this.currentSearchTerm));
         }
 
         if (!filteredData.length) {
@@ -156,7 +195,7 @@ export class GalleryManager {
         container.innerHTML = filteredData.map(session => this.renderSession(session)).join('');
 
         // Add "Load More" button if needed
-        if (this.hasMore) {
+        if (!this.currentSearchTerm && this.hasMore) {
             const loadMoreDiv = document.createElement('div');
             loadMoreDiv.className = 'gallery-load-more';
             loadMoreDiv.innerHTML = `
