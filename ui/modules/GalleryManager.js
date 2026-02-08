@@ -11,9 +11,9 @@ export class GalleryManager {
         this.data = [];
         this.page = 0;
         this.SESSIONS_PER_PAGE = 30;
-        this.SEARCH_SESSIONS = 600;
         this.currentSearchTerm = '';
         this.searchData = null;
+        this.searchRequestId = 0;
 
         // Bind methods
         this.load = this.load.bind(this);
@@ -43,11 +43,21 @@ export class GalleryManager {
             timeout = setTimeout(async () => {
                 this.page = 0;
                 if (val.trim()) {
-                    await this.ensureSearchData();
-                    this.render(val, this.searchData || this.data);
+                    const requestId = ++this.searchRequestId;
+                    try {
+                        const data = await api.searchGallery(val.trim(), 0, 120);
+                        if (requestId !== this.searchRequestId) return;
+                        this.searchData = Array.isArray(data) ? data : (data.sessions || []);
+                        this.hasMore = false;
+                        this.render(val, this.searchData);
+                    } catch (error) {
+                        console.error('Search failed:', error);
+                        toast('Search failed', 'error');
+                    }
                     return;
                 }
 
+                this.searchRequestId++;
                 this.render('');
             }, 300);
         });
@@ -121,18 +131,6 @@ export class GalleryManager {
             console.error('Fetch page error:', e);
             toast('Failed to load more images', 'error');
             return 0;
-        }
-    }
-
-    async ensureSearchData() {
-        if (this.searchData) return;
-        try {
-            const data = await api.getGallery(0, this.SEARCH_SESSIONS);
-            const items = Array.isArray(data) ? data : (data.sessions || []);
-            this.searchData = items;
-        } catch (error) {
-            console.error('Failed to load search dataset:', error);
-            this.searchData = this.data;
         }
     }
 

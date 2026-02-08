@@ -954,6 +954,37 @@ body::before {
   backdrop-filter: blur(12px);
 }
 
+.pswp .lightbox-info {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  transform: none;
+  width: auto;
+  max-width: none;
+  max-height: min(38vh, 300px);
+  border-radius: 14px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.pswp .lightbox-toggle-btn {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  border-radius: 999px;
+}
+
+.pswp .lightbox-toggle-btn.is-above-info {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + min(38vh, 300px) + 20px);
+}
+
+.pswp .lightbox-toggle-btn.is-docked-bottom {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+}
+
 .lightbox-info:not(.hidden) {
   display: block !important;
 }

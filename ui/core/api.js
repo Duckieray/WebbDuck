@@ -149,6 +149,14 @@ export async function getGallery(start = 0, limit = 50) {
 }
 
 /**
+ * Search gallery sessions globally via manifest index.
+ */
+export async function searchGallery(query, start = 0, limit = 60) {
+    const q = encodeURIComponent(query || '');
+    return get(`/gallery/search?q=${q}&start=${start}&limit=${limit}&_=${Date.now()}`);
+}
+
+/**
  * Fetch queued/running job metadata.
  */
 export async function getQueue() {
