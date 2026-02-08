@@ -4,12 +4,11 @@
 <head>
   <meta charset="UTF-8" />
   <title>WebbDuck - AI Image Studio</title>
-  <meta name="viewport"
-    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="description" content="WebbDuck - Professional AI Image Generation Studio" />
-  <meta name="theme-color" content="#0b0d14" />
+  <meta name="theme-color" content="#090c12" />
+  <meta name="color-scheme" content="dark" />
 
-  <!-- PWA / Mobile -->
   <link rel="manifest" href="/ui/manifest.json" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -17,502 +16,317 @@
   <link rel="apple-touch-icon" href="/ui/icon-192.png" />
   <link rel="icon" type="image/x-icon" href="/ui/favicon.ico" />
 
-  <!-- Styles -->
   <link rel="stylesheet" href="/ui/styles/main.css" />
   <link rel="stylesheet" href="/ui/lib/photoswipe.css" />
 </head>
 
 <body>
-  <div id="app">
-    <!-- ═══════════════════════════════════════════════════════════
-         TOP NAVIGATION BAR
-         ═══════════════════════════════════════════════════════════ -->
-    <nav class="nav-bar">
-      <a href="#" class="nav-logo">
-        <span class="nav-logo-icon">🦆</span>
-        <span class="nav-logo-text">WebbDuck</span>
-      </a>
+  <div id="app" class="app-shell">
+    <div class="ambient-glow"></div>
 
-      <div class="nav-tabs desktop-only">
-        <button class="nav-tab active" data-view="studio">
-          <span class="nav-tab-icon">🎨</span>
-          <span>Studio</span>
-        </button>
-        <button class="nav-tab" data-view="gallery">
-          <span class="nav-tab-icon">🖼️</span>
-          <span>Gallery</span>
-        </button>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">WD</span>
+        <div class="brand-copy">
+          <strong>WebbDuck</strong>
+          <span>Local SDXL Studio</span>
+        </div>
       </div>
 
-      <div class="nav-actions">
+      <div class="topbar-tabs desktop-only">
+        <button class="nav-tab active" data-view="studio">Studio</button>
+        <button class="nav-tab" data-view="gallery">Gallery</button>
       </div>
-    </nav>
 
-    <!-- ═══════════════════════════════════════════════════════════
-         MAIN VIEWS CONTAINER
-         ═══════════════════════════════════════════════════════════ -->
+      <div class="topbar-meta">
+        <span class="status-indicator ready" id="status-indicator"></span>
+        <span id="status-text">Ready</span>
+      </div>
+    </header>
+
     <div class="view-container">
-      <!-- STUDIO VIEW -->
-      <div class="view active" id="view-studio">
-        <div class="studio-layout">
-          <!-- Sidebar Controls -->
-          <aside class="studio-sidebar">
-            <!-- Model Selection -->
-            <div class="sidebar-section">
-              <div class="sidebar-section-title">
-                <span>Model</span>
-              </div>
-              <select class="select" id="base_model">
-                <option value="">Loading models...</option>
-              </select>
-            </div>
+      <section class="view active" id="view-studio">
+        <div class="studio-grid">
+          <aside class="control-panel">
+            <div class="panel-scroll">
+              <section class="panel section" id="section-model">
+                <div class="section-title-row">
+                  <h2>Model</h2>
+                </div>
+                <select class="select" id="base_model">
+                  <option value="">Loading models...</option>
+                </select>
+              </section>
 
-            <!-- Prompt -->
-            <div class="sidebar-section">
-              <div class="sidebar-section-title">
-                <span>Prompt</span>
-              </div>
-              <div class="prompt-container">
-                <textarea class="prompt-textarea" id="prompt"
-                  placeholder="Describe your image... Use (parentheses) for emphasis, [brackets] for de-emphasis"
-                  rows="4"></textarea>
-                <div class="prompt-footer">
+              <section class="panel section" id="section-prompt">
+                <div class="section-title-row">
+                  <h2>Prompt</h2>
                   <span class="token-counter" id="token-count">0 tokens</span>
                 </div>
-              </div>
-            </div>
+                <textarea class="prompt-textarea" id="prompt" rows="5" placeholder="Describe your image..."></textarea>
+              </section>
 
-            <!-- Negative Prompt (Collapsible) -->
-            <div class="sidebar-section section" id="section-negative">
-              <div class="section-header" onclick="toggleSection('section-negative')">
-                <span class="section-title">Negative Prompt</span>
-                <svg class="section-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-              <div class="section-body">
-                <textarea class="prompt-textarea" id="negative" placeholder="What to avoid in the image..."
-                  rows="2"></textarea>
-              </div>
-            </div>
-
-            <!-- Generation Parameters -->
-            <div class="sidebar-section section" id="section-params">
-              <div class="section-header" onclick="toggleSection('section-params')">
-                <span class="section-title">Parameters</span>
-                <svg class="section-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-              <div class="section-body">
-                <!-- Dimensions -->
-                <div class="form-group mb-4">
-                  <label class="form-label">Dimensions</label>
-                  <div class="dimension-selector">
-                    <input type="number" class="input input-sm dimension-input" id="width" value="1024" step="64"
-                      min="512" max="2048" />
-                    <span class="dimension-separator">×</span>
-                    <input type="number" class="input input-sm dimension-input" id="height" value="1024" step="64"
-                      min="512" max="2048" />
-                    <button class="dimension-lock" id="lock-ratio" title="Lock aspect ratio">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                      </svg>
-                    </button>
-                  </div>
-                  <!-- Quick presets -->
-                  <div class="preset-chips mt-2">
-                    <button class="preset-chip" data-width="1024" data-height="1024">1:1</button>
-                    <button class="preset-chip" data-width="1152" data-height="896">4:3</button>
-                    <button class="preset-chip" data-width="1216" data-height="832">3:2</button>
-                    <button class="preset-chip" data-width="1344" data-height="768">16:9</button>
-                    <button class="preset-chip" data-width="832" data-height="1216">2:3</button>
-                    <button class="preset-chip" data-width="768" data-height="1344">9:16</button>
-                  </div>
+              <section class="panel section collapsible" id="section-negative">
+                <button class="section-header" type="button" data-section="section-negative">
+                  <span>Negative Prompt</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <textarea class="prompt-textarea" id="negative" rows="3" placeholder="What to avoid..."></textarea>
                 </div>
+              </section>
 
-                <!-- Steps -->
-                <div class="form-group mb-4">
-                  <div class="param-row">
-                    <label class="form-label">Steps</label>
-                    <span class="param-value" id="steps-value">30</span>
+              <section class="panel section collapsible" id="section-params">
+                <button class="section-header" type="button" data-section="section-params">
+                  <span>Parameters</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <div class="form-row two-col">
+                    <label class="form-label" for="width">Width</label>
+                    <label class="form-label" for="height">Height</label>
+                    <input class="input" type="number" id="width" value="1024" step="8" min="512" max="2048" />
+                    <input class="input" type="number" id="height" value="1024" step="8" min="512" max="2048" />
                   </div>
-                  <input type="range" class="slider" id="steps" min="1" max="100" value="30" />
-                </div>
 
-                <!-- CFG Scale -->
-                <div class="form-group mb-4">
-                  <div class="param-row">
-                    <label class="form-label">CFG Scale</label>
-                    <span class="param-value" id="cfg-value">7.5</span>
+                  <div class="preset-chips">
+                    <button class="preset-chip active" data-width="1024" data-height="1024" type="button">1:1</button>
+                    <button class="preset-chip" data-width="1152" data-height="896" type="button">4:3</button>
+                    <button class="preset-chip" data-width="1216" data-height="832" type="button">3:2</button>
+                    <button class="preset-chip" data-width="1344" data-height="768" type="button">16:9</button>
+                    <button class="preset-chip" data-width="832" data-height="1216" type="button">2:3</button>
+                    <button class="preset-chip" data-width="768" data-height="1344" type="button">9:16</button>
                   </div>
-                  <input type="range" class="slider" id="cfg" min="1" max="20" step="0.5" value="7.5" />
-                </div>
 
-                <!-- Seed -->
-                <div class="form-group mb-4">
-                  <label class="form-label">Seed</label>
-                  <div class="flex gap-2">
-                    <input type="number" class="input input-sm flex-1" id="seed_input" placeholder="Random" />
-                    <button class="btn btn-secondary btn-sm btn-icon" id="randomize-seed" title="Randomize">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16">
-                        </path>
-                      </svg>
-                    </button>
+                  <div class="form-row">
+                    <div class="param-row">
+                      <label class="form-label" for="steps">Steps</label>
+                      <span class="param-value" id="steps-value">30</span>
+                    </div>
+                    <input class="slider" type="range" id="steps" min="1" max="100" value="30" />
+                  </div>
+
+                  <div class="form-row">
+                    <div class="param-row">
+                      <label class="form-label" for="cfg">CFG</label>
+                      <span class="param-value" id="cfg-value">7.5</span>
+                    </div>
+                    <input class="slider" type="range" id="cfg" min="1" max="20" step="0.5" value="7.5" />
+                  </div>
+
+                  <div class="form-row">
+                    <label class="form-label" for="scheduler">Scheduler</label>
+                    <select class="select" id="scheduler">
+                      <option value="">Loading...</option>
+                    </select>
+                  </div>
+
+                  <div class="form-row">
+                    <label class="form-label" for="seed_input">Seed</label>
+                    <div class="seed-row">
+                      <input class="input" type="number" id="seed_input" placeholder="Random" />
+                      <button class="btn btn-secondary btn-icon" id="randomize-seed" type="button" title="Randomize seed">R</button>
+                    </div>
                   </div>
                 </div>
+              </section>
 
-                <!-- Scheduler -->
-                <div class="form-group">
-                  <label class="form-label">Scheduler</label>
-                  <select class="select" id="scheduler">
-                    <option value="">Loading...</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <!-- Second Pass / Refiner (Collapsible) -->
-            <div class="sidebar-section section collapsed" id="section-refiner">
-              <div class="section-header" onclick="toggleSection('section-refiner')">
-                <span class="section-title">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path
-                      d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
-                    </path>
-                  </svg>
-                  Second Pass
-                </span>
-                <svg class="section-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-              <div class="section-body">
-                <div class="form-group mb-3">
-                  <label class="toggle">
+              <section class="panel section collapsible collapsed" id="section-refiner">
+                <button class="section-header" type="button" data-section="section-refiner">
+                  <span>Second Pass</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <label class="toggle-row" for="second_pass_enabled">
                     <input type="checkbox" id="second_pass_enabled" />
-                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
-                    <span class="toggle-label">Enable Refiner</span>
+                    <span>Enable second pass refiner</span>
                   </label>
+
+                  <div class="form-row">
+                    <label class="form-label" for="second_pass_model">Refiner Model</label>
+                    <select class="select" id="second_pass_model">
+                      <option value="None">None</option>
+                    </select>
+                  </div>
+
+                  <div class="form-row">
+                    <div class="param-row">
+                      <label class="form-label" for="second_pass_steps">Refiner Steps</label>
+                      <span class="param-value" id="second-steps-value">20</span>
+                    </div>
+                    <input class="slider" type="range" id="second_pass_steps" min="1" max="50" value="20" />
+                  </div>
+
+                  <div class="form-row">
+                    <div class="param-row">
+                      <label class="form-label" for="second_pass_blend">Blend</label>
+                      <span class="param-value" id="blend-value">0.8</span>
+                    </div>
+                    <input class="slider" type="range" id="second_pass_blend" min="0" max="1" step="0.05" value="0.8" />
+                  </div>
                 </div>
-                <div class="form-group mb-3">
-                  <label class="form-label">Refiner Model</label>
-                  <select class="select" id="second_pass_model">
-                    <option value="None">None</option>
+              </section>
+
+              <section class="panel section collapsible collapsed" id="section-lora">
+                <button class="section-header" type="button" data-section="section-lora">
+                  <span>LoRA Stack</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <select class="select" id="lora-select">
+                    <option value="">+ Add LoRA...</option>
                   </select>
+                  <div class="lora-selected" id="lora-selected"></div>
                 </div>
-                <div class="form-group mb-3">
-                  <div class="param-row">
-                    <label class="form-label">Refiner Steps</label>
-                    <span class="param-value" id="second-steps-value">20</span>
-                  </div>
-                  <input type="range" class="slider" id="second_pass_steps" min="1" max="50" value="20" />
-                </div>
-                <div class="form-group">
-                  <div class="param-row">
-                    <label class="form-label">Blend Ratio</label>
-                    <span class="param-value" id="blend-value">0.8</span>
-                  </div>
-                  <input type="range" class="slider" id="second_pass_blend" min="0" max="1" step="0.05" value="0.8" />
-                </div>
-              </div>
-            </div>
+              </section>
 
-            <!-- LoRA Selection (Collapsible) -->
-            <div class="sidebar-section section collapsed" id="section-lora">
-              <div class="section-header" onclick="toggleSection('section-lora')">
-                <span class="section-title">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path
-                      d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z">
-                    </path>
-                  </svg>
-                  LoRA
-                </span>
-                <svg class="section-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-              <div class="section-body">
-                <select class="select mb-3" id="lora-select">
-                  <option value="">➕ Add LoRA...</option>
-                </select>
-                <div class="lora-selected" id="lora-selected">
-                  <!-- Selected LoRAs will be added here dynamically -->
-                </div>
-              </div>
-            </div>
-
-            <!-- Input Image (Collapsible) -->
-            <div class="sidebar-section section collapsed" id="section-input">
-              <div class="section-header" onclick="toggleSection('section-input')">
-                <span class="section-title">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
-                  </svg>
-                  Input Image
-                </span>
-                <svg class="section-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2">
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </div>
-              <div class="section-body">
-                <div class="upload-area" id="upload-area">
+              <section class="panel section collapsible" id="section-input">
+                <button class="section-header" type="button" data-section="section-input">
+                  <span>Input Image</span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
                   <div class="upload-drop" id="upload-drop">
-                    <svg class="upload-icon" width="32" height="32" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="17 8 12 3 7 8"></polyline>
-                      <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
-                    <span class="upload-text">
-                      <span class="upload-text-accent">Click to upload</span> or drag and drop
-                    </span>
+                    <p><strong>Drop image here</strong></p>
+                    <p>or click to upload</p>
                   </div>
                   <input type="file" id="input-image" accept="image/*" class="hidden" />
-                </div>
-                <div class="upload-preview hidden" id="upload-preview">
-                  <img src="" id="preview-img" class="upload-preview-image" alt="Uploaded image" />
-                  <div class="upload-preview-actions">
-                    <button class="btn btn-secondary btn-sm" id="caption-btn">Caption</button>
-                    <button class="btn btn-secondary btn-sm" id="edit-mask-btn">Edit Mask</button>
-                    <button class="btn btn-ghost btn-sm btn-icon" id="clear-upload" title="Remove">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-                <!-- Denoising strength (shown when image uploaded) -->
-                <div class="form-group mt-3 hidden" id="denoise-group">
-                  <div class="param-row">
-                    <label class="form-label">Denoising Strength</label>
-                    <span class="param-value" id="denoise-value">0.75</span>
-                  </div>
-                  <input type="range" class="slider" id="denoising_strength" min="0" max="1" step="0.05" value="0.75" />
-                </div>
-                <!-- Inpaint options (shown when mask exists) -->
-                <div class="form-group mt-3 hidden" id="inpaint-options">
-                  <label class="form-label">Inpaint Mode</label>
-                  <div class="flex gap-2 mt-2">
-                    <button class="preset-chip active" id="inpaint-replace">Replace Masked</button>
-                    <button class="preset-chip" id="inpaint-keep">Keep Masked</button>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            <!-- Batch Size -->
-            <div class="sidebar-section">
-              <div class="form-group">
+                  <div class="upload-preview hidden" id="upload-preview">
+                    <img id="preview-img" src="" alt="Uploaded input" class="upload-preview-image" />
+                    <div class="upload-preview-actions">
+                      <button class="btn btn-secondary btn-sm" id="caption-btn" type="button">Caption</button>
+                      <button class="btn btn-secondary btn-sm" id="edit-mask-btn" type="button">Mask</button>
+                      <button class="btn btn-ghost btn-sm" id="clear-upload" type="button">Clear</button>
+                    </div>
+                  </div>
+
+                  <div class="form-row hidden" id="denoise-group">
+                    <div class="param-row">
+                      <label class="form-label" for="denoising_strength">Denoising Strength</label>
+                      <span class="param-value" id="denoise-value">0.75</span>
+                    </div>
+                    <input class="slider" type="range" id="denoising_strength" min="0" max="1" step="0.05" value="0.75" />
+                  </div>
+
+                  <div class="form-row hidden" id="inpaint-options">
+                    <label class="form-label">Inpaint Mode</label>
+                    <div class="segmented-row">
+                      <button class="preset-chip active" id="inpaint-replace" type="button">Replace</button>
+                      <button class="preset-chip" id="inpaint-keep" type="button">Keep</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel section">
                 <div class="param-row">
-                  <label class="form-label">Batch Size</label>
+                  <label class="form-label" for="batch">Batch Size</label>
                   <span class="param-value" id="batch-value">1</span>
                 </div>
-                <input type="range" class="slider" id="batch" min="1" max="8" value="1" />
-              </div>
+                <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
+              </section>
             </div>
 
-            <!-- Action Buttons -->
-            <div class="action-footer">
-              <button class="btn btn-secondary" id="btn-test">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                Test
-              </button>
-              <button class="btn btn-primary" id="btn-generate">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                  <path d="M2 17l10 5 10-5"></path>
-                  <path d="M2 12l10 5 10-5"></path>
-                </svg>
-                Generate
-              </button>
+            <div class="panel-actions">
+              <button class="btn btn-secondary" id="btn-test" type="button">Test</button>
+              <button class="btn btn-primary" id="btn-generate" type="button">Generate</button>
             </div>
           </aside>
 
-          <!-- Main Content Area -->
-          <main class="studio-main">
-            <div class="preview-region">
-              <!-- Main Preview -->
-              <div class="preview-main" id="preview-main">
-                <div class="preview-placeholder" id="preview-placeholder">
-                  <svg class="icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    stroke-width="1.5">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
+          <main class="workspace-panel">
+            <div class="workspace-headline">
+              <h1>Compose. Refine. Ship.</h1>
+              <p>Fast local SDXL generation with inpaint, LoRA stack, and two-pass control.</p>
+            </div>
+            <div class="preview-main" id="preview-main">
+              <div class="preview-placeholder" id="preview-placeholder">
+                <h3>Ready to create</h3>
+                <p>Your latest render appears here.</p>
+              </div>
+              <img src="" id="preview-image" class="hidden" alt="Generated preview" />
+
+              <div class="preview-toolbar">
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-zoom" type="button" title="Open lightbox">Zoom</button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-upscale" type="button" title="Upscale">2x</button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" type="button" title="Send to inpaint">Mask</button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-download" type="button" title="Download">DL</button>
+              </div>
+
+              <div class="generation-progress hidden" id="generation-progress">
+                <div class="progress-ring-container">
+                  <svg class="progress-ring" viewBox="0 0 88 88">
+                    <circle class="progress-ring-track" cx="44" cy="44" r="40" />
+                    <circle class="progress-ring-progress" id="progress-circle" cx="44" cy="44" r="40" />
                   </svg>
-                  <span>Generate an image to see the preview</span>
-                </div>
-                <img src="" id="preview-image" class="hidden" alt="Generated preview"
-                  style="max-width: 100%; max-height: 100%; object-fit: contain;" />
-
-                <!-- Preview Toolbar (appears on hover) -->
-                <div class="preview-toolbar">
-                  <button class="btn btn-secondary btn-icon btn-sm" id="preview-zoom" title="Zoom (Lightbox)">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="M21 21l-4.35-4.35"></path>
-                      <path d="M11 8v6M8 11h6"></path>
-                    </svg>
-                  </button>
-                  <button class="btn btn-secondary btn-icon btn-sm" id="preview-upscale" title="Upscale 2x">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="15 3 21 3 21 9"></polyline>
-                      <polyline points="9 21 3 21 3 15"></polyline>
-                      <line x1="21" y1="3" x2="14" y2="10"></line>
-                      <line x1="3" y1="21" x2="10" y2="14"></line>
-                    </svg>
-                  </button>
-                  <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" title="Send to Inpaint">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-                      <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-                      <path d="M2 2l7.586 7.586"></path>
-                      <circle cx="11" cy="11" r="2"></circle>
-                    </svg>
-                  </button>
-                  <button class="btn btn-secondary btn-icon btn-sm" id="preview-download" title="Download">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="7 10 12 15 17 10"></polyline>
-                      <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                  </button>
-                </div>
-
-                <!-- Generation Progress (hidden by default) -->
-                <div class="generation-progress hidden" id="generation-progress">
-                  <div class="progress-ring-container">
-                    <svg class="progress-ring" viewBox="0 0 88 88">
-                      <circle class="progress-ring-track" cx="44" cy="44" r="40" />
-                      <circle class="progress-ring-progress" id="progress-circle" cx="44" cy="44" r="40" />
-                    </svg>
-                    <div class="progress-percentage">
-                      <span class="progress-value" id="progress-value">0%</span>
-                      <span class="progress-step" id="progress-step">0/30</span>
-                    </div>
+                  <div class="progress-percentage">
+                    <span class="progress-value" id="progress-value">0%</span>
+                    <span class="progress-step" id="progress-step">0/0</span>
                   </div>
-                  <div class="progress-details">
-                    <span class="progress-message" id="progress-message">Generating...</span>
-                    <div class="progress-bar-container hidden" id="progress-bar-container">
-                      <div class="progress-bar-fill" id="progress-bar-fill"></div>
-                    </div>
+                </div>
+                <div class="progress-details">
+                  <span class="progress-message" id="progress-message">Starting...</span>
+                  <div class="progress-bar-container hidden" id="progress-bar-container">
+                    <div class="progress-bar-fill" id="progress-bar-fill"></div>
                   </div>
-                  <button class="btn btn-ghost btn-sm" id="cancel-generation">Cancel</button>
                 </div>
+                <button class="btn btn-ghost btn-sm" id="cancel-generation" type="button">Cancel</button>
               </div>
+            </div>
 
-              <!-- Batch Strip (recent images) -->
-              <div class="batch-strip hidden" id="batch-strip">
-                <!-- Thumbnails added dynamically -->
-              </div>
+            <div class="batch-strip hidden" id="batch-strip"></div>
 
-              <!-- Status Bar -->
-              <div class="status-bar">
-                <div class="status-item">
-                  <span class="status-indicator ready" id="status-indicator"></span>
-                  <span id="status-text">Ready</span>
-                </div>
-                <div class="status-item">
-                  <span class="text-muted">Last seed:</span>
-                  <span id="last-seed">-</span>
-                </div>
-              </div>
+            <div class="status-row">
+              <span>Last seed: <strong id="last-seed">-</strong></span>
             </div>
           </main>
         </div>
-      </div>
+      </section>
 
-      <!-- GALLERY VIEW -->
-      <div class="view" id="view-gallery">
+      <section class="view" id="view-gallery">
         <div class="gallery-layout">
           <header class="gallery-header">
-            <div class="gallery-title">
+            <div>
               <h2>Gallery</h2>
-              <span class="gallery-count" id="gallery-count">0 images</span>
+              <p id="gallery-count">0 images</p>
             </div>
             <div class="gallery-actions">
-              <div class="gallery-search">
-                <svg class="gallery-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <path d="M21 21l-4.35-4.35"></path>
-                </svg>
-                <input type="text" class="input" id="gallery-search" placeholder="Search prompts..." />
-              </div>
-              <button class="btn btn-secondary btn-sm" id="refresh-gallery">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16">
-                  </path>
-                </svg>
-                Refresh
-              </button>
+              <input class="input" id="gallery-search" type="text" placeholder="Search prompts..." />
+              <button class="btn btn-secondary btn-sm" id="refresh-gallery" type="button">Refresh</button>
             </div>
           </header>
+
           <div class="gallery-content" id="gallery-content">
-            <div class="gallery-sessions" id="gallery-sessions">
-              <!-- Session groups added dynamically -->
-            </div>
+            <div class="gallery-sessions" id="gallery-sessions"></div>
             <div class="gallery-empty hidden" id="gallery-empty">
-              <svg class="gallery-empty-icon" width="80" height="80" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="1">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                <polyline points="21 15 16 10 5 21"></polyline>
-              </svg>
-              <h3 class="gallery-empty-title">No images yet</h3>
-              <p class="gallery-empty-text">Generate some images in the Studio to see them here</p>
+              <div class="gallery-empty-content">
+                <h3>No gallery sessions yet</h3>
+                <p>Generate images in Studio and they will appear here.</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
 
-    <!-- Mobile Bottom Tab Bar -->
-    <nav class="mobile-tabs mobile-only" style="display: none;">
-      <button class="mobile-tab active" data-view="studio">
-        <span class="mobile-tab-icon">🎨</span>
-        <span>Studio</span>
-      </button>
-      <button class="mobile-tab" data-view="gallery">
-        <span class="mobile-tab-icon">🖼️</span>
-        <span>Gallery</span>
-      </button>
+    <nav class="mobile-tabs mobile-only">
+      <button class="mobile-tab active" data-view="studio">Studio</button>
+      <button class="mobile-tab" data-view="gallery">Gallery</button>
     </nav>
   </div>
 
-  <!-- Toast Container -->
   <div class="toast-container" id="toast-container"></div>
 
-  <!-- ═══════════════════════════════════════════════════════════
-     LIGHTBOX INFO PANEL (For PhotoSwipe)
-     ═══════════════════════════════════════════════════════════ -->
-  <button id="lightbox-info-toggle" class="lightbox-toggle-btn">Toggle Info</button>
+  <button id="lightbox-info-toggle" class="lightbox-toggle-btn" type="button">Info</button>
 
-  <div class="lightbox-info" id="lightbox-info">
+  <div class="lightbox-info hidden" id="lightbox-info">
     <div class="lightbox-actions">
-      <button id="lightbox-regen" class="btn btn-primary btn-sm">♻️ Regenerate</button>
-      <button id="lightbox-upscale" class="btn btn-secondary btn-sm">✨ Upscale</button>
-      <button id="lightbox-inpaint" class="btn btn-secondary btn-sm">🖌️ Inpaint</button>
-      <button id="lightbox-view-hd" class="btn btn-secondary btn-sm" style="display:none;">👁️ View HD</button>
-      <button id="lightbox-compare" class="btn btn-secondary btn-sm" style="display:none;">↔ Compare</button>
-      <button id="lightbox-delete" class="btn btn-danger btn-sm">🗑️</button>
+      <button id="lightbox-regen" class="btn btn-primary btn-sm" type="button">Regenerate</button>
+      <button id="lightbox-upscale" class="btn btn-secondary btn-sm" type="button">Upscale</button>
+      <button id="lightbox-inpaint" class="btn btn-secondary btn-sm" type="button">Inpaint</button>
+      <button id="lightbox-view-hd" class="btn btn-secondary btn-sm" type="button" style="display:none;">View HD</button>
+      <button id="lightbox-compare" class="btn btn-secondary btn-sm" type="button" style="display:none;">Compare</button>
+      <button id="lightbox-delete" class="btn btn-danger btn-sm" type="button">Delete</button>
     </div>
 
     <div class="lightbox-meta">
@@ -521,27 +335,14 @@
         <p id="lightbox-prompt" class="lightbox-prompt-text">No prompt</p>
       </div>
       <div class="lightbox-meta-grid">
-        <div class="lightbox-meta-item">
-          <label>Negative</label>
-          <span id="lightbox-negative">None</span>
-        </div>
-        <div class="lightbox-meta-item">
-          <label>Model</label>
-          <span id="lightbox-model">Unknown</span>
-        </div>
-        <div class="lightbox-meta-item">
-          <label>Seed</label>
-          <span id="lightbox-seed">--</span>
-        </div>
-        <div class="lightbox-meta-item">
-          <label>Settings</label>
-          <span id="lightbox-settings">--</span>
-        </div>
+        <div class="lightbox-meta-item"><label>Negative</label><span id="lightbox-negative">None</span></div>
+        <div class="lightbox-meta-item"><label>Model</label><span id="lightbox-model">Unknown</span></div>
+        <div class="lightbox-meta-item"><label>Seed</label><span id="lightbox-seed">--</span></div>
+        <div class="lightbox-meta-item"><label>Settings</label><span id="lightbox-settings">--</span></div>
       </div>
     </div>
   </div>
 
-  <!-- Comparison Slider Container -->
   <div id="lightbox-comparison" class="comparison-container" style="display:none;">
     <img id="comp-original" class="comp-img comp-bottom" src="" alt="Original" />
     <div id="comp-overlay" class="comp-overlay">
@@ -550,69 +351,62 @@
     <div id="comp-handle" class="comp-handle"></div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════════
-     DELETE CONFIRMATION MODAL
-     ═══════════════════════════════════════════════════════════ -->
   <div id="confirmation-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 class="modal-title">🗑️ Delete Image</h3>
+        <h3 class="modal-title">Delete Image</h3>
       </div>
       <div class="modal-body">
-        <p>Delete just this image, or the entire generation run?</p>
+        <p>Delete this image only, or delete the full run?</p>
       </div>
       <div class="modal-actions">
-        <button id="modal-delete-img" class="btn btn-danger">Delete Image</button>
-        <button id="modal-delete-run" class="btn btn-danger btn-outline">Delete Run</button>
-        <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="modal-delete-img" class="btn btn-danger" type="button">Delete Image</button>
+        <button id="modal-delete-run" class="btn btn-danger btn-outline" type="button">Delete Run</button>
+        <button id="modal-cancel" class="btn btn-secondary" type="button">Cancel</button>
       </div>
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════════
-     MASK EDITOR OVERLAY
-     ═══════════════════════════════════════════════════════════ -->
   <div id="mask_overlay" class="mask-overlay hidden">
     <div class="mask-editor-container">
       <div class="mask-toolbar">
         <div class="mask-tools">
-          <label>Brush Size</label>
+          <label for="mask_brush_size">Brush</label>
           <input type="range" id="mask_brush_size" min="5" max="100" value="30" class="slider" />
-          <div id="mask_brush_preview" class="brush-size-preview"></div>
+          <div id="brushPreview" class="brush-size-preview"></div>
         </div>
         <div class="mask-tools">
-          <button id="mask_erase_btn" class="btn btn-secondary btn-sm">✏️ Draw</button>
-          <button id="mask_clear_btn" class="btn btn-secondary btn-sm">Clear</button>
-          <button id="mask_invert_btn" class="btn btn-secondary btn-sm">Invert</button>
+          <button id="mask_erase_btn" class="btn btn-secondary btn-sm" type="button">Erase</button>
+          <button id="mask_clear_btn" class="btn btn-secondary btn-sm" type="button">Clear</button>
+          <button id="mask_invert_btn" class="btn btn-secondary btn-sm" type="button">Invert</button>
         </div>
       </div>
 
-      <div class="mask-canvas-wrapper" id="mask_canvas_wrapper">
+      <div class="mask-canvas-wrapper" id="mask_wrapper">
         <canvas id="mask_canvas"></canvas>
       </div>
 
       <div class="mask-toolbar mask-toolbar-bottom">
         <div class="mask-tools">
-          <label>Mode</label>
+          <label for="inpainting_fill">Mode</label>
           <select id="inpainting_fill" class="select">
             <option value="replace">Replace Masked (Inpaint)</option>
             <option value="keep">Keep Masked (Protect)</option>
           </select>
         </div>
         <div class="mask-tools">
-          <label>Feather</label>
-          <input type="range" id="mask_blur" min="0" max="64" value="8" class="slider" style="width: 80px;" />
-          <span id="mask_blur_val">8</span>
+          <label for="mask_blur">Feather</label>
+          <input type="range" id="mask_blur" min="0" max="64" value="8" class="slider" />
+          <span id="blurVal">8</span>
         </div>
         <div class="mask-actions">
-          <button id="mask_cancel_btn" class="btn btn-secondary">Cancel</button>
-          <button id="mask_save_btn" class="btn btn-primary">Save Mask</button>
+          <button id="mask_cancel_btn" class="btn btn-secondary" type="button">Cancel</button>
+          <button id="mask_save_btn" class="btn btn-primary" type="button">Save Mask</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Scripts -->
   <script type="module" src="/ui/app.js"></script>
 </body>
 

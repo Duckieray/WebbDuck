@@ -1,390 +1,130 @@
-/**
- * Responsive Styles
- * Breakpoints and mobile optimizations
- */
+@media (max-width: 1150px) {
+  .studio-grid {
+    grid-template-columns: 1fr;
+  }
 
-/* ═══════════════════════════════════════════════════════════════
-   TABLET BREAKPOINT (≤1024px)
-   ═══════════════════════════════════════════════════════════════ */
+  .control-panel {
+    max-height: none;
+  }
 
-@media (max-width: 1024px) {
-    :root {
-        --sidebar-width: 320px;
-    }
+  .panel-scroll {
+    overflow: visible;
+    max-height: none;
+  }
 
-    .studio-sidebar {
-        width: var(--sidebar-width);
-    }
+  .preview-main {
+    min-height: 58vh;
+  }
 
-    .param-grid {
-        grid-template-columns: 1fr;
-    }
+  .lightbox-info {
+    width: min(860px, calc(100vw - 24px));
+  }
 
-    .lora-grid {
-        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    }
-
-    .image-grid {
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    }
+  .lightbox-meta-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   MOBILE BREAKPOINT (≤768px)
-   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  .desktop-only {
+    display: none;
+  }
 
-@media (max-width: 768px) {
-    :root {
-        --header-height: 52px;
-        --bottom-bar-height: 60px;
-    }
+  .mobile-only {
+    display: flex;
+  }
 
-    /* App structure changes */
-    #app {
-        padding-bottom: var(--bottom-bar-height);
-    }
+  .topbar {
+    margin: 8px 8px 0;
+    grid-template-columns: auto 1fr;
+    padding: 10px 12px;
+  }
 
-    /* Navigation */
-    .nav-bar {
-        padding: 0 var(--space-3);
-    }
+  .topbar-meta {
+    justify-self: end;
+  }
 
-    .nav-logo-text {
-        display: none;
-    }
+  .view-container {
+    padding: 10px;
+    padding-bottom: 76px;
+  }
 
-    .nav-tabs {
-        display: none;
-    }
+  .workspace-headline h1 {
+    font-size: 22px;
+  }
 
-    /* Bottom tab bar for mobile */
-    .mobile-tabs {
-        display: flex !important;
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: var(--bottom-bar-height);
+  .workspace-headline p {
+    font-size: 13px;
+  }
 
-        background: var(--glass-bg);
-        border-top: 1px solid var(--glass-border);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+  .section {
+    padding: 11px;
+  }
 
-        padding-bottom: env(safe-area-inset-bottom);
-        z-index: var(--z-fixed);
-    }
+  .panel-actions {
+    position: sticky;
+    bottom: 76px;
+    z-index: var(--z-sticky);
+  }
 
-    .mobile-tab {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: var(--space-1);
+  .generation-progress {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
 
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        font-size: var(--text-xs);
-        font-weight: var(--font-medium);
+  .preview-main {
+    min-height: 68vh;
+  }
 
-        cursor: pointer;
-        transition: color var(--transition-fast);
-    }
+  .preview-toolbar {
+    opacity: 1;
+    transform: none;
+    position: static;
+    margin-top: 10px;
+    z-index: 1;
+  }
 
-    .mobile-tab:hover,
-    .mobile-tab.active {
-        color: var(--text-primary);
-    }
+  .gallery-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
 
-    .mobile-tab.active .mobile-tab-icon {
-        color: var(--accent-primary);
-    }
+  .mobile-tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-sticky);
+    padding: 8px;
+    gap: 8px;
+    border-top: 1px solid var(--glass-border);
+    background: linear-gradient(160deg, rgba(8, 11, 18, 0.95), rgba(15, 21, 31, 0.88));
+    backdrop-filter: blur(12px);
+  }
 
-    .mobile-tab-icon {
-        font-size: 1.25rem;
-    }
+  .mobile-tab {
+    flex: 1;
+  }
 
-    /* Studio layout changes */
-    .studio-layout {
-        flex-direction: column;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-    }
+  .toast-container {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    top: 74px;
+  }
 
-    .studio-sidebar {
-        width: 100%;
-        height: auto;
-        max-height: none;
-        border-right: none;
-        border-bottom: 1px solid var(--glass-border);
-        overflow: visible;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
-        transform: none;
-    }
+  .lightbox-toggle-btn {
+    bottom: 188px;
+    right: 10px;
+  }
 
-    .studio-main {
-        padding: var(--space-4);
-    }
+  .lightbox-info {
+    bottom: 8px;
+    width: calc(100vw - 16px);
+  }
 
-    /* Preview at top on mobile */
-    .mobile-preview-first {
-        display: flex;
-        flex-direction: column-reverse;
-    }
-
-    .preview-main {
-        min-height: 300px;
-        max-height: 50vh;
-    }
-
-    /* Action buttons stick to bottom */
-    .action-footer {
-        position: fixed;
-        bottom: var(--bottom-bar-height);
-        left: 0;
-        right: 0;
-        padding: var(--space-3) var(--space-4);
-        background: var(--glass-bg);
-        border-top: 1px solid var(--glass-border);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        margin-top: 0;
-        z-index: var(--z-sticky);
-    }
-
-    /* Collapsible sections on mobile */
-    .sidebar-section {
-        background: var(--bg-surface);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-lg);
-        padding: var(--space-3);
-        margin-bottom: var(--space-3);
-    }
-
-    /* Gallery adjustments */
-    .gallery-header {
-        flex-direction: column;
-        gap: var(--space-3);
-        padding: var(--space-3);
-    }
-
-    .gallery-title {
-        width: 100%;
-        justify-content: space-between;
-    }
-
-    .gallery-actions {
-        width: 100%;
-        flex-wrap: wrap;
-    }
-
-    .gallery-search {
-        width: 100%;
-        order: -1;
-    }
-
-    .session-header {
-        padding: var(--space-3);
-    }
-
-    .session-prompt {
-        max-width: 200px;
-        font-size: var(--text-xs);
-    }
-
-    .image-grid {
-        grid-template-columns: repeat(2, 1fr);
-        gap: var(--space-3);
-    }
-
-    /* Modal adjustments */
-    .modal {
-        max-width: calc(100vw - var(--space-4));
-        max-height: calc(100vh - var(--space-8));
-        margin: var(--space-2);
-    }
-
-    .modal-body {
-        padding: var(--space-4);
-    }
-
-    .modal-footer {
-        padding: var(--space-3) var(--space-4);
-    }
-
-    /* Lightbox adjustments */
-    .lightbox-nav {
-        width: 40px;
-        height: 40px;
-    }
-
-    .lightbox-nav-prev {
-        left: var(--space-2);
-    }
-
-    .lightbox-nav-next {
-        right: var(--space-2);
-    }
-
-    .lightbox-info {
-        max-height: 50vh;
-        padding: var(--space-4);
-    }
-
-    .lightbox-meta {
-        grid-template-columns: repeat(2, 1fr);
-        gap: var(--space-3);
-    }
-
-    /* Toast position */
-    .toast-container {
-        bottom: calc(var(--bottom-bar-height) + var(--space-4));
-        left: var(--space-4);
-        right: var(--space-4);
-    }
-
-    .toast {
-        width: 100%;
-    }
-
-    /* Bulk actions */
-    .bulk-actions {
-        bottom: calc(var(--bottom-bar-height) + var(--space-4));
-        left: var(--space-4);
-        right: var(--space-4);
-        transform: translateX(0) translateY(100%);
-        border-radius: var(--radius-lg);
-    }
-
-    .bulk-actions.active {
-        transform: translateX(0) translateY(0);
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   SMALL MOBILE (≤480px)
-   ═══════════════════════════════════════════════════════════════ */
-
-@media (max-width: 480px) {
-    .btn {
-        padding: var(--space-3) var(--space-4);
-        min-height: 44px;
-        /* iOS touch target */
-    }
-
-    .input,
-    .select,
-    .textarea {
-        padding: var(--space-3);
-        font-size: 16px;
-        /* Prevents iOS zoom on focus */
-    }
-
-    .dimension-selector {
-        flex-wrap: wrap;
-        justify-content: center;
-    }
-
-    .image-grid {
-        gap: var(--space-2);
-    }
-
-    .session-meta {
-        flex-wrap: wrap;
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   SAFE AREAS (iPhone notch, etc.)
-   ═══════════════════════════════════════════════════════════════ */
-
-@supports (padding: env(safe-area-inset-top)) {
-    .nav-bar {
-        padding-top: env(safe-area-inset-top);
-        height: calc(var(--header-height) + env(safe-area-inset-top));
-    }
-
-    .studio-sidebar,
-    .studio-main,
-    .gallery-content {
-        padding-left: max(var(--space-4), env(safe-area-inset-left));
-        padding-right: max(var(--space-4), env(safe-area-inset-right));
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   DARK MODE ONLY (For high contrast)
-   ═══════════════════════════════════════════════════════════════ */
-
-@media (prefers-contrast: high) {
-    :root {
-        --border-subtle: rgba(255, 255, 255, 0.15);
-        --border-default: rgba(255, 255, 255, 0.25);
-        --text-secondary: #b8c0cc;
-        --text-muted: #8892a0;
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   PRINT STYLES
-   ═══════════════════════════════════════════════════════════════ */
-
-@media print {
-
-    .nav-bar,
-    .mobile-tabs,
-    .action-footer,
-    .btn,
-    .toast-container {
-        display: none !important;
-    }
-
-    body {
-        background: white;
-        color: black;
-    }
-
-    .glass-panel,
-    .card {
-        background: white;
-        border: 1px solid #ccc;
-        box-shadow: none;
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   LANDSCAPE PHONE-SPECIFIC
-   ═══════════════════════════════════════════════════════════════ */
-
-@media (max-height: 500px) and (orientation: landscape) {
-    .preview-main {
-        max-height: 60vh;
-    }
-
-    .lightbox-info {
-        max-height: 40vh;
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   DESKTOP-ONLY STYLES
-   ═══════════════════════════════════════════════════════════════ */
-
-@media (min-width: 769px) {
-    .mobile-tabs {
-        display: none !important;
-    }
-
-    .mobile-only {
-        display: none !important;
-    }
-}
-
-@media (max-width: 768px) {
-    .desktop-only {
-        display: none !important;
-    }
+  .lightbox-meta-grid {
+    grid-template-columns: 1fr;
+  }
 }
