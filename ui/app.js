@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.galleryManager.init();
 
         setupNavigation();
+        setupMobileStudioToggle();
         setupCollapsibleSections();
         setupSliders();
         setupPresetChips();
@@ -95,11 +96,68 @@ function switchView(viewName) {
     });
 
     setState({ view: nextView });
+    applyMobileStudioPane(getState('mobileStudioPane') || 'controls');
 
     if (nextView === 'gallery' && window.galleryManager) {
         window.galleryManager.load();
         emit(Events.VIEW_CHANGE, nextView);
     }
+}
+
+function setupMobileStudioToggle() {
+    const btn = byId('mobile-studio-toggle');
+    if (!btn) return;
+    window.__webbduckMobileToggleBound = true;
+
+    listen(btn, 'click', () => {
+        const studio = byId('view-studio');
+        const isPreview = studio?.dataset.mobilePane === 'preview';
+        const next = isPreview ? 'controls' : 'preview';
+        setState({ mobileStudioPane: next });
+        applyMobileStudioPane(next);
+    });
+
+    const onResize = debounce(() => {
+        applyMobileStudioPane(getState('mobileStudioPane') || 'controls');
+    }, 120);
+    listen(window, 'resize', onResize);
+
+    applyMobileStudioPane(getState('mobileStudioPane') || 'controls');
+}
+
+function applyMobileStudioPane(pane) {
+    const studio = byId('view-studio');
+    const btn = byId('mobile-studio-toggle');
+    const controls = studio?.querySelector('.nova-controls');
+    const workspace = studio?.querySelector('.nova-workspace');
+    const currentView = getState('view') || 'studio';
+    const isMobile = window.matchMedia('(max-width: 860px)').matches;
+    if (!studio || !btn) return;
+
+    const showToggle = isMobile && currentView === 'studio';
+    btn.classList.toggle('hidden', !showToggle);
+
+    const showPreview = showToggle && pane === 'preview';
+    studio.dataset.mobilePane = showPreview ? 'preview' : 'controls';
+    studio.classList.toggle('mobile-pane-preview', showPreview);
+    if (controls && workspace) {
+        controls.classList.toggle('hidden', showToggle && showPreview);
+        workspace.classList.toggle('hidden', showToggle && !showPreview);
+
+        if (showToggle) {
+            controls.style.setProperty('display', showPreview ? 'none' : 'grid', 'important');
+            workspace.style.setProperty('display', showPreview ? 'grid' : 'none', 'important');
+            controls.setAttribute('aria-hidden', showPreview ? 'true' : 'false');
+            workspace.setAttribute('aria-hidden', showPreview ? 'false' : 'true');
+        } else {
+            controls.style.removeProperty('display');
+            workspace.style.removeProperty('display');
+            controls.removeAttribute('aria-hidden');
+            workspace.removeAttribute('aria-hidden');
+        }
+    }
+    btn.textContent = showPreview ? 'Settings' : 'Preview';
+    btn.setAttribute('aria-pressed', showPreview ? 'true' : 'false');
 }
 
 function setupCollapsibleSections() {
