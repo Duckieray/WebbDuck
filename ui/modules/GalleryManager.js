@@ -45,9 +45,13 @@ export class GalleryManager {
                 if (val.trim()) {
                     const requestId = ++this.searchRequestId;
                     try {
-                        const data = await api.searchGallery(val.trim(), 0, 120);
+                        const data = await api.searchGallery(val.trim(), 0, 2000);
                         if (requestId !== this.searchRequestId) return;
                         this.searchData = Array.isArray(data) ? data : (data.sessions || []);
+                        if (!this.searchData.length) {
+                            this.searchData = await this.searchLocalKeywordFallback(val.trim());
+                            if (requestId !== this.searchRequestId) return;
+                        }
                         this.hasMore = false;
                         this.render(val, this.searchData);
                     } catch (error) {
@@ -135,6 +139,9 @@ export class GalleryManager {
     }
 
     matchesSearch(session, term) {
+        const terms = this.tokenizeSearch(term);
+        if (!terms.length) return true;
+
         const meta = session?.meta || {};
         const loras = Array.isArray(meta.loras)
             ? meta.loras.map((l) => (typeof l === 'string' ? l : (l?.name || l?.model || ''))).join(' ')
@@ -152,7 +159,41 @@ export class GalleryManager {
             loras
         ];
         const haystack = parts.filter(Boolean).join(' ').toLowerCase();
-        return haystack.includes(term);
+        return terms.every((t) => haystack.includes(t));
+    }
+
+    tokenizeSearch(term) {
+        return String(term || '')
+            .toLowerCase()
+            .split(/\s+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+    }
+
+    async searchLocalKeywordFallback(term) {
+        const pageSize = Math.max(50, this.SESSIONS_PER_PAGE || 30);
+        const maxPages = 120; // Hard cap to avoid runaway loops.
+        const all = [];
+        let page = 0;
+
+        while (page < maxPages) {
+            const start = page * pageSize;
+            let chunk = [];
+            try {
+                const data = await api.getGallery(start, pageSize);
+                chunk = Array.isArray(data) ? data : (data.sessions || []);
+            } catch (_) {
+                break;
+            }
+
+            if (!chunk.length) break;
+            all.push(...chunk);
+            if (chunk.length < pageSize) break;
+            page += 1;
+        }
+
+        if (!all.length) return [];
+        return all.filter((session) => this.matchesSearch(session, term));
     }
 
     render(filterText = '', sourceData = null) {
@@ -162,7 +203,8 @@ export class GalleryManager {
         const countEl = byId('gallery-count');
 
         let filteredData = sourceData || this.data;
-        if (this.currentSearchTerm) {
+        const shouldClientFilter = this.currentSearchTerm && sourceData == null;
+        if (shouldClientFilter) {
             filteredData = filteredData.filter(session => this.matchesSearch(session, this.currentSearchTerm));
         }
 

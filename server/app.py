@@ -689,12 +689,14 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
 
 
 @app.get("/gallery/search")
-def gallery_search(q: str, start: int = 0, limit: int = 60):
+def gallery_search(q: str, start: int = 0, limit: int = 1000):
     """Search gallery globally via manifest index."""
     q = (q or "").strip()
     if not q:
         return []
-    return search_manifest_sessions(q, start=start, limit=limit)
+    bounded_limit = max(1, min(int(limit), 5000))
+    bounded_start = max(0, int(start))
+    return search_manifest_sessions(q, start=bounded_start, limit=bounded_limit)
 
 
 @app.get("/models")
