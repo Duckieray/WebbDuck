@@ -13,7 +13,16 @@ from fastapi.staticfiles import StaticFiles
 
 from webbduck.server.state import snapshot, update_stage, update_progress
 from webbduck.server.events import broadcast, broadcast_state, active_sockets
-from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_path
+from webbduck.server.storage import (
+    save_images,
+    BASE,
+    to_web_path,
+    resolve_web_path,
+    ensure_manifest,
+    search_manifest_sessions,
+    remove_manifest_image,
+    remove_manifest_run,
+)
 from webbduck.server.thumbnails import ensure_thumbnail
 from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
@@ -341,6 +350,9 @@ async def startup():
     asyncio.create_task(gpu_worker(generation_queue))
     asyncio.create_task(vram_sampler())
     asyncio.create_task(catalog_watcher())
+    # Build search manifest lazily in background if missing.
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, ensure_manifest)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -559,7 +571,9 @@ async def delete_image(path: str = Form(...)):
         if not target.is_file():
              return JSONResponse(status_code=400, content={"error": "Not a file"})
 
+        target_web_path = to_web_path(target)
         target.unlink()
+        remove_manifest_image(target_web_path)
         print(f"[Info] Deleted {target}")
         return {"status": "ok"}
     except Exception as e:
@@ -585,7 +599,9 @@ async def delete_run(path: str = Form(...)):
         if not run_dir.exists() or not run_dir.is_dir():
              return JSONResponse(status_code=400, content={"error": "Run directory not found"})
 
+        run_name = run_dir.name
         shutil.rmtree(run_dir)
+        remove_manifest_run(run_name)
         print(f"[Info] Deleted run {run_dir}")
         return {"status": "ok"}
     except Exception as e:
@@ -672,6 +688,17 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
     return out
 
 
+@app.get("/gallery/search")
+def gallery_search(q: str, start: int = 0, limit: int = 1000):
+    """Search gallery globally via manifest index."""
+    q = (q or "").strip()
+    if not q:
+        return []
+    bounded_limit = max(1, min(int(limit), 5000))
+    bounded_start = max(0, int(start))
+    return search_manifest_sessions(q, start=bounded_start, limit=bounded_limit)
+
+
 @app.get("/models")
 @app.get("/models")
 def list_models():
@@ -698,7 +725,7 @@ def list_schedulers():
     return list(SCHEDULERS.keys())
 
 
-@app.get("/models/{base_model}/loras")
+@app.get("/models/{base_model:path}/loras")
 def list_model_loras(base_model: str):
     if base_model not in MODEL_REGISTRY:
         return []

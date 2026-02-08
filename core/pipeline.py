@@ -332,19 +332,26 @@ def build_pipeline(
     base_model_name: str,
     second_pass_model_name: str | None = None,
     lora_names: list[str] | None = None,
+    load_progress_callback=None,
 ):
     """Build SDXL pipeline with optional second pass model and LoRAs."""
     base_entry = MODEL_REGISTRY[base_model_name]
+    if callable(load_progress_callback):
+        load_progress_callback("Loading VAE", 1)
     vae = get_vae()
 
     # Single-file checkpoint
     if base_entry["type"] == "single":
+        if callable(load_progress_callback):
+            load_progress_callback("Loading checkpoint", 2)
         pipe = StableDiffusionXLPipeline.from_single_file(
             base_entry["path"],
             torch_dtype=DTYPE,
             use_safetensors=True,
         ).to(DEVICE)
 
+        if callable(load_progress_callback):
+            load_progress_callback("Attaching VAE", 3)
         pipe.vae = vae
         pipe.vae.to(DEVICE, dtype=DTYPE)
 
@@ -357,10 +364,18 @@ def build_pipeline(
     # Diffusers checkpoint
     base_path: Path = base_entry["path"]
 
+    if callable(load_progress_callback):
+        load_progress_callback("Loading UNet", 2)
     unet = get_cached_unet(base_path)
+    if callable(load_progress_callback):
+        load_progress_callback("Loading text encoders", 3)
     tokenizer, tokenizer_2, text_encoder, text_encoder_2 = get_text_components(base_path)
+    if callable(load_progress_callback):
+        load_progress_callback("Loading scheduler", 4)
     scheduler = get_scheduler(base_path)
 
+    if callable(load_progress_callback):
+        load_progress_callback("Assembling pipeline", 5)
     pipe = StableDiffusionXLPipeline(
         vae=vae,
         unet=unet,
@@ -538,8 +553,15 @@ class PipelineManager:
         with self.lock:
             if self.key != base_model:
                 from webbduck.server.state import update_stage, update_progress
-                update_stage("Loading base model")
-                update_progress(0.05)
+                load_total_steps = 7
+
+                def mark_load(stage: str, step: int):
+                    # Reserve the first 30% of overall progress for loading.
+                    progress = 0.02 + (min(step, load_total_steps) / load_total_steps) * 0.30
+                    update_stage(f"Loading pipeline components... ({step}/{load_total_steps}) - {stage}")
+                    update_progress(progress, step=step, total_steps=load_total_steps)
+
+                mark_load("Preparing", 0)
 
                 if self.pipe:
                     # Move to CPU first to help allocator
@@ -568,12 +590,15 @@ class PipelineManager:
                     base_model_name=base_model,
                     second_pass_model_name=None,
                     lora_names=None,
+                    load_progress_callback=mark_load,
                 )
                 
+                mark_load("Building img2img helper", 6)
                 self.base_img2img = StableDiffusionXLImg2ImgPipeline(
                     **self.pipe.components
                 )
 
+                mark_load("Building inpaint helper", 7)
                 self.base_inpaint = StableDiffusionXLInpaintPipeline(
                     **self.pipe.components
                 )

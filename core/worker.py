@@ -1,6 +1,8 @@
 """GPU worker for processing generation and upscale jobs."""
 
 import asyncio
+import gc
+import logging
 import torch
 import cv2
 import numpy as np
@@ -13,6 +15,38 @@ from webbduck.server.storage import save_images, append_session_entry
 from webbduck.server.events import broadcast_state
 from webbduck.server.state import update_stage, update_progress, snapshot
 from webbduck.models.upscaler import get_upsampler
+
+log = logging.getLogger(__name__)
+
+
+def _is_oom_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "out of memory",
+        "cuda out of memory",
+        "cannot allocate memory",
+        "oom",
+    )
+    return any(m in text for m in markers)
+
+
+def _cleanup_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+
+def _build_oom_message(exc: Exception) -> str:
+    base = (
+        "Generation failed due to memory exhaustion. "
+        "Try reducing batch size/resolution, closing other GPU or RAM-heavy apps, "
+        "or waiting for queued work to finish before retrying."
+    )
+    return f"{base} Original error: {exc}"
 
 
 async def run_upscale(job):
@@ -77,9 +111,18 @@ async def gpu_worker(queue):
                     except Exception:
                         pass
             except Exception as e:
+                _cleanup_memory()
                 update_stage("Error")
                 await broadcast_state(snapshot())
-                job["future"].set_exception(e)
+                if _is_oom_error(e):
+                    msg = _build_oom_message(e)
+                    update_stage("OOM (Memory)")
+                    update_progress(0.0)
+                    await broadcast_state(snapshot())
+                    log.exception("OOM during upscale job %s", job.get("job_id"))
+                    job["future"].set_exception(RuntimeError(msg))
+                else:
+                    job["future"].set_exception(e)
                 if callable(on_finish):
                     try:
                         on_finish(job, False, str(e))
@@ -141,9 +184,18 @@ async def gpu_worker(queue):
                     pass
 
         except Exception as e:
+            _cleanup_memory()
             update_stage("Error")
             await broadcast_state(snapshot())
-            job["future"].set_exception(e)
+            if _is_oom_error(e):
+                msg = _build_oom_message(e)
+                update_stage("OOM (Memory)")
+                update_progress(0.0)
+                await broadcast_state(snapshot())
+                log.exception("OOM during generation job %s", job.get("job_id"))
+                job["future"].set_exception(RuntimeError(msg))
+            else:
+                job["future"].set_exception(e)
             if callable(on_finish):
                 try:
                     on_finish(job, False, str(e))

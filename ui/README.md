@@ -31,13 +31,14 @@ ui/
 ## Key UI Capabilities
 
 - Studio + Gallery tabbed layout (desktop and mobile).
+- Mobile Studio pane toggle (`Preview` / `Settings`) for full-height usability.
 - Large Studio preview with action toolbar (zoom/upscale/inpaint/download).
 - Prompt token counter with over-limit warning styling.
 - Resolution preset chips with active `Custom` state.
 - Seed randomize icon button and persisted seed handling.
 - Dedicated Queue modal with job metadata, cancel action, and img2img thumbnail previews.
 - Lightbox info panel at the bottom with toggle and full metadata.
-- Gallery search and lazy thumbnail loading.
+- Gallery search with keyword matching (all typed terms, any order) and lazy thumbnail loading.
 
 ## Event Flow
 
@@ -50,7 +51,7 @@ This avoids frontend polling loops for queue/catalog freshness.
 
 ## LoRA UX Notes
 
-- LoRA selector options are loaded from `/models/{base_model}/loras`.
+- LoRA selector options are loaded from `/models/{base_model:path}/loras`.
 - Slider range is `0.00` to `2.00` in `0.05` increments.
 - Default slider value uses backend `weight` from `loras.json`.
 - Selected LoRAs are persisted in local state and restored when compatible.
