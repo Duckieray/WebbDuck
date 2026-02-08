@@ -79,6 +79,24 @@ def estimate_total_steps(settings):
     return steps + refine_steps
 
 
+def inject_lora_trigger(prompt_text, trigger_phrase):
+    """Append LoRA trigger phrase to prompt text if needed."""
+    prompt = (prompt_text or "").strip()
+    triggers = (trigger_phrase or "").strip()
+
+    if not triggers:
+        return prompt
+
+    # Avoid duplicate appends when regenerating from metadata that already includes triggers.
+    if triggers in prompt:
+        return prompt
+
+    if not prompt:
+        return triggers
+
+    return f"{prompt}, {triggers}"
+
+
 def run_generation(settings):
     """Execute image generation based on settings."""
     second_pass_model = settings.get("second_pass_model")
@@ -88,12 +106,18 @@ def run_generation(settings):
     # Unload any captioner models to free VRAM before loading generation pipelines
     unload_captioners()
 
-    pipe, img2img, base_img2img, base_inpaint, _ = pipeline_manager.get(
+    pipe, img2img, base_img2img, base_inpaint, trigger_phrase = pipeline_manager.get(
         base_model=settings["base_model"],
         second_pass_model=second_pass_model,
         loras=settings.get("loras", []),
         scheduler_name=settings.get("scheduler"),
     )
+
+    # Always inject LoRA trigger phrases into active prompts.
+    settings["prompt"] = inject_lora_trigger(settings.get("prompt"), trigger_phrase)
+    if settings.get("prompt_2"):
+        settings["prompt_2"] = inject_lora_trigger(settings.get("prompt_2"), trigger_phrase)
+    settings["lora_trigger_phrase"] = trigger_phrase or ""
     
     # Load input image if present (for Img2Img)
     if settings.get("image"):

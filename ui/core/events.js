@@ -133,6 +133,7 @@ export const Events = {
     // System events
     STATUS_UPDATE: 'status:update',
     QUEUE_UPDATE: 'queue:update',
+    CATALOG_UPDATE: 'catalog:update',
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -166,6 +167,8 @@ export function initWebSocket() {
                     emit(Events.STATUS_UPDATE, data);
                 } else if (data?.type === 'queue') {
                     emit(Events.QUEUE_UPDATE, data.payload || {});
+                } else if (data?.type === 'catalog') {
+                    emit(Events.CATALOG_UPDATE, data.payload || {});
                 }
             } catch (e) {
                 console.warn('Failed to parse WebSocket message:', e);
