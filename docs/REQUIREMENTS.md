@@ -38,7 +38,7 @@ This document tracks the current functional and technical requirements implement
 
 - Gallery is paginated with `start` + `limit`.
 - Sessions are grouped by run and sorted newest first.
-- Search filters gallery cards by metadata text.
+- Search supports global keyword matching across gallery metadata.
 - Lightbox metadata panel includes prompt, negative, model, seed, settings, LoRAs.
 - Lightbox includes regenerate, upscale, inpaint, download, compare, delete actions.
 
@@ -47,6 +47,11 @@ This document tracks the current functional and technical requirements implement
 - Core Studio fields persist to `localStorage` and restore on reload.
 - Selected LoRAs and weights restore when compatible with the current model.
 - Resolution preset chip state syncs with width/height; `Custom` indicates non-preset values.
+
+### 2.6 Mobile UX
+
+- Studio supports explicit mobile pane switching between `Settings` and `Preview`.
+- Settings pane keeps batch size and generate controls accessible without full-page scroll lock.
 
 ## 3. Runtime and Performance Requirements
 
@@ -64,7 +69,8 @@ This document tracks the current functional and technical requirements implement
 - `GET /models`
 - `GET /second_pass_models`
 - `GET /schedulers`
-- `GET /models/{base_model}/loras`
+- `GET /models/{base_model:path}/loras`
+- `GET /gallery/search`
 - `GET /queue`
 - `POST /queue/cancel`
 - `POST /tokenize`

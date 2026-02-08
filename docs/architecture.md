@@ -23,6 +23,7 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
   - `POST /queue/cancel`
 - WebSocket endpoint: `GET /ws` (upgrades to ws) for push updates.
 - Catalog watcher task scans model/LoRA files and broadcasts `catalog` updates.
+- Gallery search endpoint serves global keyword lookup via manifest index.
 
 ### `core/worker.py`
 
@@ -72,6 +73,7 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 ## Runtime Data Paths
 
 - Output images and metadata: `outputs/<run>/...`
+- Search index: `outputs/manifest.jsonl`
 - Input/upload temp files for img2img/inpaint/caption: `inpaint_input/`
 - LoRA registry file: `lora/loras.json`
 - Model defaults file: `checkpoint/sdxl/models.json`

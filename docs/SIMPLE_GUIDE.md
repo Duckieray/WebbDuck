@@ -28,7 +28,8 @@ Your latest image appears in the Studio preview when complete.
 ## 4. Browse Gallery
 
 - Switch to `Gallery` to see saved runs.
-- Use search to filter by prompt/metadata text.
+- Use search to filter by prompt/metadata keywords.
+  - Example: `blonde glasses` finds items containing both words in any order.
 - Click an image to open lightbox view.
 
 ## 5. Lightbox Actions

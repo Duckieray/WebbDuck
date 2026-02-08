@@ -1,4 +1,4 @@
-# WebbDuck
+# WebbDuck v1.0.0
 
 WebbDuck is a local SDXL studio focused on fast iteration, clean metadata, and practical workflows.
 
@@ -7,11 +7,12 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 ## Key Features
 
 - Modern zero-build web UI (`ui/`) with Studio + Gallery views.
+- Mobile Studio pane toggle (`Preview` / `Settings`) for practical small-screen workflow.
 - Queue-based backend execution with real-time WebSocket updates.
 - Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
 - LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
 - Token counter with warning when prompt exceeds the 77-token CLIP window.
-- Gallery sessions with lazy thumbnails, search, lightbox metadata, and action toolbar.
+- Gallery sessions with lazy thumbnails, global keyword search, lightbox metadata, and action toolbar.
 - Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
 - Optional captioner plugin system (JoyCaption supported).
 
@@ -25,7 +26,7 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 ## Installation
 
 ```bash
-git clone https://github.com/Duckieray/webbduck.git
+git clone https://github.com/Duckieray/WebbDuck.git
 cd webbduck
 python -m venv .venv
 ```
@@ -58,6 +59,7 @@ Open `http://localhost:8000`.
 
 - `run.py` starts FastAPI with reload and safe environment defaults.
 - Queue and progress updates are pushed over `/ws`.
+- Gallery search uses a manifest index (`outputs/manifest.jsonl`) for global matching.
 - Catalog changes are scanned on an interval and pushed to UI:
   - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
 - Thumbnail serving concurrency can be tuned:
