@@ -5,7 +5,7 @@
 
 import PhotoSwipeLightbox from '../lib/photoswipe-lightbox.esm.js';
 import PhotoSwipe from '../lib/photoswipe.esm.js';
-import { byId, listen } from '../core/utils.js';
+import { byId, listen, toast } from '../core/utils.js';
 
 export class LightboxManager {
     constructor(callbacks = {}) {
@@ -32,6 +32,8 @@ export class LightboxManager {
             this.infoVisible = !this.infoVisible;
             info.classList.toggle('hidden', !this.infoVisible);
             btn.textContent = this.infoVisible ? 'Hide Info' : 'Show Info';
+            btn.classList.toggle('is-above-info', this.infoVisible);
+            btn.classList.toggle('is-docked-bottom', !this.infoVisible);
         });
 
         listen(byId('lightbox-regen'), 'click', () => {
@@ -60,12 +62,15 @@ export class LightboxManager {
         listen(byId('lightbox-download'), 'click', () => {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
-            const src = curr?.src;
+            const src = (curr?.isShowingVariant && curr?.variant)
+                ? curr.variant
+                : (curr?.src || curr?.originalSrc);
             if (!src) return;
 
             const anchor = document.createElement('a');
             anchor.href = src;
-            anchor.download = `webbduck-${Date.now()}.png`;
+            const suffix = (curr?.isShowingVariant && curr?.variant) ? '-upscaled' : '';
+            anchor.download = `webbduck-${Date.now()}${suffix}.png`;
             document.body.appendChild(anchor);
             anchor.click();
             document.body.removeChild(anchor);
@@ -224,6 +229,8 @@ export class LightboxManager {
                 pswpEl.appendChild(toggleBtn);
                 toggleBtn.style.display = 'block';
                 toggleBtn.textContent = 'Hide Info';
+                toggleBtn.classList.add('is-above-info');
+                toggleBtn.classList.remove('is-docked-bottom');
             }
 
             if (comp) {
@@ -246,6 +253,7 @@ export class LightboxManager {
                 document.body.appendChild(toggleBtn);
                 toggleBtn.style.display = 'none';
                 toggleBtn.textContent = 'Info';
+                toggleBtn.classList.remove('is-above-info', 'is-docked-bottom');
             }
             if (comp) {
                 document.body.appendChild(comp);
@@ -335,31 +343,75 @@ export class LightboxManager {
         if (compareBtn) compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
     }
 
-    toggleHD(curr) {
+    async toggleHD(curr) {
         const btn = byId('lightbox-view-hd');
         if (!btn) return;
 
+        let nextSrc = null;
         if (curr.isShowingVariant) {
-            curr.src = curr.originalSrc;
+            nextSrc = curr.originalSrc;
+            curr.src = nextSrc;
             curr.isShowingVariant = false;
             btn.textContent = 'View HD';
         } else {
-            curr.src = curr.variant;
+            const variantSrc = this.withCacheBuster(curr.variant);
+            const ready = await this.waitForImage(variantSrc, 6, 220);
+            if (!ready) {
+                toast('HD image is still being finalized. Try again in a moment.', 'warning');
+                return;
+            }
+            nextSrc = variantSrc;
+            curr.src = nextSrc;
             curr.isShowingVariant = true;
             btn.textContent = 'Show Original';
         }
 
-        this.currentPswpInstance.pswp.refreshSlideContent(this.currentPswpInstance.pswp.currSlide.index);
+        const pswp = this.currentPswpInstance?.pswp;
+        if (!pswp) return;
+
+        // Prefer in-place image src replacement to avoid flash/flicker.
+        if (this.swapCurrentSlideImage(pswp, nextSrc)) {
+            return;
+        }
+
+        const viewState = this.captureCurrentViewState();
+        pswp.refreshSlideContent(pswp.currSlide.index);
+        this.restoreCurrentViewState(viewState);
+    }
+
+    withCacheBuster(src) {
+        if (!src || typeof src !== 'string') return src;
+        const join = src.includes('?') ? '&' : '?';
+        return `${src}${join}v=${Date.now()}`;
+    }
+
+    waitForImage(src, attempts = 4, delayMs = 250) {
+        return new Promise((resolve) => {
+            const tryLoad = (remaining) => {
+                const probe = new Image();
+                probe.onload = () => resolve(true);
+                probe.onerror = () => {
+                    if (remaining <= 1) {
+                        resolve(false);
+                        return;
+                    }
+                    setTimeout(() => tryLoad(remaining - 1), delayMs);
+                };
+                probe.src = this.withCacheBuster(src);
+            };
+            tryLoad(Math.max(1, attempts));
+        });
     }
 
     toggleCompare(curr) {
         const compContainer = byId('lightbox-comparison');
+        const compOverlay = byId('comp-overlay');
         const compOriginal = byId('comp-original');
         const compModified = byId('comp-modified');
         const compHandle = byId('comp-handle');
         const btn = byId('lightbox-compare');
 
-        if (!compContainer || !compOriginal || !compModified || !compHandle || !btn) return;
+        if (!compContainer || !compOverlay || !compOriginal || !compModified || !compHandle || !btn) return;
 
         const isOpen = compContainer.style.display !== 'none';
         if (isOpen) {
@@ -370,22 +422,20 @@ export class LightboxManager {
 
         compContainer.style.display = 'flex';
         compOriginal.src = curr.originalSrc;
-        compModified.src = curr.variant;
+        compModified.src = this.withCacheBuster(curr.variant);
         compHandle.style.left = '50%';
-        compModified.style.clipPath = 'inset(0 0 0 50%)';
+        compOverlay.style.clipPath = 'inset(0 0 0 50%)';
         btn.textContent = 'Close Compare';
-        this.initCompareSlider(compContainer, compHandle, compModified);
+        this.initCompareSlider(compContainer, compHandle, compOverlay);
     }
 
-    initCompareSlider(container, handle, modified) {
-        if (container.dataset.init) return;
-
+    initCompareSlider(container, handle, overlay) {
         let isDragging = false;
 
         const setPos = (pct) => {
             const bounded = Math.max(0, Math.min(100, pct));
             handle.style.left = `${bounded}%`;
-            modified.style.clipPath = `inset(0 0 0 ${bounded}%)`;
+            overlay.style.clipPath = `inset(0 0 0 ${bounded}%)`;
         };
 
         const onMove = (e) => {
@@ -402,13 +452,94 @@ export class LightboxManager {
             window.removeEventListener('pointerup', onUp);
         };
 
-        container.addEventListener('pointerdown', (e) => {
+        const previousDown = container._comparePointerDownHandler;
+        if (previousDown) {
+            container.removeEventListener('pointerdown', previousDown);
+        }
+
+        const onDown = (e) => {
             isDragging = true;
             onMove(e);
             window.addEventListener('pointermove', onMove);
             window.addEventListener('pointerup', onUp);
-        });
+        };
 
-        container.dataset.init = 'true';
+        container.addEventListener('pointerdown', onDown);
+
+        container._comparePointerDownHandler = onDown;
+    }
+
+    captureCurrentViewState() {
+        const pswp = this.currentPswpInstance?.pswp;
+        const slide = pswp?.currSlide;
+        if (!slide) return null;
+
+        return {
+            zoom: slide.currZoomLevel || slide.zoomLevels?.initial || 1,
+            panX: slide.pan?.x ?? 0,
+            panY: slide.pan?.y ?? 0,
+        };
+    }
+
+    restoreCurrentViewState(state) {
+        if (!state) return;
+        const pswp = this.currentPswpInstance?.pswp;
+        if (!pswp) return;
+
+        const apply = () => {
+            const slide = pswp.currSlide;
+            if (!slide) return false;
+
+            try {
+                const minZoom = slide.zoomLevels?.min ?? slide.zoomLevels?.fit ?? 1;
+                const maxZoom = slide.zoomLevels?.max ?? state.zoom;
+                const targetZoom = Math.max(minZoom, Math.min(maxZoom, state.zoom));
+
+                if (typeof slide.zoomTo === 'function') {
+                    slide.zoomTo(
+                        targetZoom,
+                        {
+                            x: (pswp.viewportSize?.x || 0) / 2,
+                            y: (pswp.viewportSize?.y || 0) / 2,
+                        },
+                        0,
+                        false
+                    );
+                }
+
+                if (typeof slide.panTo === 'function') {
+                    slide.panTo(state.panX, state.panY);
+                } else if (slide.pan) {
+                    slide.pan.x = state.panX;
+                    slide.pan.y = state.panY;
+                    if (typeof slide.applyCurrentZoomPan === 'function') {
+                        slide.applyCurrentZoomPan();
+                    }
+                }
+                return true;
+            } catch (_) {
+                return false;
+            }
+        };
+
+        [0, 40, 100, 180].forEach((delay) => {
+            setTimeout(() => {
+                apply();
+            }, delay);
+        });
+    }
+
+    swapCurrentSlideImage(pswp, src) {
+        if (!src) return false;
+        try {
+            const slide = pswp.currSlide;
+            const container = slide?.container || slide?.holderElement || null;
+            const img = container?.querySelector?.('img.pswp__img, img');
+            if (!img) return false;
+            img.src = src;
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 }

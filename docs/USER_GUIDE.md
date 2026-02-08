@@ -66,8 +66,15 @@ Queued jobs can be canceled from the modal (running jobs cannot).
 ## Gallery
 
 - Sessions are listed newest-first.
-- Search filters by prompt/metadata text.
+- Search matches prompt/metadata keywords globally using manifest-backed search.
+  - All typed terms must be present, but can appear in any order.
 - Thumbnails are loaded through `/thumbs/...` for lighter browsing.
+
+## Mobile Studio
+
+- On mobile, Studio includes a `Preview` / `Settings` toggle in the top bar.
+- `Settings` view keeps controls, batch, and action buttons accessible.
+- `Preview` view shows the image workspace full-height.
 
 ## Lightbox
 

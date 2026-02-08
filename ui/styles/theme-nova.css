@@ -166,6 +166,10 @@ body::before {
   padding: 0 12px;
 }
 
+.mobile-studio-toggle {
+  display: none;
+}
+
 .queue-open-count {
   min-width: 18px;
   height: 18px;
@@ -954,6 +958,37 @@ body::before {
   backdrop-filter: blur(12px);
 }
 
+.pswp .lightbox-info {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  transform: none;
+  width: auto;
+  max-width: none;
+  max-height: min(38vh, 300px);
+  border-radius: 14px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.pswp .lightbox-toggle-btn {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  border-radius: 999px;
+}
+
+.pswp .lightbox-toggle-btn.is-above-info {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + min(38vh, 300px) + 20px);
+}
+
+.pswp .lightbox-toggle-btn.is-docked-bottom {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+}
+
 .lightbox-info:not(.hidden) {
   display: block !important;
 }
@@ -981,14 +1016,16 @@ body::before {
 @media (max-width: 860px) {
   html,
   body {
-    height: auto;
-    overflow-y: auto;
+    height: 100%;
+    overflow: hidden;
   }
 
   .nova-app {
-    height: auto;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
     min-height: 100dvh;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .desktop-only {
@@ -998,7 +1035,8 @@ body::before {
   .view-container {
     padding: 10px;
     height: auto;
-    overflow: visible;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .nova-topbar {
@@ -1019,24 +1057,99 @@ body::before {
 
   .nova-studio-grid {
     grid-template-columns: 1fr;
-    height: auto;
-  }
-
-  .nova-controls,
-  .nova-workspace,
-  .gallery-layout {
-    min-height: auto;
-    max-height: none;
-    height: auto;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
   }
 
   .view,
-  .view.active {
-    height: auto;
+  .view.active,
+  #view-studio {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .nova-workspace {
+    display: none;
+    order: 1;
+    min-height: 0;
+    max-height: none;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .nova-controls {
+    display: grid;
+    order: 2;
+    min-height: 0;
+    max-height: none;
+    height: 100%;
+    overflow: hidden;
+    padding: 10px;
+    gap: 10px;
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
+  .nova-controls-scroll {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 2px;
+  }
+
+  .batch-dock {
+    margin: 0;
+    padding: 10px 12px 12px;
+  }
+
+  .batch-dock .param-row {
+    padding-right: 2px;
+  }
+
+  .batch-dock .param-value {
+    min-width: 2.5ch;
+    text-align: right;
+  }
+
+  .action-footer {
+    position: static;
+    margin: 0;
+    padding-top: 0;
+  }
+
+  #view-studio.mobile-pane-preview .nova-workspace {
+    display: grid;
+  }
+
+  #view-studio.mobile-pane-preview .nova-controls {
+    display: none;
+  }
+
+  #view-studio[data-mobile-pane="preview"] .nova-workspace {
+    display: grid !important;
+  }
+
+  #view-studio[data-mobile-pane="preview"] .nova-controls {
+    display: none !important;
+  }
+
+  #view-studio[data-mobile-pane="controls"] .nova-controls {
+    display: grid !important;
+  }
+
+  #view-studio[data-mobile-pane="controls"] .nova-workspace {
+    display: none !important;
+  }
+
+  .mobile-studio-toggle {
+    display: inline-flex;
+    min-width: 84px;
+    justify-content: center;
   }
 
   .preview-main {
-    min-height: 48vh;
+    min-height: 0;
   }
 
   .gallery-search {

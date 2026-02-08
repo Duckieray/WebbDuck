@@ -10,7 +10,7 @@ webbduck/
 |  |- app.py            # FastAPI endpoints, queue metadata, ws wiring
 |  |- events.py         # socket broadcast helpers
 |  |- state.py          # runtime stage/progress/vram snapshot state
-|  |- storage.py        # output path helpers
+|  |- storage.py        # output persistence + searchable manifest index
 |  |- thumbnails.py     # thumbnail generation
 |- core/
 |  |- worker.py         # GPU worker loop
@@ -36,6 +36,14 @@ Current queue endpoint behavior:
 - `POST /generate`, `POST /test`, `POST /upscale` all enqueue jobs.
 - `wait_for_result=false` returns immediately with queue metadata.
 - Queue snapshots are pushed over WebSocket (`type=queue`).
+
+### Gallery search index
+
+- Search uses `outputs/manifest.jsonl` built and maintained by `server/storage.py`.
+- Manifest entries are appended on save and pruned on image/run delete.
+- Search endpoint:
+  - `GET /gallery/search?q=...&start=...&limit=...`
+  - keyword-based matching with relevance ranking.
 
 ### Job shape
 
@@ -88,6 +96,13 @@ Env var:
 - Queue list is updated from WebSocket `queue` events.
 - Users can expand job details and cancel queued jobs.
 - Queue modal is separate from Studio controls.
+
+### Mobile Studio pane mode
+
+- Studio on mobile supports explicit pane switching:
+  - `Settings` pane (controls)
+  - `Preview` pane (workspace)
+- Toggle is managed in `ui/app.js` and styled in `ui/styles/theme-nova.css`.
 
 ### Catalog updates
 

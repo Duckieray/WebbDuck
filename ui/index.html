@@ -37,6 +37,9 @@
       </nav>
 
       <div class="nova-topbar-right">
+        <button class="btn btn-secondary btn-sm mobile-studio-toggle" id="mobile-studio-toggle" type="button" aria-pressed="false">
+          Preview
+        </button>
         <button class="btn btn-secondary btn-sm queue-open-btn" id="open-queue-modal" type="button">
           Queue
           <span class="queue-open-count hidden" id="queue-open-count">0</span>
@@ -469,7 +472,57 @@
     </div>
   </div>
 
-  <script type="module" src="/ui/app.js"></script>
+  <script>
+    (function () {
+      function applyFallbackPane(pane) {
+        var studio = document.getElementById('view-studio');
+        var btn = document.getElementById('mobile-studio-toggle');
+        if (!studio || !btn) return;
+
+        var controls = studio.querySelector('.nova-controls');
+        var workspace = studio.querySelector('.nova-workspace');
+        var isMobile = window.matchMedia('(max-width: 860px)').matches;
+        var isStudioActive = studio.classList.contains('active');
+        var enabled = isMobile && isStudioActive;
+
+        btn.classList.toggle('hidden', !enabled);
+        if (!enabled || !controls || !workspace) return;
+
+        var showPreview = pane === 'preview';
+        studio.dataset.mobilePane = showPreview ? 'preview' : 'controls';
+        controls.style.setProperty('display', showPreview ? 'none' : 'grid', 'important');
+        workspace.style.setProperty('display', showPreview ? 'grid' : 'none', 'important');
+        btn.textContent = showPreview ? 'Settings' : 'Preview';
+      }
+
+      function bindFallbackToggle() {
+        if (window.__webbduckMobileToggleBound) return;
+        var btn = document.getElementById('mobile-studio-toggle');
+        if (!btn || btn.dataset.fallbackBound === 'true') return;
+
+        btn.dataset.fallbackBound = 'true';
+        var pane = 'controls';
+        applyFallbackPane(pane);
+
+        btn.addEventListener('click', function () {
+          pane = pane === 'preview' ? 'controls' : 'preview';
+          applyFallbackPane(pane);
+        });
+
+        window.addEventListener('resize', function () {
+          applyFallbackPane(pane);
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bindFallbackToggle);
+      } else {
+        bindFallbackToggle();
+      }
+      setTimeout(bindFallbackToggle, 400);
+    })();
+  </script>
+  <script type="module" src="/ui/app.js?v=20260208b"></script>
 </body>
 
 </html>
