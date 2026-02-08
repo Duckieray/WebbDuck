@@ -15,6 +15,7 @@ export class GalleryManager {
 
         // Bind methods
         this.load = this.load.bind(this);
+        this.refreshLatest = this.refreshLatest.bind(this);
         this.render = this.render.bind(this);
         this.loadMore = this.loadMore.bind(this);
         this.handleDelete = this.handleDelete.bind(this);
@@ -67,6 +68,22 @@ export class GalleryManager {
                 btn.disabled = false;
                 btn.innerHTML = 'Refresh';
             }
+        }
+    }
+
+    async refreshLatest() {
+        try {
+            const data = await api.getGallery(0, this.SESSIONS_PER_PAGE);
+            const items = Array.isArray(data) ? data : (data.sessions || []);
+
+            this.data = items;
+            this.page = 0;
+            this.hasMore = items.length >= this.SESSIONS_PER_PAGE;
+
+            const searchTerm = byId('gallery-search')?.value || '';
+            this.render(searchTerm);
+        } catch (error) {
+            console.error('Failed to refresh latest gallery items:', error);
         }
     }
 

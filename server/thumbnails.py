@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from PIL import Image
-import os
 
 from webbduck.server.storage import BASE, resolve_web_path
 
@@ -43,5 +42,8 @@ def ensure_thumbnail(web_path: str) -> Path:
         return thumb_path
     except Exception as e:
         print(f"Error generating thumbnail for {original_path}: {e}")
-        # Fallback to original if generation fails
-        return original_path
+        # Never fall back to the full-size original for /thumbs requests.
+        # Returning large originals during thumbnail bursts can amplify memory pressure.
+        if thumb_path.exists():
+            return thumb_path
+        raise

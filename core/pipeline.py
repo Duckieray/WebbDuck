@@ -52,12 +52,36 @@ DTYPE = torch.bfloat16
 
 # Component caches
 _UNET_CACHE = {}
-_TEXT_CACHE = {}
+_TOKENIZER_CACHE = {}
+_TEXT_COMPONENT_CACHE = {}
 _VAE_CACHE = {}
 _SCHEDULER_CACHE = {}
 _REFINER_UNET_CACHE = {}
 
 MAX_CACHE_SIZE = 1
+
+def _release_cached_obj(obj):
+    """Best-effort release of cached torch modules before eviction."""
+    if obj is None:
+        return
+
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _release_cached_obj(v)
+        return
+
+    if isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            _release_cached_obj(v)
+        return
+
+    # Move heavy torch modules to CPU before dropping references.
+    if hasattr(obj, "to"):
+        try:
+            obj.to("cpu")
+        except Exception:
+            pass
+
 
 def manage_cache(cache, key):
     """Enforce LRU-style cache limit."""
@@ -70,8 +94,11 @@ def manage_cache(cache, key):
     if len(cache) >= MAX_CACHE_SIZE:
         # Remove oldest (first item)
         oldest_key = next(iter(cache))
+        _release_cached_obj(cache.get(oldest_key))
         del cache[oldest_key]
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def sanitize_adapter_name(name: str) -> str:
@@ -200,8 +227,8 @@ def get_tokenizer(base_path: Path):
     """Load and cache tokenizers only (lightweight)."""
     key = str(base_path.resolve()) + "_tokenizers"
     
-    if key in _TEXT_CACHE:
-        return _TEXT_CACHE[key]
+    if key in _TOKENIZER_CACHE:
+        return _TOKENIZER_CACHE[key]
     
     tokenizer_path = base_path / "tokenizer"
     tokenizer_2_path = base_path / "tokenizer_2"
@@ -221,7 +248,8 @@ def get_tokenizer(base_path: Path):
             pad_token="!", # SDXL uses '!' padding for openclip
         )
     
-    _TEXT_CACHE[key] = (tokenizer, tokenizer_2)
+    manage_cache(_TOKENIZER_CACHE, key)
+    _TOKENIZER_CACHE[key] = (tokenizer, tokenizer_2)
     return tokenizer, tokenizer_2
 
 
@@ -229,8 +257,8 @@ def get_text_components(base_path: Path):
     """Load and cache text encoders and tokenizers."""
     key = str(base_path.resolve())
 
-    if key in _TEXT_CACHE:
-        return _TEXT_CACHE[key]
+    if key in _TEXT_COMPONENT_CACHE:
+        return _TEXT_COMPONENT_CACHE[key]
 
     tokenizer = CLIPTokenizer.from_pretrained(base_path / "tokenizer")
     tokenizer_2 = CLIPTokenizer.from_pretrained(base_path / "tokenizer_2")
@@ -248,8 +276,9 @@ def get_text_components(base_path: Path):
     ).to(DEVICE)
     text_encoder_2.eval()
 
-    _TEXT_CACHE[key] = (tokenizer, tokenizer_2, text_encoder, text_encoder_2)
-    return _TEXT_CACHE[key]
+    manage_cache(_TEXT_COMPONENT_CACHE, key)
+    _TEXT_COMPONENT_CACHE[key] = (tokenizer, tokenizer_2, text_encoder, text_encoder_2)
+    return _TEXT_COMPONENT_CACHE[key]
 
 
 def get_vae():
@@ -527,9 +556,10 @@ class PipelineManager:
                     self.img2img = None
 
                     # Force clearing of global caches for heavy components to ensure clean switch
-                    global _UNET_CACHE, _REFINER_UNET_CACHE
+                    global _UNET_CACHE, _REFINER_UNET_CACHE, _TEXT_COMPONENT_CACHE
                     _UNET_CACHE.clear()
                     _REFINER_UNET_CACHE.clear()
+                    _TEXT_COMPONENT_CACHE.clear()
                     
                     gc.collect()
                     torch.cuda.empty_cache()

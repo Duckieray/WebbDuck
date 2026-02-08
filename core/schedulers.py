@@ -18,6 +18,7 @@ SCHEDULERS = {
     "Euler": EulerDiscreteScheduler,
     "DPM++ 2M Karras": DPMSolverMultistepScheduler,
     "DPM++ SDE Karras": DPMSolverSinglestepScheduler,
+    "DPM++ 3M SDE": DPMSolverMultistepScheduler,
     "DDIM": DDIMScheduler,
     "UniPC": UniPCMultistepScheduler,
 }
@@ -37,6 +38,9 @@ def create_scheduler(name, config):
         
     if "DPM++ SDE" in name:
         kwargs["algorithm_type"] = "sde-dpmsolver++"
+
+    if name == "DPM++ 3M SDE":
+        kwargs["solver_order"] = 3
         
     try:
         scheduler = cls.from_config(config, **kwargs)

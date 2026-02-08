@@ -144,8 +144,24 @@ export async function tokenize(prompt, baseModel) {
  * Fetch gallery data
  */
 export async function getGallery(start = 0, limit = 50) {
-    const url = `/gallery?start=${start}&limit=${limit}`;
+    const url = `/gallery?start=${start}&limit=${limit}&_=${Date.now()}`;
     return get(url);
+}
+
+/**
+ * Fetch queued/running job metadata.
+ */
+export async function getQueue() {
+    return get('/queue');
+}
+
+/**
+ * Cancel a queued job by ID.
+ */
+export async function cancelQueue(jobId) {
+    const formData = new FormData();
+    formData.append('job_id', jobId);
+    return postForm('/queue/cancel', formData);
 }
 
 /**

@@ -132,6 +132,7 @@ export const Events = {
 
     // System events
     STATUS_UPDATE: 'status:update',
+    QUEUE_UPDATE: 'queue:update',
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -161,7 +162,11 @@ export function initWebSocket() {
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                emit(Events.STATUS_UPDATE, data);
+                if (data?.type === 'state') {
+                    emit(Events.STATUS_UPDATE, data);
+                } else if (data?.type === 'queue') {
+                    emit(Events.QUEUE_UPDATE, data.payload || {});
+                }
             } catch (e) {
                 console.warn('Failed to parse WebSocket message:', e);
             }

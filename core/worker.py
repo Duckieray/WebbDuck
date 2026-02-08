@@ -58,15 +58,33 @@ async def gpu_worker(queue):
 
     while True:
         job = await queue.get()
+        on_start = job.get("on_start")
+        on_finish = job.get("on_finish")
+
+        if callable(on_start):
+            try:
+                on_start(job)
+            except Exception:
+                pass
         
         if job["type"] == "upscale":
             try:
                 result = await run_upscale(job)
                 job["future"].set_result({"image": result})
+                if callable(on_finish):
+                    try:
+                        on_finish(job, True, None)
+                    except Exception:
+                        pass
             except Exception as e:
                 update_stage("Error")
                 await broadcast_state(snapshot())
                 job["future"].set_exception(e)
+                if callable(on_finish):
+                    try:
+                        on_finish(job, False, str(e))
+                    except Exception:
+                        pass
             finally:
                 queue.task_done()
             continue
@@ -116,11 +134,21 @@ async def gpu_worker(queue):
                 "seed": seed,
                 "images": paths,
             })
+            if callable(on_finish):
+                try:
+                    on_finish(job, True, None)
+                except Exception:
+                    pass
 
         except Exception as e:
             update_stage("Error")
             await broadcast_state(snapshot())
             job["future"].set_exception(e)
+            if callable(on_finish):
+                try:
+                    on_finish(job, False, str(e))
+                except Exception:
+                    pass
 
         finally:
             queue.task_done()
