@@ -203,3 +203,17 @@ class TestModeSignatures:
             sig = inspect.signature(mode.run)
             params = list(sig.parameters.keys())
             assert "base_inpaint" in params, f"{cls.__name__}.run missing base_inpaint"
+
+    def test_run_accepts_callback(self):
+        """All run methods should accept optional callback parameter."""
+        from webbduck.modes.text2img import Text2ImgMode
+        from webbduck.modes.img2img import Img2ImgMode
+        from webbduck.modes.two_pass import TwoPassMode
+        from webbduck.modes.inpaint import InpaintMode
+        import inspect
+
+        for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:
+            mode = cls()
+            sig = inspect.signature(mode.run)
+            params = list(sig.parameters.keys())
+            assert "callback" in params, f"{cls.__name__}.run missing callback"

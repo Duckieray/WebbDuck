@@ -12,7 +12,7 @@ class InpaintMode(GenerationMode):
             and settings.get("input_image") is not None
         )
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
         log.info("Running Inpaint Mode")
 
         prompt = settings["prompt"]
@@ -55,19 +55,29 @@ class InpaintMode(GenerationMode):
              
         # Scheduler swap handled in pipeline manager
 
+        cb = callback.get_callback() if callback else None
+
+        kwargs = {
+            "prompt": prompt,
+            "prompt_2": prompt_2 or None,
+            "negative_prompt": negative_prompt,
+            "image": image,
+            "mask_image": mask_image,
+            "strength": strength,
+            "guidance_scale": guidance_scale,
+            "num_inference_steps": num_inference_steps,
+            "num_images_per_prompt": num_images_per_prompt,
+            "width": int(settings.get("width", 1024)),
+            "height": int(settings.get("height", 1024)),
+            "generator": generator,
+        }
+
+        if cb:
+            kwargs["callback_on_step_end"] = cb
+            kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+
         out = base_inpaint(
-            prompt=prompt,
-            prompt_2=prompt_2 or None,
-            negative_prompt=negative_prompt,
-            image=image,
-            mask_image=mask_image,
-            strength=strength,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            num_images_per_prompt=num_images_per_prompt,
-            width=int(settings.get("width", 1024)),
-            height=int(settings.get("height", 1024)),
-            generator=generator,
+            **kwargs,
         ).images
 
         return out, settings.get("seed")

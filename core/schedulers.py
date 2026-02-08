@@ -19,7 +19,7 @@ SCHEDULERS = {
     "DPM++ 2M Karras": DPMSolverMultistepScheduler,
     "DPM++ SDE Karras": DPMSolverSinglestepScheduler,
     "DDIM": DDIMScheduler,
-    # "UniPC": UniPCMultistepScheduler, # Use UniPC via custom config if needed, often default
+    "UniPC": UniPCMultistepScheduler,
 }
 
 def get_scheduler_class(name):
