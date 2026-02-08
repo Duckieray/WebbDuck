@@ -3,6 +3,7 @@
 from safetensors.torch import safe_open
 from pathlib import Path
 import json
+import threading
 
 # Paths
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -13,6 +14,16 @@ LORA_ROOT = ROOT / "lora"
 LORA_ROOT = ROOT / "lora"
 LORA_FILE = LORA_ROOT / "loras.json"
 MODELS_FILE = CHECKPOINT_ROOT / "models.json"
+
+KNOWN_DEFAULTS = {
+    "RealVisXL_V5.0": {"steps": 30, "cfg": 6.0},
+    "Juggernaut-XI-v11": {"steps": 30, "cfg": 5.0},
+    "biglustydonutmixNSFW_v12": {"steps": 30, "cfg": 7.5},
+    "stable-diffusion-xl-refiner-1.0": {"steps": 20, "cfg": 5.0},
+    "stable-diffusion-xl-base-1.0": {"steps": 30, "cfg": 7.0},
+}
+
+_registry_lock = threading.Lock()
 
 
 def detect_arch(path: Path) -> str | None:
@@ -151,6 +162,37 @@ def ensure_lora_registry():
         LORA_FILE.write_text(json.dumps(registry, indent=2))
 
 
+def sync_lora_registry_file():
+    """Ensure new local .safetensors files are reflected in loras.json."""
+    LORA_ROOT.mkdir(exist_ok=True)
+    if LORA_FILE.exists():
+        try:
+            data = json.loads(LORA_FILE.read_text())
+        except Exception:
+            data = {}
+    else:
+        data = {}
+
+    changed = False
+    for f in sorted(LORA_ROOT.glob("*.safetensors"), key=lambda p: p.name.lower()):
+        key = f.stem
+        if key in data:
+            continue
+        arch = detect_lora_arch(f)
+        if not arch:
+            continue
+        data[key] = {
+            "file": f.name,
+            "trigger": None,
+            "weight": 1.0,
+            "description": "",
+        }
+        changed = True
+
+    if changed:
+        LORA_FILE.write_text(json.dumps(data, indent=2))
+
+
 def load_lora_registry():
     """Load local LoRA registry."""
     if not LORA_FILE.exists():
@@ -187,58 +229,78 @@ def ensure_model_registry():
 
     disk_models = discover_local_models()
     hf_models, _ = scan_hf_cache()
-    
-    # Merge HF and local disk models for discovery
+    return merge_model_registry(disk_models, hf_models, persist=True)
+
+
+def merge_model_registry(disk_models: dict, hf_models: dict, persist: bool = True) -> dict:
+    """Merge discovered models with persisted defaults."""
     all_discovered = {**disk_models, **hf_models}
 
-    # Load existing registry JSON
     if MODELS_FILE.exists():
         saved_data = json.loads(MODELS_FILE.read_text())
     else:
         saved_data = {}
 
-    # Merge discovered with saved
     final_registry = {}
-    
-    # Defaults to seed if new
-    known_defaults = {
-        "RealVisXL_V5.0": {"steps": 30, "cfg": 6.0},
-        "Juggernaut-XI-v11": {"steps": 30, "cfg": 5.0},
-        "biglustydonutmixNSFW_v12": {"steps": 30, "cfg": 7.5},
-        "stable-diffusion-xl-refiner-1.0": {"steps": 20, "cfg": 5.0},
-        "stable-diffusion-xl-base-1.0": {"steps": 30, "cfg": 7.0},
-    }
-
     for name, info in all_discovered.items():
-        # Preserve existing defaults if present in JSON
+        merged = dict(info)
         if name in saved_data:
-            info["defaults"] = saved_data[name].get("defaults", {})
+            merged["defaults"] = saved_data[name].get("defaults", {})
         else:
-            # Check for known defaults based on partial match
             defaults = {}
-            for key, val in known_defaults.items():
+            for key, val in KNOWN_DEFAULTS.items():
                 if key in name:
                     defaults = val
                     break
-            info["defaults"] = defaults
-        
-        final_registry[name] = info
+            merged["defaults"] = defaults
+        final_registry[name] = merged
 
-    # Save ONLY the config parts (defaults), not paths (which are dynamic)
-    # Actually, saving the whole structure simplifies things, but paths might change across machines.
-    # The requirement is "store it in ... local models".
-    # Let's verify we only save configurable bits to JSON to avoid path rot?
-    # For now, let's behave like loras.json: persist the enhanced view.
-    
-    to_save = {}
-    for name, info in final_registry.items():
-        to_save[name] = {
-            "defaults": info.get("defaults", {})
+    if persist:
+        to_save = {
+            name: {"defaults": info.get("defaults", {})}
+            for name, info in final_registry.items()
         }
-    
-    MODELS_FILE.write_text(json.dumps(to_save, indent=2))
+        existing_save = {}
+        if MODELS_FILE.exists():
+            try:
+                existing_save = json.loads(MODELS_FILE.read_text())
+            except Exception:
+                existing_save = {}
+        if to_save != existing_save:
+            MODELS_FILE.write_text(json.dumps(to_save, indent=2))
+
     return final_registry
 
-MODEL_REGISTRY = ensure_model_registry()
-# LORA_REGISTRY = {**load_lora_registry(), **HF_LORAS} # This was calculating twice_
-LORA_REGISTRY = {**load_lora_registry(), **scan_hf_cache()[1]}
+
+def refresh_registries() -> bool:
+    """Refresh model/LoRA registries in place; returns True when changed."""
+    with _registry_lock:
+        ensure_lora_registry()
+        sync_lora_registry_file()
+        local_models = discover_local_models()
+        new_models = merge_model_registry(local_models, _HF_MODELS, persist=True)
+        new_loras = {**load_lora_registry(), **_HF_LORAS}
+
+        models_changed = _registry_signature(MODEL_REGISTRY) != _registry_signature(new_models)
+        loras_changed = _registry_signature(LORA_REGISTRY) != _registry_signature(new_loras)
+        changed = models_changed or loras_changed
+
+        if changed:
+            MODEL_REGISTRY.clear()
+            MODEL_REGISTRY.update(new_models)
+            LORA_REGISTRY.clear()
+            LORA_REGISTRY.update(new_loras)
+
+        return changed
+
+
+def _registry_signature(data: dict):
+    """Stable signature for change detection."""
+    return tuple(
+        sorted((k, repr(v)) for k, v in data.items())
+    )
+
+_HF_MODELS, _HF_LORAS = scan_hf_cache()
+MODEL_REGISTRY = merge_model_registry(discover_local_models(), _HF_MODELS, persist=True)
+sync_lora_registry_file()
+LORA_REGISTRY = {**load_lora_registry(), **_HF_LORAS}

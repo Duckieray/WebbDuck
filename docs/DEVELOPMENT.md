@@ -1,163 +1,112 @@
-# WebbDuck Development Guide 🛠️
+# WebbDuck Development Guide
 
-This guide covers the core backend architecture and how to extend WebbDuck.
+This guide covers the current backend and frontend extension points.
 
-## 🏗️ Backend Architecture (Python)
+## Project Layout
 
-The backend is built with **FastAPI** (`server/`) and a custom PyTorch-based inference engine (`core/`).
-
-### Folder Structure
-
-```
+```text
 webbduck/
-├── server/
-│   ├── app.py          # FastAPI application & Endpoint definitions
-│   ├── events.py       # WebSocket broadcasting
-│   ├── state.py        # Shared runtime state (VRAM, Progress)
-│   └── storage.py      # File system helpers
-├── core/
-│   ├── pipeline.py     # Diffusers pipeline manager (Load/Unload models)
-│   ├── worker.py       # Async GPU job processor
-│   ├── generation.py   # Core generation logic
-│   └── schedulers.py   # Scheduler definitions
-├── modes/              # Generation Logic (Strategy Pattern)
-│   ├── text2img.py     # Txt2Img implementation
-│   ├── img2img.py      # Img2Img implementation
-│   └── inpaint.py      # Inpainting implementation
-└── ui/                 # Frontend (See ui/README.md)
-    ├── core/           # Utilities & State
-    ├── modules/        # Feature blocks (Gallery, Lightbox, etc.)
-    └── styles/         # CSS Architecture
-
-## 🛠️ Development Tips
-
-### Auto-Reload
-The server is configured with `reload=True` in `run.py`. Any changes to python files in `webbduck/` will automatically restart the server.
-
-### Frontend Modules
-The UI uses ES6 modules. No build step is required!
-- Edit `ui/modules/MyManager.js`
-- Refresh browser
-- Done!
+|- server/
+|  |- app.py            # FastAPI endpoints, queue metadata, ws wiring
+|  |- events.py         # socket broadcast helpers
+|  |- state.py          # runtime stage/progress/vram snapshot state
+|  |- storage.py        # output path helpers
+|  |- thumbnails.py     # thumbnail generation
+|- core/
+|  |- worker.py         # GPU worker loop
+|  |- generation.py     # mode selection + prompt/pipeline execution
+|  |- pipeline.py       # pipeline lifecycle, scheduler + LoRA application
+|  |- schedulers.py     # scheduler registry
+|- models/
+|  |- registry.py       # model/LoRA discovery and registry sync
+|- ui/
+|  |- app.js
+|  |- core/
+|  |- modules/
+|  |- styles/
 ```
 
----
+## Backend Patterns
 
-## ⚡ How to Add a New API Endpoint
+### Queue-first GPU execution
 
-### 1. Define the Endpoint in `server/app.py`
+Any GPU-heavy endpoint should enqueue a job and let `core/worker.py` process it.
 
-WebbDuck uses FastAPI forms for compatibility with simple frontend requests.
+Current queue endpoint behavior:
+- `POST /generate`, `POST /test`, `POST /upscale` all enqueue jobs.
+- `wait_for_result=false` returns immediately with queue metadata.
+- Queue snapshots are pushed over WebSocket (`type=queue`).
+
+### Job shape
 
 ```python
-# server/app.py
-
-@app.post("/my_feature")
-async def my_feature_endpoint(
-    image: UploadFile = File(...),
-    intensity: float = Form(0.5),
-):
-    """Docstrings are good!"""
-    try:
-        # 1. Validate inputs
-        if intensity > 1.0:
-             return JSONResponse(status_code=400, content={"error": "Too intense!"})
-
-        # 2. Perform logic (CPU bound)
-        result = do_cpu_work(image, intensity)
-        
-        return {"status": "success", "data": result}
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+job = {
+    "job_id": "uuid",
+    "type": "batch|test|upscale|...",
+    "settings": {...},
+    "future": future,
+    "on_start": callback,
+    "on_finish": callback,
+}
 ```
 
-### 2. Handling GPU Tasks (The Queue)
+### WebSocket payload types
 
-If your endpoint needs the GPU (Inference, VRAM usage), **DO NOT** run it directly in the endpoint function. You must use the `generation_queue` to avoid conflicts.
+- `state`: progress/stage/VRAM runtime info.
+- `queue`: queue/running/recent-completed metadata.
+- `catalog`: model/LoRA catalog changed; UI should refresh model lists.
 
-```python
-# server/app.py
+## Catalog Refresh
 
-@app.post("/gpu_task")
-async def gpu_task_endpoint(prompt: str = Form(...)):
-    # 1. Create a Future to await the result
-    loop = asyncio.get_event_loop()
-    future = loop.create_future()
+`server/app.py` runs a background watcher that checks:
+- `checkpoint/sdxl/`
+- `lora/`
+- `lora/loras.json`
+- `checkpoint/sdxl/models.json`
 
-    # 2. Construct the Job
-    job = {
-        "type": "my_custom_job_type",
-        "settings": { "prompt": prompt },
-        "future": future
-    }
+If signatures change, `refresh_registries()` runs and `catalog` is broadcast.
 
-    # 3. Enqueue
-    # This sends it to core/worker.py -> gpu_worker()
-    await generation_queue.put(job)
+Env var:
+- `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`).
 
-    # 4. Wait for result
-    return await future
-```
+## LoRA Behavior
 
-**Note**: You will need to modify `core/worker.py` to handle `"my_custom_job_type"`.
+- LoRAs are architecture-filtered per base model.
+- Local `.safetensors` additions are auto-synced into `lora/loras.json`.
+- API returns LoRA default `weight` and description.
+- During generation, pipeline returns a combined trigger phrase.
+- `core/generation.py` injects that trigger phrase into active prompt fields.
 
-### 3. Modifying the Worker (`core/worker.py`)
+## Frontend Patterns
 
-Open `core/worker.py` and find the `gpu_worker` loop. Add your handler:
+### State persistence
 
-```python
-# core/worker.py
+`ui/core/state.js` persists Studio settings to `localStorage` (`webbduck_state_v2`).
 
-async def gpu_worker(queue):
-    while True:
-        job = await queue.get()
-        try:
-            if job["type"] == "batch":
-                # ... existing logic
-            
-            elif job["type"] == "my_custom_job_type":
-                # CALL YOUR CORE LOGIC HERE
-                result = run_my_gpu_task(job["settings"])
-                job["future"].set_result(result)
+### Queue UI
 
-        except Exception as e:
-             job["future"].set_exception(e)
-```
+- Queue list is updated from WebSocket `queue` events.
+- Users can expand job details and cancel queued jobs.
+- Queue modal is separate from Studio controls.
 
----
+### Catalog updates
 
-## 🧩 Adding a New Generation Mode
+`ui/core/events.js` emits `Events.CATALOG_UPDATE`; `ui/app.js` reloads models/loras when this event arrives.
 
-Generation modes (Txt2Img, Inpaint) reside in `modes/`. To add a new one:
+## Adding an Endpoint
 
-1.  Create `modes/my_mode.py`.
-2.  Implement a function that accepts `(pipe, settings)` and returns images.
-3.  Register it or call it from `core/generation.py`.
+1. Add route in `server/app.py`.
+2. If GPU-bound, enqueue and handle in `core/worker.py`.
+3. Add wrapper in `ui/core/api.js`.
+4. Add UI behavior in `ui/app.js` or a feature module.
+5. Add/adjust tests under `tests/`.
 
----
-
-## 🌐 Connecting the Frontend
-
-1.  **Update API Client**: Add a wrapper in `ui/core/api.js`.
-    ```javascript
-    export async function runMyFeature(formData) {
-        return postForm('/my_feature', formData);
-    }
-    ```
-
-2.  **Add UI Handler**: See `ui/README.md` for details on adding buttons and handlers.
-
----
-
-## 🧪 Testing
-
-WebbDuck uses **pytest**. Run tests from the root directory:
+## Testing
 
 ```bash
-# Run all tests
-pytest
-
-# Run specific test file
-pytest tests/test_server.py
+pytest -v
+pytest tests/test_server.py -v
+pytest tests/test_modes.py -v
 ```
+
+Use the project conda environment if you run tests through WSL.

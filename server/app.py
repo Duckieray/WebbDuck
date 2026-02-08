@@ -17,7 +17,15 @@ from webbduck.server.storage import save_images, BASE, to_web_path, resolve_web_
 from webbduck.server.thumbnails import ensure_thumbnail
 from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
-from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
+from webbduck.models.registry import (
+    MODEL_REGISTRY,
+    LORA_REGISTRY,
+    CHECKPOINT_ROOT,
+    LORA_ROOT,
+    LORA_FILE,
+    MODELS_FILE,
+    refresh_registries,
+)
 from webbduck.core.schedulers import SCHEDULERS
 from webbduck.core.captioner import (
     list_captioners,
@@ -37,11 +45,60 @@ thumb_semaphore = asyncio.Semaphore(THUMB_CONCURRENCY)
 generation_queue = asyncio.Queue(maxsize=32)
 job_registry = {}
 active_job_id = None
+CATALOG_POLL_SECONDS = max(1.0, float(os.getenv("WEBBDUCK_CATALOG_POLL_SECONDS", "3.0")))
+
+
+def summarize_loras(loras) -> list[str]:
+    """Create compact LoRA labels for queue metadata."""
+    if not isinstance(loras, list):
+        return []
+
+    labels = []
+    for item in loras:
+        if isinstance(item, str):
+            labels.append(item)
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        name = item.get("name") or item.get("model")
+        if not name:
+            continue
+
+        weight_raw = item.get("weight", item.get("strength"))
+        if weight_raw is None:
+            labels.append(str(name))
+            continue
+
+        try:
+            weight = float(weight_raw)
+            labels.append(f"{name} ({weight:.2f})")
+        except (TypeError, ValueError):
+            labels.append(str(name))
+
+    return labels[:8]
 
 
 def summarize_settings(settings: dict) -> dict:
     """Build a compact metadata summary for queue UI."""
     prompt = settings.get("prompt", "") or ""
+    negative = settings.get("negative_prompt", "") or ""
+    image_path = settings.get("image") or settings.get("input_image")
+    mask_path = settings.get("mask_image")
+
+    input_image_url = None
+    if image_path:
+        image_name = Path(str(image_path)).name
+        if image_name:
+            input_image_url = f"/inputs/{image_name}"
+
+    mode = "txt2img"
+    if image_path and mask_path:
+        mode = "inpaint"
+    elif image_path:
+        mode = "img2img"
+
     return {
         "prompt": prompt[:160],
         "base_model": settings.get("base_model"),
@@ -51,8 +108,13 @@ def summarize_settings(settings: dict) -> dict:
         "width": settings.get("width"),
         "height": settings.get("height"),
         "num_images": settings.get("num_images"),
+        "seed": settings.get("seed"),
+        "negative_prompt": negative[:220],
+        "loras": summarize_loras(settings.get("loras", [])),
+        "mode": mode,
         "has_input_image": bool(settings.get("image") or settings.get("input_image")),
         "has_mask": bool(settings.get("mask_image")),
+        "input_image_url": input_image_url,
     }
 
 
@@ -192,6 +254,59 @@ async def vram_sampler():
         await broadcast_state(snapshot())
 
 
+def _path_stamp(path: Path):
+    if not path.exists():
+        return ("missing", str(path))
+
+    stat = path.stat()
+    stamp = [("self", path.name, stat.st_mtime_ns, stat.st_size)]
+
+    if path.is_dir():
+        for child in sorted(path.iterdir(), key=lambda p: p.name):
+            try:
+                cstat = child.stat()
+                stamp.append((child.name, cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
+            except Exception:
+                stamp.append((child.name, "err"))
+
+    return tuple(stamp)
+
+
+def compute_catalog_signature():
+    """Cheap signature for watched catalog folders/files."""
+    return (
+        _path_stamp(CHECKPOINT_ROOT),
+        _path_stamp(LORA_ROOT),
+        _path_stamp(LORA_FILE),
+        _path_stamp(MODELS_FILE),
+    )
+
+
+async def catalog_watcher():
+    """Watch model/LoRA folders and hot-refresh registries."""
+    last_signature = compute_catalog_signature()
+    while True:
+        await asyncio.sleep(CATALOG_POLL_SECONDS)
+        current_signature = compute_catalog_signature()
+        if current_signature == last_signature:
+            continue
+        last_signature = current_signature
+
+        try:
+            changed = refresh_registries()
+            if not changed:
+                continue
+            await broadcast({
+                "type": "catalog",
+                "payload": {
+                    "models": len(MODEL_REGISTRY),
+                    "loras": len(LORA_REGISTRY),
+                },
+            })
+        except Exception as exc:
+            print(f"[Catalog Watcher] refresh failed: {exc}")
+
+
 def validate_second_pass(settings):
     """Validate second pass model configuration."""
     second_pass = settings.get("second_pass_model")
@@ -225,6 +340,7 @@ async def startup():
     """Start background tasks."""
     asyncio.create_task(gpu_worker(generation_queue))
     asyncio.create_task(vram_sampler())
+    asyncio.create_task(catalog_watcher())
 
 
 @app.get("/", response_class=HTMLResponse)

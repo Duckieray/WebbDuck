@@ -5,6 +5,7 @@
 
 import * as api from '../core/api.js';
 import { byId, toast, listen } from '../core/utils.js';
+import { getState, setState } from '../core/state.js';
 
 export class LoraManager {
     constructor() {
@@ -62,6 +63,8 @@ export class LoraManager {
                 this.select.appendChild(opt);
             });
 
+            this.restoreFromState();
+
             // Re-validate selected LoRAs? 
             // If model changed, maybe clear selected LoRAs?
             // Usually yes, different base model = incompatible LoRAs.
@@ -82,20 +85,27 @@ export class LoraManager {
      * @param {string} name 
      * @param {number|null} weight 
      */
-    addLora(name, weight = null) {
+    addLora(name, weight = null, options = {}) {
+        const { persist = true, silent = false } = options;
         if (this.selectedLoras.has(name)) {
-            toast(`${name} already added`, 'info');
+            if (!silent) {
+                toast(`${name} already added`, 'info');
+            }
             return;
         }
 
         // Use provided weight, or look up default, or fallback to 1.0
         if (weight === null) {
             const info = this.availableLorasMap.get(name);
-            weight = info && info.strength_default !== undefined ? info.strength_default : 1.0;
+            const defaultWeight = info?.weight ?? info?.strength_default;
+            weight = defaultWeight !== undefined ? Number(defaultWeight) : 1.0;
         }
 
         this.selectedLoras.set(name, weight);
         this.renderCard(name, weight);
+        if (persist) {
+            this.persistSelection();
+        }
     }
 
     /**
@@ -106,6 +116,7 @@ export class LoraManager {
         this.selectedLoras.delete(name);
         const card = this.container.querySelector(`.lora-card[data-lora="${CSS.escape(name)}"]`);
         if (card) card.remove();
+        this.persistSelection();
     }
 
     /**
@@ -123,8 +134,8 @@ export class LoraManager {
                 <button class="btn btn-ghost btn-icon btn-sm lora-remove" title="Remove">✕</button>
             </div>
             <div class="lora-card-slider">
-                <input type="range" class="slider lora-weight" min="0" max="2" step="0.1" value="${weight}" />
-                <span class="lora-weight-val">${weight.toFixed(1)}</span>
+                <input type="range" class="slider lora-weight" min="0" max="2" step="0.05" value="${weight}" />
+                <span class="lora-weight-val">${weight.toFixed(2)}</span>
             </div>
         `;
 
@@ -134,8 +145,9 @@ export class LoraManager {
 
         slider.oninput = () => {
             const val = parseFloat(slider.value);
-            valDisplay.textContent = val.toFixed(1);
+            valDisplay.textContent = val.toFixed(2);
             this.selectedLoras.set(name, val);
+            this.persistSelection();
         };
 
         // Remove handler
@@ -160,5 +172,34 @@ export class LoraManager {
     clear() {
         this.selectedLoras.clear();
         if (this.container) this.container.innerHTML = '';
+        this.persistSelection();
+    }
+
+    persistSelection() {
+        setState({ selectedLoras: this.getSelected() });
+    }
+
+    restoreFromState() {
+        // Only auto-restore into an empty UI on fresh load/refresh.
+        if (this.selectedLoras.size > 0 || (this.container && this.container.children.length > 0)) {
+            return;
+        }
+
+        const saved = getState('selectedLoras');
+        if (!Array.isArray(saved) || saved.length === 0) {
+            return;
+        }
+
+        saved.forEach(entry => {
+            const name = entry?.name;
+            if (!name || !this.availableLorasMap.has(name)) {
+                return;
+            }
+
+            const rawWeight = entry?.weight ?? entry?.strength;
+            const parsedWeight = Number(rawWeight);
+            const weight = Number.isFinite(parsedWeight) ? parsedWeight : null;
+            this.addLora(name, weight, { persist: false, silent: true });
+        });
     }
 }

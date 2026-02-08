@@ -1,44 +1,81 @@
 # WebbDuck User Guide
 
-Welcome to WebbDuck, your AI image generation studio.
+This guide describes the current UI and workflows in WebbDuck.
 
-## 🎨 Studio
+## Studio
 
-The Studio is where you create images.
+The Studio view is where generation jobs are configured and submitted.
 
-- **Prompt**: Enter what you want to see.
-- **Negative Prompt**: Enter what you *don't* want to see.
-- **Base Model**: Select the AI model to use.
-- **Settings**: Adjust Steps, CFG Scale, Width, Height, and Seed.
-- **Generate**: Click `🚀 Generate Batch` to start.
+### Core Inputs
 
-## 🖼️ Gallery
+- `Model`: Base SDXL checkpoint.
+- `Prompt`: Main prompt text.
+- `Negative Prompt`: Undesired features.
+- `Parameters`: Width, height, steps, CFG, scheduler, seed.
+- `Batch Size`: Always docked near the bottom with quick access.
 
-The Gallery stores your generation history.
+### Prompt Token Counter
 
-### Lightbox Controls
+- Prompt token count updates from the backend tokenizer.
+- Over 77 tokens triggers warning/danger styling and a tooltip warning.
 
-Click an image to open the **Lightbox view**.
+### Resolution Presets
 
-- **Navigating**: Use Arrow keys or swipe to move between images.
-- **Zooming**: Click to zoom in/out. Drag to pan when zoomed.
-- **Hide Info**: Click the floating button (top right) to toggle the metadata panel.
+- Presets include `1:1`, `4:3`, `3:2`, `16:9`, `2:3`, `9:16`.
+- `Custom` is highlighted when width/height does not match a preset.
 
-### Actions
+### Seed Behavior
 
-Top-right toolbar in Lightbox:
+- Seed input can be blank for random seed.
+- Randomize button fills the seed input with a new generated seed value.
+- Last used seed is shown in the Studio status bar after generation.
 
-- **♻️ Regenerate**: 
-    - **One-Click Action**: Starts a new generation in the background using the current image's settings (Random Seed).
-    - **Visual Feedback**: The button turns green ("🚀 Started!") to confirm.
-    - **Workflow**: You stay in the Gallery/Lightbox to continue browsing while the image generates.
-- **✨ Upscale**: Upscales the current image by 2x.
-- **↔ Compare**: (Visible after upscaling) Opens a slider to compare the original vs. upscaled version.
-- **🗑️ Delete**: Deletes the image.
+### LoRA Stack
 
-## Tips
+- LoRAs are filtered by selected model architecture.
+- Each LoRA has weight slider range `0.00` to `2.00` with `0.05` steps.
+- Default LoRA weight is loaded from `lora/loras.json` when available.
+- Selected LoRAs persist across refresh (when still compatible with model).
+- Trigger phrases defined in `loras.json` are injected into the prompt automatically at generation time.
 
-- **Drag & Drop**: You can drag an image into the "Input Image" area for Img2Img.
-- **Keyboard Shortcuts**: 
-    - `Esc`: Close Lightbox
-    - `Arrow Left/Right`: Previous/Next Image
+### Input Image / Inpaint
+
+- Drag/drop or click upload for img2img.
+- Optional caption generation if a captioner plugin is installed.
+- Mask editor supports draw/erase/invert, blur, and replace/keep inpaint mode.
+
+### Preview Area
+
+- Placeholder appears until an image is generated.
+- Toolbar actions: zoom, upscale, send to inpaint, download.
+- Progress card appears during generation with cancel action.
+
+## Queue
+
+Queue is shown in a dedicated modal (`Queue` button in top bar).
+
+Each queued/running job can show:
+- status and queue position,
+- model/scheduler/steps/cfg/batch,
+- truncated prompt,
+- seed/negative/LoRA summary in expandable details,
+- img2img/inpaint input thumbnail when available.
+
+Queued jobs can be canceled from the modal (running jobs cannot).
+
+## Gallery
+
+- Sessions are listed newest-first.
+- Search filters by prompt/metadata text.
+- Thumbnails are loaded through `/thumbs/...` for lighter browsing.
+
+## Lightbox
+
+- Open any image to inspect at full size.
+- Bottom metadata/info panel includes prompt, negative, model, seed, settings, and LoRAs.
+- `Info` toggle shows/hides metadata panel.
+- Actions: regenerate, upscale, inpaint, download, compare (when variant exists), delete.
+
+## State Persistence
+
+Most Studio settings are persisted in `localStorage` and restored on refresh, including prompt fields, dimensions, scheduler, second-pass settings, denoise strength, and selected LoRAs.

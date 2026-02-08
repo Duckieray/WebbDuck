@@ -1,133 +1,63 @@
-# WebbDuck UI Module
+# WebbDuck UI
 
-The frontend interface for WebbDuck AI Image Generator.
-Built with modern Vanilla JS (ES Modules) and CSS Variables. Zero build steps required.
+WebbDuck UI is a zero-build frontend using ES modules and vanilla CSS.
 
-## 📂 Project Structure
+## Structure
 
-```
+```text
 ui/
-├── index.html          # Main entry point and DOM structure
-├── app.js              # Application bootstrapper and orchestrator
-├── core/               # Shared utilities
-│   ├── api.js          # API client
-│   ├── events.js       # Event bus & WebSocket handler
-│   ├── state.js        # Global state with persistence
-│   └── utils.js        # DOM helpers (byId, listen, etc.)
-├── modules/            # Feature-specific Logic
-│   ├── LightboxManager.js  # Gallery & PhotoSwipe integration
-│   ├── LoraManager.js      # LoRA selection & loading
-│   ├── MaskEditor.js       # Inpainting canvas logic
-│   └── ProgressManager.js  # WebSocket progress visualization
-└── styles/             # CSS Architecture
-    ├── main.css        # Entry point
-    ├── design-tokens.css # Global variables
-    └── components/     # Reusable UI components
+|- index.html
+|- app.js
+|- core/
+|  |- api.js
+|  |- events.js
+|  |- state.js
+|  |- utils.js
+|- modules/
+|  |- LightboxManager.js
+|  |- LoraManager.js
+|  |- MaskEditor.js
+|  |- ProgressManager.js
+|- styles/
+|  |- main.css
+|  |- theme-nova.css
+|  |- design-tokens.css
+|  |- base.css
+|  |- reset.css
+|  |- components/
+|  |- layouts/
 ```
 
-## 🛠️ Development Guide
+## Key UI Capabilities
 
-### 1. How to Add a New Button
+- Studio + Gallery tabbed layout (desktop and mobile).
+- Large Studio preview with action toolbar (zoom/upscale/inpaint/download).
+- Prompt token counter with over-limit warning styling.
+- Resolution preset chips with active `Custom` state.
+- Seed randomize icon button and persisted seed handling.
+- Dedicated Queue modal with job metadata, cancel action, and img2img thumbnail previews.
+- Lightbox info panel at the bottom with toggle and full metadata.
+- Gallery search and lazy thumbnail loading.
 
-Buttons should receive classes from `styles/components/buttons.css`.
+## Event Flow
 
-**Example HTML (`index.html`):**
-```html
-<!-- Primary Action -->
-<button class="btn btn-primary" id="btn-save">
-  <svg>...</svg>
-  Save Project
-</button>
+WebSocket events from `/ws` are translated to local events:
+- `state` -> `Events.STATUS_UPDATE`
+- `queue` -> `Events.QUEUE_UPDATE`
+- `catalog` -> `Events.CATALOG_UPDATE`
 
-<!-- Secondary / Tool -->
-<button class="btn btn-secondary btn-icon" id="btn-tool" title="Tool Name">
-  <svg>...</svg>
-</button>
-```
+This avoids frontend polling loops for queue/catalog freshness.
 
-**Common Classes:**
-- `.btn`: Base class (required)
-- `.btn-primary`: Gradient accent background (Main actions)
-- `.btn-secondary`: Glassmorphism background (Tools/Toggles)
-- `.btn-ghost`: Transparent (Icon-only buttons)
-- `.btn-sm`: Small variant
+## LoRA UX Notes
 
-### 2. How to Add a Handler
+- LoRA selector options are loaded from `/models/{base_model}/loras`.
+- Slider range is `0.00` to `2.00` in `0.05` increments.
+- Default slider value uses backend `weight` from `loras.json`.
+- Selected LoRAs are persisted in local state and restored when compatible.
 
-Event listeners are standard `addEventListener` calls, but we use the `listen` helper from `core/utils.js` for cleaner code.
+## Editing Guidance
 
-**In `app.js` (for global buttons):**
-```javascript
-import { listen, byId } from './core/utils.js';
-
-// Inside init() or setupHandlers()
-listen(byId('btn-save'), 'click', async () => {
-    // Your logic here
-    console.log('Saved!');
-});
-```
-
-**In a Module (e.g., `MyModule.js`):**
-```javascript
-export class MyModule {
-    constructor() {
-        this.btn = byId('btn-tool');
-        this.init();
-    }
-
-    init() {
-        if (this.btn) {
-            // Bind 'this' context !
-            listen(this.btn, 'click', this.handleClick.bind(this));
-        }
-    }
-
-    handleClick() {
-        // Logic
-    }
-}
-```
-
-### 3. State Management
-
-All persistent settings (prompt, dimensions, toggles) are managed in `core/state.js`.
-
-**Reading State:**
-```javascript
-import { getState } from './core/state.js';
-const { prompt, width } = getState();
-```
-
-**Writing State:**
-```javascript
-import { setState } from './core/state.js';
-
-// Updates state, saves to localStorage, and triggers subscribers
-setState({ width: 512, height: 768 });
-```
-
-### 4. Event Bus
-
-Use the Event Bus to communicate between modules without tight coupling.
-
-```javascript
-import { emit, on, Events } from './core/events.js';
-
-// Dispatching
-emit(Events.GENERATION_START, { mode: 'test' });
-
-// Listening
-on(Events.GENERATION_START, (data) => {
-    console.log('Generation started:', data.mode);
-});
-```
-
-### 5. API Interactions
-
-Add new endpoints to `core/api.js`. Use the `postForm` helper for FormData interactions.
-
-```javascript
-export async function myNewAction(formData) {
-    return postForm('/my_action', formData);
-}
-```
+- Add API wrappers in `ui/core/api.js`.
+- Prefer module-local logic in `ui/modules/*` for feature-specific behavior.
+- Use event bus (`ui/core/events.js`) for cross-module communication.
+- Keep style changes in `ui/styles/theme-nova.css` unless the change is a reusable primitive.

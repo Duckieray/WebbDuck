@@ -1,39 +1,43 @@
-# 🐣 How to Use WebbDuck (Simple Guide)
+# WebbDuck Simple Guide
 
-WebbDuck is a tool on your computer that draws pictures for you! Follow these steps to make your first picture.
+This is a quick start for generating your first image.
 
-## Step 1: Start the Engine 🚗
+## 1. Start the Server
 
-1.  Open the **Terminal** (or PowerShell) on your computer.
-2.  Type this magic command and press **Enter**:
-    ```bash
-    python run.py
-    ```
-3.  Wait until you see some text. When it stops moving, the engine is ready!
+```bash
+python run.py
+```
 
-## Step 2: Open the Studio 🎨
+Then open `http://localhost:8000` in your browser.
 
-1.  Open your web browser (like Chrome or Edge).
-2.  Type this address at the top and press **Enter**:
-    `http://localhost:8000`
-3.  You will see the WebbDuck screen. It looks like a spaceship dashboard!
+## 2. Generate an Image
 
-## Step 3: Make a Picture! ✨
+1. In `Studio`, choose a model.
+2. Enter a `Prompt`.
+3. (Optional) Enter a `Negative Prompt`.
+4. Click `Generate`.
 
-1.  Find the big box that says **"Prompt"**.
-2.  Type what you want to see. Try this:
-    > "a cute baby duck wearing a tiny hat"
-3.  Click the big purple **Generate** button.
-4.  Wait a few seconds. Watch the blue bar go across the top.
-5.  **Poof!** Your picture appears in the middle.
+Your latest image appears in the Studio preview when complete.
 
-## Step 4: Look Closer (Gallery) 🖼️
+## 3. Use the Queue
 
-1.  Click on your new picture to make it **BIG**. This is called the "Lightbox".
-2.  If you want to see all your old pictures, click the **Gallery** tab at the top.
-3.  It's like a photo album of everything you made.
+- Multiple generate clicks are queued.
+- Open the `Queue` button in the top bar to inspect pending/running jobs.
+- Cancel jobs that are still queued.
 
-## Tips 💡
+## 4. Browse Gallery
 
-*   **Be Creative!** You can type anything. "A fat cat eating pizza on the moon."
-*   **Have Fun!** If you don't like a picture, just click Generate again to make a new one.
+- Switch to `Gallery` to see saved runs.
+- Use search to filter by prompt/metadata text.
+- Click an image to open lightbox view.
+
+## 5. Lightbox Actions
+
+From the image viewer you can:
+- Regenerate
+- Upscale
+- Send to Inpaint
+- Download
+- Delete
+
+Use `Info` to show or hide metadata.

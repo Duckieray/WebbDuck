@@ -1,103 +1,77 @@
-# 🦆 WebbDuck
+# WebbDuck
 
-**WebbDuck** is a user-friendly, fast, and private AI image generator. It runs on your own computer, giving you unlimited images without subscriptions or cloud delays.
+WebbDuck is a local SDXL studio focused on fast iteration, clean metadata, and practical workflows.
 
-Designed for simplicity, it hides the complex math of "nodes" and "tensors" while giving you powerful tools like Inpainting (fixing faces, changing backgrounds) and Image-to-Image transformation.
+Everything runs on your machine: generation, queueing, gallery, inpaint, and optional captioning.
 
 ## Key Features
 
-*   **Simple & Clean**: A straightforward interface. Type a prompt, get an image.
-*   **Smart & Efficient**: Automatically manages your computer's memory (VRAM) so you can do other things while finding your next masterpiece.
-*   **Modern Web UI**: A fast, zero-build interface with modular architecture. [Read more](ui/README.md).
-*   **Instant Gallery**: Optimized loading with smart pagination and background thumbnail generation.
-*   **Developer Friendly**: Server auto-reloads on code changes, making customization easy.
-*   **Powerful Editing**:
-    *   **Inpainting**: drawing masks to fix or change specific parts of an image.
-    *   **Image-to-Image**: Use an existing image as a guide.
-    *   **Two-Pass Generation**: Automatically refine images for sharper details.
-    *   **Smart Regeneration**: Easily retry prompts with randomized seeds and seamless settings transfer.
-*   **JoyCaption Integration**: (Optional) Use advanced AI to describe your existing images for you.
-*   **Private**: Everything runs locally. Your prompts and images never leave your machine.
+- Modern zero-build web UI (`ui/`) with Studio + Gallery views.
+- Queue-based backend execution with real-time WebSocket updates.
+- Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
+- LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
+- Token counter with warning when prompt exceeds the 77-token CLIP window.
+- Gallery sessions with lazy thumbnails, search, lightbox metadata, and action toolbar.
+- Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
+- Optional captioner plugin system (JoyCaption supported).
 
-## Prerequisites
+## Requirements
 
-*   **Operating System**: Windows 10/11 or Linux.
-*   **Graphics Card (GPU)**: NVIDIA GPU with at least 12GB VRAM recommended.
-*   **Python**: Version 3.10 or higher.
-*   **Storage**: Enough space for AI models (typically 10GB+).
+- OS: Windows 10/11 or Linux.
+- Python: 3.10+.
+- GPU: NVIDIA recommended for practical SDXL speed and memory headroom.
+- Disk: enough space for checkpoints, LoRAs, and outputs.
 
 ## Installation
 
-### 1. Download WebbDuck
-Open a terminal (Command Prompt or PowerShell on Windows) and run:
 ```bash
 git clone https://github.com/Duckieray/webbduck.git
 cd webbduck
+python -m venv .venv
 ```
 
-### 2. Set up the environment
+Windows:
 
-**Windows (PowerShell):**
 ```powershell
-python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-**Linux / Mac:**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3. Create necessary folders
-WebbDuck needs a few places to store your models and images.
-
-**Windows (PowerShell):**
-```powershell
 mkdir checkpoint\sdxl, lora, outputs, weights
 ```
 
-**Linux:**
+Linux:
+
 ```bash
+source .venv/bin/activate
+pip install -r requirements.txt
 mkdir -p checkpoint/sdxl lora outputs weights
 ```
 
-## How to Run
+## Run
 
-1.  **Activate your environment** (if not already active):
-    *   Windows: `.\.venv\Scripts\Activate.ps1`
-    *   Linux: `source .venv/bin/activate`
+```bash
+python run.py
+```
 
-2.  **Start the app**:
-    ```bash
-    python run.py
-    ```
+Open `http://localhost:8000`.
 
-3.  **Open in Browser**:
-    Visit [http://localhost:8000](http://localhost:8000)
+## Runtime Notes
 
-## Troubleshooting
-
-### "Broken Pipe" Error during generation
-If you see `[Errno 32] Broken pipe` in your logs, it usually means `tqdm` (progress bars) is conflicting with a background process.
-**Fix**: This is properly handled in `run.py` automatically. Ensure you are running the server via `python run.py` and not directly invoking `uvicorn` or `app.py`.
-
-### UI Stuck on "Initializing..."
-- Check browser console (F12) for errors.
-- Ensure the backend server is running and reachable at `localhost:8000`.
-- Try a hard refresh (`Ctrl+F5`).
+- `run.py` starts FastAPI with reload and safe environment defaults.
+- Queue and progress updates are pushed over `/ws`.
+- Catalog changes are scanned on an interval and pushed to UI:
+  - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
+- Thumbnail serving concurrency can be tuned:
+  - `WEBBDUCK_THUMB_CONCURRENCY` (default `2`)
 
 ## Documentation
 
-*   **[Simple Guide](docs/SIMPLE_GUIDE.md)**: Easy instructions for beginners! 🐣
-*   [**Plugins Guide**](docs/PLUGINS.md): How to add the JoyCaption describer.
-*   [**Development Guide**](docs/DEVELOPMENT.md): How to add new API endpoints and features.
-*   [**Lessons Learned**](docs/LESSONS_LEARNED.md): Architectural insights and retrospective.
-*   [**Architecture**](docs/architecture.md): How WebbDuck works under the hood.
-*   [**Experimental Features**](docs/experimental.md): Try out bleeding-edge features.
-*   [**Vision**](docs/vision.md): Our design philosophy.
+- `docs/SIMPLE_GUIDE.md`
+- `docs/USER_GUIDE.md`
+- `docs/DEVELOPMENT.md`
+- `docs/architecture.md`
+- `docs/REQUIREMENTS.md`
+- `docs/PLUGINS.md`
+- `ui/README.md`
 
 ## License
 

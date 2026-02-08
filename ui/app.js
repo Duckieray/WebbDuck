@@ -11,6 +11,8 @@ import { GalleryManager } from './modules/GalleryManager.js';
 let isGenerating = false;
 const seenCompletedQueueJobs = new Set();
 const queueViewStartedAt = Date.now() / 1000;
+let latestQueuePayload = null;
+const expandedQueueJobs = new Set();
 
 window._uploadedImage = null;
 window._maskBlob = null;
@@ -42,10 +44,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupPreviewToolbar();
         setupQueuePanel();
         setupRealtimeGalleryRefresh();
+        setupCatalogWatcher();
 
         await Promise.all([loadModels(), loadSchedulers(), window.galleryManager.load()]);
 
         syncToDOM();
+        updateActivePresetChip(byId('width')?.value, byId('height')?.value);
         ensureSelectDefaults();
 
         const savedView = getState('view') || 'studio';
@@ -137,12 +141,34 @@ function setupPresetChips() {
             byId('width').value = chip.dataset.width;
             byId('height').value = chip.dataset.height;
 
-            $$('.preset-chip[data-width]').forEach(x => x.classList.remove('active'));
-            chip.classList.add('active');
+            updateActivePresetChip(chip.dataset.width, chip.dataset.height);
 
             syncFromDOM();
         });
     });
+
+    // Keep preset highlight in sync for manual width/height edits and restored state.
+    const syncPreset = () => updateActivePresetChip(byId('width')?.value, byId('height')?.value);
+    listen(byId('width'), 'input', syncPreset);
+    listen(byId('height'), 'input', syncPreset);
+    syncPreset();
+}
+
+function updateActivePresetChip(width, height) {
+    const w = String(width ?? '');
+    const h = String(height ?? '');
+    let matched = false;
+
+    $$('.preset-chip[data-width]').forEach(chip => {
+        const isMatch = chip.dataset.width === w && chip.dataset.height === h;
+        chip.classList.toggle('active', isMatch);
+        if (isMatch) matched = true;
+    });
+
+    const customChip = byId('preset-custom');
+    if (customChip) {
+        customChip.classList.toggle('active', !matched);
+    }
 }
 
 function setupFormHandlers() {
@@ -162,8 +188,9 @@ function setupFormHandlers() {
 
     listen(byId('randomize-seed'), 'click', () => {
         const seed = byId('seed_input');
-        if (seed) seed.value = '';
-        setSeed(null);
+        const nextSeed = generateRandomSeed();
+        if (seed) seed.value = String(nextSeed);
+        setSeed(nextSeed);
     });
 
     listen(byId('base_model'), 'change', async () => {
@@ -189,6 +216,16 @@ function setupFormHandlers() {
     });
 }
 
+function generateRandomSeed() {
+    const maxSeed = 2147483647;
+    if (window.crypto?.getRandomValues) {
+        const data = new Uint32Array(1);
+        window.crypto.getRandomValues(data);
+        return (data[0] % maxSeed) + 1;
+    }
+    return Math.floor(Math.random() * maxSeed) + 1;
+}
+
 async function updateTokenCounter(prompt) {
     const counter = byId('token-count');
     if (!counter) return;
@@ -196,6 +233,8 @@ async function updateTokenCounter(prompt) {
     if (!prompt.trim()) {
         counter.textContent = '0 tokens';
         counter.classList.remove('warning', 'danger');
+        counter.removeAttribute('title');
+        counter.removeAttribute('aria-label');
         return;
     }
 
@@ -205,10 +244,20 @@ async function updateTokenCounter(prompt) {
 
         const result = await api.tokenize(prompt, model);
         const count = result.tokens || 0;
+        const overLimit = count > 77;
+        const nearLimit = count > 60 && !overLimit;
+        const tooltipText = 'Prompt exceeds the CLIP token window. Only the first 77 tokens are guaranteed to be parsed.';
 
         counter.textContent = `${count} tokens`;
-        toggleClass(counter, 'warning', count > 60);
-        toggleClass(counter, 'danger', count > 75);
+        toggleClass(counter, 'warning', nearLimit);
+        toggleClass(counter, 'danger', overLimit);
+        if (overLimit) {
+            counter.title = tooltipText;
+            counter.setAttribute('aria-label', tooltipText);
+        } else {
+            counter.removeAttribute('title');
+            counter.removeAttribute('aria-label');
+        }
     } catch (error) {
         console.warn('Token count failed:', error);
     }
@@ -702,11 +751,26 @@ async function handleRegenerateFromLightbox(curr) {
 
 async function loadModels() {
     try {
+        const preferredBaseModel = byId('base_model')?.value || getState('baseModel');
+        const preferredSecondPassModel = byId('second_pass_model')?.value || getState('secondPassModel');
+
         const models = await api.getModels();
         populateSelect('base_model', models, false);
+        const baseSelect = byId('base_model');
+        if (preferredBaseModel && baseSelect && Array.from(baseSelect.options).some(opt => opt.value === preferredBaseModel)) {
+            baseSelect.value = preferredBaseModel;
+        }
 
         const secondPassModels = await api.getSecondPassModels();
         populateSelect('second_pass_model', secondPassModels, true);
+        const secondPassSelect = byId('second_pass_model');
+        if (
+            preferredSecondPassModel
+            && secondPassSelect
+            && Array.from(secondPassSelect.options).some(opt => opt.value === preferredSecondPassModel)
+        ) {
+            secondPassSelect.value = preferredSecondPassModel;
+        }
 
         const select = byId('base_model');
         const initialModel = select?.value || select?.options?.[0]?.value;
@@ -746,6 +810,19 @@ function ensureSelectDefaults() {
 
 function setupQueuePanel() {
     on(Events.QUEUE_UPDATE, renderQueuePanel);
+    listen(byId('open-queue-modal'), 'click', openQueueModal);
+    listen(byId('close-queue-modal'), 'click', closeQueueModal);
+    listen(byId('close-queue-modal-footer'), 'click', closeQueueModal);
+    listen(byId('queue-modal'), 'click', (event) => {
+        if (event.target?.id === 'queue-modal') {
+            closeQueueModal();
+        }
+    });
+    listen(document, 'keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeQueueModal();
+        }
+    });
     refreshQueuePanel();
 }
 
@@ -763,10 +840,27 @@ async function refreshQueuePanel() {
     } catch (_) {
         const summaryEl = byId('queue-summary');
         if (summaryEl) summaryEl.textContent = 'Queue unavailable';
+        updateQueueOpenButton(null);
     }
 }
 
+function setupCatalogWatcher() {
+    on(Events.CATALOG_UPDATE, async () => {
+        const currentBaseModel = byId('base_model')?.value || '';
+        try {
+            await loadModels();
+            const nextBaseModel = byId('base_model')?.value || '';
+            if (currentBaseModel && currentBaseModel !== nextBaseModel) {
+                toast(`Catalog updated. Active model switched to ${nextBaseModel || 'first available model'}.`, 'info', 2400);
+            }
+        } catch (error) {
+            console.warn('Catalog refresh failed:', error);
+        }
+    });
+}
+
 function renderQueuePanel(data) {
+    latestQueuePayload = data || null;
     const summaryEl = byId('queue-summary');
     const listEl = byId('queue-list');
     if (!summaryEl || !listEl) return;
@@ -775,39 +869,90 @@ function renderQueuePanel(data) {
     const recentCompleted = Array.isArray(data?.recent_completed) ? data.recent_completed : [];
     const queuedCount = data?.queued_count || 0;
     const activeId = data?.active_job_id;
+    const runningCount = activeId ? 1 : 0;
+    const pendingCount = queuedCount + runningCount;
 
-    summaryEl.textContent = queuedCount > 0
-        ? `${queuedCount} job(s) queued`
-        : (activeId ? '1 job running' : 'No jobs queued');
+    summaryEl.textContent = pendingCount > 0
+        ? `${queuedCount} queued | ${runningCount} running`
+        : 'No jobs queued';
+
+    updateQueueOpenButton(data);
 
     applyCompletedQueueResults(recentCompleted);
 
     if (jobs.length === 0) {
-        listEl.innerHTML = '';
+        listEl.innerHTML = '<div class="queue-item-empty">Queue is empty.</div>';
         return;
     }
 
-    const recent = jobs.slice(0, 12);
+    const recent = jobs.slice(0, 32);
     listEl.innerHTML = recent.map(job => {
         const status = job.status || 'unknown';
+        const mode = job.settings?.mode || 'txt2img';
         const prompt = (job.settings?.prompt || '').trim();
-        const title = prompt ? escapeHtml(prompt.slice(0, 72)) : '(no prompt)';
+        const title = prompt ? escapeHtml(prompt.slice(0, 160)) : '(no prompt)';
         const dims = `${job.settings?.width || '-'}x${job.settings?.height || '-'}`;
         const steps = job.settings?.steps ?? '-';
+        const cfg = job.settings?.cfg ?? '-';
         const batch = job.settings?.num_images ?? '-';
+        const model = escapeHtml(job.settings?.base_model || '-');
+        const scheduler = escapeHtml(job.settings?.scheduler || '-');
         const pos = job.queue_position ? `#${job.queue_position}` : '';
+        const startedAt = formatQueueTime(job.started_at || job.created_at);
+        const inputThumb = normalizeQueueThumbUrl(job.settings?.input_image_url);
+        const seed = job.settings?.seed ?? null;
+        const negative = (job.settings?.negative_prompt || '').trim();
+        const loras = Array.isArray(job.settings?.loras) ? job.settings.loras : [];
+        const thumbHtml = inputThumb
+            ? `<img class="queue-item-thumb" src="${escapeHtml(inputThumb)}" alt="Queue input preview" loading="lazy" />`
+            : '';
         const canCancel = status === 'queued';
+        const statusText = status === 'running' ? 'Running' : status === 'queued' ? 'Queued' : status;
+        const isExpanded = expandedQueueJobs.has(job.job_id);
+        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0;
+        const detailsHtml = hasExtraDetails
+            ? `
+                <div class="queue-item-details ${isExpanded ? '' : 'hidden'}" data-details-for="${job.job_id}">
+                  <div class="queue-detail-row"><span class="queue-detail-label">Seed</span><span class="queue-detail-value">${seed === null ? 'Random' : escapeHtml(String(seed))}</span></div>
+                  <div class="queue-detail-row"><span class="queue-detail-label">Negative</span><span class="queue-detail-value">${negative ? escapeHtml(negative.slice(0, 220)) : 'None'}</span></div>
+                  <div class="queue-detail-row"><span class="queue-detail-label">LoRAs</span><span class="queue-detail-value">${loras.length > 0 ? escapeHtml(loras.join(', ')) : 'None'}</span></div>
+                </div>
+              `
+            : '';
 
         return `
-              <div class="queue-item status-${status}">
+              <div class="queue-item status-${status} ${inputThumb ? 'has-thumb' : 'no-thumb'} ${isExpanded ? 'expanded' : ''}" data-job-id="${job.job_id}">
+                ${thumbHtml}
                 <div class="queue-item-main">
+                  <div class="queue-item-badges">
+                    <span class="queue-badge status-${status}">${escapeHtml(statusText)}${pos ? ` ${escapeHtml(pos)}` : ''}</span>
+                    <span class="queue-badge mode-${escapeHtml(mode)}">${escapeHtml(mode)}</span>
+                  </div>
                   <div class="queue-item-title">${title}</div>
-                  <div class="queue-item-meta">${status}${pos ? ` ${pos}` : ''} | ${dims} | s:${steps} | b:${batch}</div>
+                  <div class="queue-item-meta">${escapeHtml(dims)} | steps ${escapeHtml(String(steps))} | cfg ${escapeHtml(String(cfg))} | batch ${escapeHtml(String(batch))}</div>
+                  <div class="queue-item-meta">${model} | ${scheduler} | ${escapeHtml(startedAt)}</div>
+                  ${detailsHtml}
                 </div>
-                ${canCancel ? `<button class="btn btn-ghost btn-sm queue-cancel" data-job-id="${job.job_id}" type="button">Cancel</button>` : ''}
+                <div class="queue-item-actions">
+                  ${hasExtraDetails ? `<button class="btn btn-ghost btn-sm queue-expand" data-job-id="${job.job_id}" type="button">${isExpanded ? 'Less' : 'More'}</button>` : ''}
+                  ${canCancel ? `<button class="btn btn-ghost btn-sm queue-cancel" data-job-id="${job.job_id}" type="button">Cancel</button>` : ''}
+                </div>
               </div>
             `;
     }).join('');
+
+    listEl.querySelectorAll('.queue-expand').forEach(btn => {
+        listen(btn, 'click', () => {
+            const jobId = btn.dataset.jobId;
+            if (!jobId) return;
+            if (expandedQueueJobs.has(jobId)) {
+                expandedQueueJobs.delete(jobId);
+            } else {
+                expandedQueueJobs.add(jobId);
+            }
+            renderQueuePanel(latestQueuePayload || data);
+        });
+    });
 
     listEl.querySelectorAll('.queue-cancel').forEach(btn => {
         listen(btn, 'click', async () => {
@@ -822,6 +967,37 @@ function renderQueuePanel(data) {
             }
         });
     });
+}
+
+function updateQueueOpenButton(data) {
+    const countEl = byId('queue-open-count');
+    if (!countEl) return;
+
+    const queuedCount = data?.queued_count || 0;
+    const runningCount = data?.active_job_id ? 1 : 0;
+    const pendingCount = queuedCount + runningCount;
+
+    countEl.textContent = String(pendingCount);
+    toggleClass(countEl, 'hidden', pendingCount === 0);
+}
+
+function openQueueModal() {
+    const modal = byId('queue-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    if (latestQueuePayload) {
+        renderQueuePanel(latestQueuePayload);
+    }
+}
+
+function closeQueueModal() {
+    const modal = byId('queue-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.remove('active');
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
 }
 
 function applyCompletedQueueResults(jobs) {
@@ -845,10 +1021,27 @@ function applyCompletedQueueResults(jobs) {
 }
 
 function escapeHtml(text) {
-    return text
+    return String(text)
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function formatQueueTime(unixSeconds) {
+    if (!unixSeconds) return 'now';
+    const value = Number(unixSeconds);
+    if (!Number.isFinite(value) || value <= 0) return 'now';
+    const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000 - value));
+    if (deltaSeconds < 60) return 'just now';
+    if (deltaSeconds < 3600) return `${Math.floor(deltaSeconds / 60)}m ago`;
+    if (deltaSeconds < 86400) return `${Math.floor(deltaSeconds / 3600)}h ago`;
+    return `${Math.floor(deltaSeconds / 86400)}d ago`;
+}
+
+function normalizeQueueThumbUrl(src) {
+    if (!src || typeof src !== 'string') return null;
+    if (!src.startsWith('/inputs/')) return null;
+    return src;
 }

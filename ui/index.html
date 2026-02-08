@@ -36,9 +36,15 @@
         <button class="nav-tab" data-view="gallery" type="button">Gallery</button>
       </nav>
 
-      <div class="nova-status-pill">
-        <span class="status-indicator ready" id="status-indicator"></span>
-        <span id="status-text">Ready</span>
+      <div class="nova-topbar-right">
+        <button class="btn btn-secondary btn-sm queue-open-btn" id="open-queue-modal" type="button">
+          Queue
+          <span class="queue-open-count hidden" id="queue-open-count">0</span>
+        </button>
+        <div class="nova-status-pill">
+          <span class="status-indicator ready" id="status-indicator"></span>
+          <span id="status-text">Ready</span>
+        </div>
       </div>
     </header>
 
@@ -94,6 +100,7 @@
                     <button class="preset-chip" type="button" data-width="1344" data-height="768">16:9</button>
                     <button class="preset-chip" type="button" data-width="832" data-height="1216">2:3</button>
                     <button class="preset-chip" type="button" data-width="768" data-height="1344">9:16</button>
+                    <button class="preset-chip" type="button" id="preset-custom" data-custom="true">Custom</button>
                   </div>
 
                   <div class="form-group">
@@ -123,7 +130,12 @@
                     <label class="form-label" for="seed_input">Seed</label>
                     <div class="nova-seed-row">
                       <input class="input" type="number" id="seed_input" placeholder="Random" />
-                      <button class="btn btn-secondary btn-icon" id="randomize-seed" type="button" title="Randomize seed">R</button>
+                      <button class="btn btn-secondary btn-icon" id="randomize-seed" type="button" title="Randomize seed" aria-label="Randomize seed">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M3 12a9 9 0 0 1 15.36-6.36M21 12a9 9 0 0 1-15.36 6.36" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                          <path d="M18.2 3.9v3.8h-3.8M5.8 20.1v-3.8h3.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -217,25 +229,15 @@
                 </div>
               </section>
 
-              <section class="section nova-block">
-                <div class="param-row">
-                  <label class="form-label" for="batch">Batch Size</label>
-                  <span class="param-value" id="batch-value">1</span>
-                </div>
-                <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
-              </section>
-
-              <section class="section collapsible collapsed nova-block" id="section-queue">
-                <button class="section-header" type="button" data-section="section-queue">
-                  <span class="section-title">Queue</span>
-                  <span class="section-arrow">v</span>
-                </button>
-                <div class="section-body">
-                  <div class="queue-summary" id="queue-summary">No jobs queued</div>
-                  <div class="queue-list" id="queue-list"></div>
-                </div>
-              </section>
             </div>
+
+            <section class="section nova-block batch-dock">
+              <div class="param-row">
+                <label class="form-label" for="batch">Batch Size</label>
+                <span class="param-value" id="batch-value">1</span>
+              </div>
+              <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
+            </section>
 
             <div class="action-footer">
               <button class="btn btn-secondary" id="btn-test" type="button">Test</button>
@@ -251,16 +253,46 @@
 
             <div class="preview-main" id="preview-main">
               <div class="preview-placeholder" id="preview-placeholder">
-                <h3>Ready to render</h3>
-                <p>Your latest image will appear here.</p>
+                <svg class="icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+                <span>Generate an image to see the preview</span>
               </div>
               <img src="" id="preview-image" class="hidden" alt="Generated preview" />
 
               <div class="preview-toolbar">
-                <button class="btn btn-secondary btn-sm" id="preview-zoom" type="button" title="Zoom">Zoom</button>
-                <button class="btn btn-secondary btn-sm" id="preview-upscale" type="button" title="Upscale">2x</button>
-                <button class="btn btn-secondary btn-sm" id="preview-inpaint" type="button" title="Inpaint">Mask</button>
-                <button class="btn btn-secondary btn-sm" id="preview-download" type="button" title="Download">DL</button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-zoom" type="button" title="Zoom (Lightbox)" aria-label="Zoom">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="M21 21l-4.35-4.35"></path>
+                    <path d="M11 8v6M8 11h6"></path>
+                  </svg>
+                </button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-upscale" type="button" title="Upscale 2x" aria-label="Upscale">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <polyline points="9 21 3 21 3 15"></polyline>
+                    <line x1="21" y1="3" x2="14" y2="10"></line>
+                    <line x1="3" y1="21" x2="10" y2="14"></line>
+                  </svg>
+                </button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" type="button" title="Send to Inpaint" aria-label="Inpaint">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+                    <path d="M2 2l7.586 7.586"></path>
+                    <circle cx="11" cy="11" r="2"></circle>
+                  </svg>
+                </button>
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-download" type="button" title="Download" aria-label="Download">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                </button>
               </div>
 
               <div class="generation-progress hidden" id="generation-progress">
@@ -328,6 +360,22 @@
   </div>
 
   <div class="toast-container" id="toast-container"></div>
+
+  <div id="queue-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal modal-xl nova-queue-modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Generation Queue</h3>
+        <button class="modal-close" id="close-queue-modal" type="button" aria-label="Close queue">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="queue-summary" id="queue-summary">No jobs queued</div>
+        <div class="queue-list queue-list-modal" id="queue-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="close-queue-modal-footer" type="button">Close</button>
+      </div>
+    </div>
+  </div>
 
   <button id="lightbox-info-toggle" class="lightbox-toggle-btn" type="button">Info</button>
 
