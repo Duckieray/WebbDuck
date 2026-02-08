@@ -5,8 +5,8 @@
   <meta charset="UTF-8" />
   <title>WebbDuck - AI Image Studio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="description" content="WebbDuck - Professional AI Image Generation Studio" />
-  <meta name="theme-color" content="#090c12" />
+  <meta name="description" content="WebbDuck - Fast local SDXL studio with queue, LoRA, inpaint, and gallery" />
+  <meta name="theme-color" content="#0a1222" />
   <meta name="color-scheme" content="dark" />
 
   <link rel="manifest" href="/ui/manifest.json" />
@@ -21,24 +21,22 @@
 </head>
 
 <body>
-  <div id="app" class="app-shell">
-    <div class="ambient-glow"></div>
-
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">WD</span>
-        <div class="brand-copy">
+  <div id="app" class="nova-app">
+    <header class="nova-topbar">
+      <div class="nova-brand">
+        <span class="nova-brand-mark">WD</span>
+        <div class="nova-brand-copy">
           <strong>WebbDuck</strong>
           <span>Local SDXL Studio</span>
         </div>
       </div>
 
-      <div class="topbar-tabs desktop-only">
-        <button class="nav-tab active" data-view="studio">Studio</button>
-        <button class="nav-tab" data-view="gallery">Gallery</button>
-      </div>
+      <nav class="nova-tabs desktop-only">
+        <button class="nav-tab active" data-view="studio" type="button">Studio</button>
+        <button class="nav-tab" data-view="gallery" type="button">Gallery</button>
+      </nav>
 
-      <div class="topbar-meta">
+      <div class="nova-status-pill">
         <span class="status-indicator ready" id="status-indicator"></span>
         <span id="status-text">Ready</span>
       </div>
@@ -46,29 +44,29 @@
 
     <div class="view-container">
       <section class="view active" id="view-studio">
-        <div class="studio-grid">
-          <aside class="control-panel">
-            <div class="panel-scroll">
-              <section class="panel section" id="section-model">
-                <div class="section-title-row">
-                  <h2>Model</h2>
-                </div>
+        <div class="nova-studio-grid">
+          <aside class="nova-controls studio-sidebar">
+            <div class="nova-controls-scroll">
+              <section class="section nova-block">
+                <div class="nova-block-title">Model</div>
                 <select class="select" id="base_model">
                   <option value="">Loading models...</option>
                 </select>
               </section>
 
-              <section class="panel section" id="section-prompt">
-                <div class="section-title-row">
-                  <h2>Prompt</h2>
+              <section class="section nova-block" id="section-prompt">
+                <div class="section-header section-header-static">
+                  <span class="section-title">Prompt</span>
                   <span class="token-counter" id="token-count">0 tokens</span>
                 </div>
-                <textarea class="prompt-textarea" id="prompt" rows="5" placeholder="Describe your image..."></textarea>
+                <div class="section-body">
+                  <textarea class="prompt-textarea" id="prompt" rows="5" placeholder="Describe your image..."></textarea>
+                </div>
               </section>
 
-              <section class="panel section collapsible" id="section-negative">
+              <section class="section collapsible nova-block" id="section-negative">
                 <button class="section-header" type="button" data-section="section-negative">
-                  <span>Negative Prompt</span>
+                  <span class="section-title">Negative Prompt</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -76,13 +74,13 @@
                 </div>
               </section>
 
-              <section class="panel section collapsible" id="section-params">
+              <section class="section collapsible nova-block" id="section-params">
                 <button class="section-header" type="button" data-section="section-params">
-                  <span>Parameters</span>
+                  <span class="section-title">Parameters</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
-                  <div class="form-row two-col">
+                  <div class="nova-two-col">
                     <label class="form-label" for="width">Width</label>
                     <label class="form-label" for="height">Height</label>
                     <input class="input" type="number" id="width" value="1024" step="8" min="512" max="2048" />
@@ -90,15 +88,15 @@
                   </div>
 
                   <div class="preset-chips">
-                    <button class="preset-chip active" data-width="1024" data-height="1024" type="button">1:1</button>
-                    <button class="preset-chip" data-width="1152" data-height="896" type="button">4:3</button>
-                    <button class="preset-chip" data-width="1216" data-height="832" type="button">3:2</button>
-                    <button class="preset-chip" data-width="1344" data-height="768" type="button">16:9</button>
-                    <button class="preset-chip" data-width="832" data-height="1216" type="button">2:3</button>
-                    <button class="preset-chip" data-width="768" data-height="1344" type="button">9:16</button>
+                    <button class="preset-chip active" type="button" data-width="1024" data-height="1024">1:1</button>
+                    <button class="preset-chip" type="button" data-width="1152" data-height="896">4:3</button>
+                    <button class="preset-chip" type="button" data-width="1216" data-height="832">3:2</button>
+                    <button class="preset-chip" type="button" data-width="1344" data-height="768">16:9</button>
+                    <button class="preset-chip" type="button" data-width="832" data-height="1216">2:3</button>
+                    <button class="preset-chip" type="button" data-width="768" data-height="1344">9:16</button>
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <div class="param-row">
                       <label class="form-label" for="steps">Steps</label>
                       <span class="param-value" id="steps-value">30</span>
@@ -106,7 +104,7 @@
                     <input class="slider" type="range" id="steps" min="1" max="100" value="30" />
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <div class="param-row">
                       <label class="form-label" for="cfg">CFG</label>
                       <span class="param-value" id="cfg-value">7.5</span>
@@ -114,16 +112,16 @@
                     <input class="slider" type="range" id="cfg" min="1" max="20" step="0.5" value="7.5" />
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <label class="form-label" for="scheduler">Scheduler</label>
                     <select class="select" id="scheduler">
                       <option value="">Loading...</option>
                     </select>
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <label class="form-label" for="seed_input">Seed</label>
-                    <div class="seed-row">
+                    <div class="nova-seed-row">
                       <input class="input" type="number" id="seed_input" placeholder="Random" />
                       <button class="btn btn-secondary btn-icon" id="randomize-seed" type="button" title="Randomize seed">R</button>
                     </div>
@@ -131,9 +129,9 @@
                 </div>
               </section>
 
-              <section class="panel section collapsible collapsed" id="section-refiner">
+              <section class="section collapsible collapsed nova-block" id="section-refiner">
                 <button class="section-header" type="button" data-section="section-refiner">
-                  <span>Second Pass</span>
+                  <span class="section-title">Second Pass</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -142,14 +140,14 @@
                     <span>Enable second pass refiner</span>
                   </label>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <label class="form-label" for="second_pass_model">Refiner Model</label>
                     <select class="select" id="second_pass_model">
                       <option value="None">None</option>
                     </select>
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <div class="param-row">
                       <label class="form-label" for="second_pass_steps">Refiner Steps</label>
                       <span class="param-value" id="second-steps-value">20</span>
@@ -157,7 +155,7 @@
                     <input class="slider" type="range" id="second_pass_steps" min="1" max="50" value="20" />
                   </div>
 
-                  <div class="form-row">
+                  <div class="form-group">
                     <div class="param-row">
                       <label class="form-label" for="second_pass_blend">Blend</label>
                       <span class="param-value" id="blend-value">0.8</span>
@@ -167,9 +165,9 @@
                 </div>
               </section>
 
-              <section class="panel section collapsible collapsed" id="section-lora">
+              <section class="section collapsible collapsed nova-block" id="section-lora">
                 <button class="section-header" type="button" data-section="section-lora">
-                  <span>LoRA Stack</span>
+                  <span class="section-title">LoRA Stack</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -180,9 +178,9 @@
                 </div>
               </section>
 
-              <section class="panel section collapsible" id="section-input">
+              <section class="section collapsible nova-block" id="section-input">
                 <button class="section-header" type="button" data-section="section-input">
-                  <span>Input Image</span>
+                  <span class="section-title">Input Image</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -193,7 +191,7 @@
                   <input type="file" id="input-image" accept="image/*" class="hidden" />
 
                   <div class="upload-preview hidden" id="upload-preview">
-                    <img id="preview-img" src="" alt="Uploaded input" class="upload-preview-image" />
+                    <img src="" id="preview-img" class="upload-preview-image" alt="Uploaded image" />
                     <div class="upload-preview-actions">
                       <button class="btn btn-secondary btn-sm" id="caption-btn" type="button">Caption</button>
                       <button class="btn btn-secondary btn-sm" id="edit-mask-btn" type="button">Mask</button>
@@ -201,7 +199,7 @@
                     </div>
                   </div>
 
-                  <div class="form-row hidden" id="denoise-group">
+                  <div class="form-group hidden" id="denoise-group">
                     <div class="param-row">
                       <label class="form-label" for="denoising_strength">Denoising Strength</label>
                       <span class="param-value" id="denoise-value">0.75</span>
@@ -209,9 +207,9 @@
                     <input class="slider" type="range" id="denoising_strength" min="0" max="1" step="0.05" value="0.75" />
                   </div>
 
-                  <div class="form-row hidden" id="inpaint-options">
+                  <div class="form-group hidden" id="inpaint-options">
                     <label class="form-label">Inpaint Mode</label>
-                    <div class="segmented-row">
+                    <div class="nova-segmented-row">
                       <button class="preset-chip active" id="inpaint-replace" type="button">Replace</button>
                       <button class="preset-chip" id="inpaint-keep" type="button">Keep</button>
                     </div>
@@ -219,7 +217,7 @@
                 </div>
               </section>
 
-              <section class="panel section">
+              <section class="section nova-block">
                 <div class="param-row">
                   <label class="form-label" for="batch">Batch Size</label>
                   <span class="param-value" id="batch-value">1</span>
@@ -227,9 +225,9 @@
                 <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
               </section>
 
-              <section class="panel section collapsible collapsed" id="section-queue">
+              <section class="section collapsible collapsed nova-block" id="section-queue">
                 <button class="section-header" type="button" data-section="section-queue">
-                  <span>Queue</span>
+                  <span class="section-title">Queue</span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -239,29 +237,30 @@
               </section>
             </div>
 
-            <div class="panel-actions">
+            <div class="action-footer">
               <button class="btn btn-secondary" id="btn-test" type="button">Test</button>
               <button class="btn btn-primary" id="btn-generate" type="button">Generate</button>
             </div>
           </aside>
 
-          <main class="workspace-panel">
-            <div class="workspace-headline">
-              <h1>Compose. Refine. Ship.</h1>
-              <p>Fast local SDXL generation with inpaint, LoRA stack, and two-pass control.</p>
+          <main class="studio-main nova-workspace">
+            <div class="nova-workspace-header">
+              <h1>Create. Curate. Iterate.</h1>
+              <p>Queue-aware local image generation with inpaint, LoRA stacks, and clean metadata.</p>
             </div>
+
             <div class="preview-main" id="preview-main">
               <div class="preview-placeholder" id="preview-placeholder">
-                <h3>Ready to create</h3>
-                <p>Your latest render appears here.</p>
+                <h3>Ready to render</h3>
+                <p>Your latest image will appear here.</p>
               </div>
               <img src="" id="preview-image" class="hidden" alt="Generated preview" />
 
               <div class="preview-toolbar">
-                <button class="btn btn-secondary btn-icon btn-sm" id="preview-zoom" type="button" title="Open lightbox">Zoom</button>
-                <button class="btn btn-secondary btn-icon btn-sm" id="preview-upscale" type="button" title="Upscale">2x</button>
-                <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" type="button" title="Send to inpaint">Mask</button>
-                <button class="btn btn-secondary btn-icon btn-sm" id="preview-download" type="button" title="Download">DL</button>
+                <button class="btn btn-secondary btn-sm" id="preview-zoom" type="button" title="Zoom">Zoom</button>
+                <button class="btn btn-secondary btn-sm" id="preview-upscale" type="button" title="Upscale">2x</button>
+                <button class="btn btn-secondary btn-sm" id="preview-inpaint" type="button" title="Inpaint">Mask</button>
+                <button class="btn btn-secondary btn-sm" id="preview-download" type="button" title="Download">DL</button>
               </div>
 
               <div class="generation-progress hidden" id="generation-progress">
@@ -287,8 +286,8 @@
 
             <div class="batch-strip hidden" id="batch-strip"></div>
 
-            <div class="status-row">
-              <span>Last seed: <strong id="last-seed">-</strong></span>
+            <div class="status-bar">
+              <div class="status-item"><span>Last seed:</span> <strong id="last-seed">-</strong></div>
             </div>
           </main>
         </div>
@@ -297,12 +296,14 @@
       <section class="view" id="view-gallery">
         <div class="gallery-layout">
           <header class="gallery-header">
-            <div>
+            <div class="gallery-title">
               <h2>Gallery</h2>
-              <p id="gallery-count">0 images</p>
+              <span class="gallery-count" id="gallery-count">0 images</span>
             </div>
             <div class="gallery-actions">
-              <input class="input" id="gallery-search" type="text" placeholder="Search prompts..." />
+              <div class="gallery-search">
+                <input type="text" class="input" id="gallery-search" placeholder="Search prompts..." />
+              </div>
               <button class="btn btn-secondary btn-sm" id="refresh-gallery" type="button">Refresh</button>
             </div>
           </header>
@@ -311,7 +312,7 @@
             <div class="gallery-sessions" id="gallery-sessions"></div>
             <div class="gallery-empty hidden" id="gallery-empty">
               <div class="gallery-empty-content">
-                <h3>No gallery sessions yet</h3>
+                <h3>No images yet</h3>
                 <p>Generate images in Studio and they will appear here.</p>
               </div>
             </div>
@@ -321,8 +322,8 @@
     </div>
 
     <nav class="mobile-tabs mobile-only">
-      <button class="mobile-tab active" data-view="studio">Studio</button>
-      <button class="mobile-tab" data-view="gallery">Gallery</button>
+      <button class="mobile-tab active" data-view="studio" type="button">Studio</button>
+      <button class="mobile-tab" data-view="gallery" type="button">Gallery</button>
     </nav>
   </div>
 
@@ -370,12 +371,12 @@
         <h3 class="modal-title">Delete Image</h3>
       </div>
       <div class="modal-body">
-        <p>Delete this image only, or delete the full run?</p>
+        <p>Delete just this image, or the entire run?</p>
       </div>
       <div class="modal-actions">
-        <button id="modal-delete-img" class="btn btn-danger" type="button">Delete Image</button>
-        <button id="modal-delete-run" class="btn btn-danger btn-outline" type="button">Delete Run</button>
-        <button id="modal-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="modal-delete-img" class="btn btn-danger">Delete Image</button>
+        <button id="modal-delete-run" class="btn btn-danger btn-outline">Delete Run</button>
+        <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
       </div>
     </div>
   </div>
@@ -384,37 +385,37 @@
     <div class="mask-editor-container">
       <div class="mask-toolbar">
         <div class="mask-tools">
-          <label for="mask_brush_size">Brush</label>
+          <label>Brush Size</label>
           <input type="range" id="mask_brush_size" min="5" max="100" value="30" class="slider" />
-          <div id="brushPreview" class="brush-size-preview"></div>
+          <div id="mask_brush_preview" class="brush-size-preview"></div>
         </div>
         <div class="mask-tools">
-          <button id="mask_erase_btn" class="btn btn-secondary btn-sm" type="button">Erase</button>
-          <button id="mask_clear_btn" class="btn btn-secondary btn-sm" type="button">Clear</button>
-          <button id="mask_invert_btn" class="btn btn-secondary btn-sm" type="button">Invert</button>
+          <button id="mask_erase_btn" class="btn btn-secondary btn-sm">Draw</button>
+          <button id="mask_clear_btn" class="btn btn-secondary btn-sm">Clear</button>
+          <button id="mask_invert_btn" class="btn btn-secondary btn-sm">Invert</button>
         </div>
       </div>
 
-      <div class="mask-canvas-wrapper" id="mask_wrapper">
+      <div class="mask-canvas-wrapper" id="mask_canvas_wrapper">
         <canvas id="mask_canvas"></canvas>
       </div>
 
       <div class="mask-toolbar mask-toolbar-bottom">
         <div class="mask-tools">
-          <label for="inpainting_fill">Mode</label>
+          <label>Mode</label>
           <select id="inpainting_fill" class="select">
             <option value="replace">Replace Masked (Inpaint)</option>
             <option value="keep">Keep Masked (Protect)</option>
           </select>
         </div>
         <div class="mask-tools">
-          <label for="mask_blur">Feather</label>
-          <input type="range" id="mask_blur" min="0" max="64" value="8" class="slider" />
-          <span id="blurVal">8</span>
+          <label>Feather</label>
+          <input type="range" id="mask_blur" min="0" max="64" value="8" class="slider" style="width: 80px;" />
+          <span id="mask_blur_val">8</span>
         </div>
         <div class="mask-actions">
-          <button id="mask_cancel_btn" class="btn btn-secondary" type="button">Cancel</button>
-          <button id="mask_save_btn" class="btn btn-primary" type="button">Save Mask</button>
+          <button id="mask_cancel_btn" class="btn btn-secondary">Cancel</button>
+          <button id="mask_save_btn" class="btn btn-primary">Save Mask</button>
         </div>
       </div>
     </div>
