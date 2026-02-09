@@ -65,7 +65,10 @@
 
               <section class="section nova-block" id="section-prompt">
                 <div class="section-header section-header-static">
-                  <span class="section-title">Prompt</span>
+                  <span class="section-header-main">
+                    <span class="section-title">Prompt</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="prompt" aria-label="Prompt help" title="Prompt help">i</span>
+                  </span>
                   <span class="token-counter" id="token-count">0 tokens</span>
                 </div>
                 <div class="section-body">
@@ -75,7 +78,10 @@
 
               <section class="section collapsible nova-block" id="section-negative">
                 <button class="section-header" type="button" data-section="section-negative">
-                  <span class="section-title">Negative Prompt</span>
+                  <span class="section-header-main">
+                    <span class="section-title">Negative Prompt</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="negative" aria-label="Negative prompt help" title="Negative prompt help">i</span>
+                  </span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -85,7 +91,10 @@
 
               <section class="section collapsible nova-block" id="section-params">
                 <button class="section-header" type="button" data-section="section-params">
-                  <span class="section-title">Parameters</span>
+                  <span class="section-header-main">
+                    <span class="section-title">Parameters</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="parameters" aria-label="Parameters help" title="Parameters help">i</span>
+                  </span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -146,7 +155,10 @@
 
               <section class="section collapsible collapsed nova-block" id="section-refiner">
                 <button class="section-header" type="button" data-section="section-refiner">
-                  <span class="section-title">Second Pass</span>
+                  <span class="section-header-main">
+                    <span class="section-title">Second Pass</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="second_pass" aria-label="Second pass help" title="Second pass help">i</span>
+                  </span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -182,7 +194,10 @@
 
               <section class="section collapsible collapsed nova-block" id="section-lora">
                 <button class="section-header" type="button" data-section="section-lora">
-                  <span class="section-title">LoRA Stack</span>
+                  <span class="section-header-main">
+                    <span class="section-title">LoRA Stack</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="lora" aria-label="LoRA help" title="LoRA help">i</span>
+                  </span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -195,7 +210,10 @@
 
               <section class="section collapsible nova-block" id="section-input">
                 <button class="section-header" type="button" data-section="section-input">
-                  <span class="section-title">Input Image</span>
+                  <span class="section-header-main">
+                    <span class="section-title">Input Image</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="input_image" aria-label="Input image help" title="Input image help">i</span>
+                  </span>
                   <span class="section-arrow">v</span>
                 </button>
                 <div class="section-body">
@@ -206,20 +224,21 @@
                   <input type="file" id="input-image" accept="image/*" class="hidden" />
 
                   <div class="upload-preview hidden" id="upload-preview">
+                    <button class="upload-remove-btn" id="remove-upload-image" type="button" aria-label="Remove uploaded image" title="Remove uploaded image">x</button>
                     <img src="" id="preview-img" class="upload-preview-image" alt="Uploaded image" />
                     <div class="upload-preview-actions">
                       <button class="btn btn-secondary btn-sm" id="caption-btn" type="button">Caption</button>
                       <button class="btn btn-secondary btn-sm" id="edit-mask-btn" type="button">Mask</button>
-                      <button class="btn btn-ghost btn-sm" id="clear-upload" type="button">Clear</button>
+                      <button class="btn btn-ghost btn-sm" id="clear-upload" type="button">Clear Canvas</button>
                     </div>
                   </div>
 
                   <div class="form-group hidden" id="denoise-group">
                     <div class="param-row">
                       <label class="form-label" for="denoising_strength">Denoising Strength</label>
-                      <span class="param-value" id="denoise-value">0.75</span>
+                      <span class="param-value" id="denoise-value">0.85</span>
                     </div>
-                    <input class="slider" type="range" id="denoising_strength" min="0" max="1" step="0.05" value="0.75" />
+                    <input class="slider" type="range" id="denoising_strength" min="0.75" max="1.00" step="0.01" value="0.85" />
                   </div>
 
                   <div class="form-group hidden" id="inpaint-options">
@@ -229,6 +248,50 @@
                       <button class="preset-chip" id="inpaint-keep" type="button">Keep</button>
                     </div>
                   </div>
+
+                  <div class="form-group hidden" id="smart-extend-group">
+                    <label class="toggle-row" for="smart-extend-enabled">
+                      <input type="checkbox" id="smart-extend-enabled" />
+                      <span>Smart Extend (auto outpaint)</span>
+                    </label>
+                    <div class="smart-extend-meta">
+                      <span id="smart-extend-offset">Offset: auto</span>
+                      <button class="btn btn-secondary btn-sm" id="smart-extend-center" type="button">Center</button>
+                    </div>
+                    <div class="param-row">
+                      <label class="form-label" for="smart-extend-feather">Feather</label>
+                      <span class="param-value" id="smart-extend-feather-value">8</span>
+                    </div>
+                    <input class="slider" type="range" id="smart-extend-feather" min="0" max="32" step="1" value="8" />
+                    <label class="toggle-row" for="smart-extend-refine">
+                      <input type="checkbox" id="smart-extend-refine" checked />
+                      <span>Seam Refine</span>
+                    </label>
+                    <label class="toggle-row" for="smart-extend-refine-each-step">
+                      <input type="checkbox" id="smart-extend-refine-each-step" checked />
+                      <span>Refine Each Step (Quality)</span>
+                    </label>
+                    <label class="toggle-row" for="smart-extend-auto-step">
+                      <input type="checkbox" id="smart-extend-auto-step" checked />
+                      <span>Auto Step Outpaint (multi-pass)</span>
+                    </label>
+                    <div class="param-row">
+                      <label class="form-label" for="smart-extend-step-growth">Step Growth</label>
+                      <span class="param-value" id="smart-extend-step-growth-value">1.25</span>
+                    </div>
+                    <input class="slider" type="range" id="smart-extend-step-growth" min="1.05" max="3.00" step="0.05" value="1.25" />
+                    <div class="param-row">
+                      <label class="form-label" for="smart-extend-refine-width">Seam Width</label>
+                      <span class="param-value" id="smart-extend-refine-width-value">24</span>
+                    </div>
+                    <input class="slider" type="range" id="smart-extend-refine-width" min="8" max="64" step="1" value="24" />
+                    <div class="param-row">
+                      <label class="form-label" for="smart-extend-refine-strength">Refine Strength</label>
+                      <span class="param-value" id="smart-extend-refine-strength-value">0.28</span>
+                    </div>
+                    <input class="slider" type="range" id="smart-extend-refine-strength" min="0.10" max="0.60" step="0.01" value="0.28" />
+                    <p class="form-hint">Drag placement and draw mask directly on the main preview.</p>
+                  </div>
                 </div>
               </section>
 
@@ -237,6 +300,7 @@
             <section class="section nova-block batch-dock">
               <div class="param-row">
                 <label class="form-label" for="batch">Batch Size</label>
+                <span class="section-help-trigger" role="button" tabindex="0" data-help-section="batch" aria-label="Batch size help" title="Batch size help">i</span>
                 <span class="param-value" id="batch-value">1</span>
               </div>
               <input class="slider" type="range" id="batch" min="1" max="8" value="1" />
@@ -250,7 +314,10 @@
 
           <main class="studio-main nova-workspace">
             <div class="nova-workspace-header">
-              <h1>Create. Curate. Iterate.</h1>
+              <div class="workspace-header-row">
+                <h1>Create. Curate. Iterate.</h1>
+                <button class="studio-guide-btn" id="studio-guide-btn" type="button" title="Studio guide" aria-label="Studio guide">i</button>
+              </div>
               <p>Queue-aware local image generation with inpaint, LoRA stacks, and clean metadata.</p>
             </div>
 
@@ -264,6 +331,7 @@
                 <span>Generate an image to see the preview</span>
               </div>
               <img src="" id="preview-image" class="hidden" alt="Generated preview" />
+              <canvas id="preview-edit-canvas" class="hidden" aria-label="Preview edit canvas"></canvas>
 
               <div class="preview-toolbar">
                 <button class="btn btn-secondary btn-icon btn-sm" id="preview-zoom" type="button" title="Zoom (Lightbox)" aria-label="Zoom">
@@ -336,6 +404,11 @@
               <span class="gallery-count" id="gallery-count">0 images</span>
             </div>
             <div class="gallery-actions">
+              <div class="gallery-filters" id="gallery-filters">
+                <button class="gallery-filter-chip active" type="button" data-filter="all">All</button>
+                <button class="gallery-filter-chip" type="button" data-filter="hd">HD</button>
+                <button class="gallery-filter-chip" type="button" data-filter="favorites">Favorites</button>
+              </div>
               <div class="gallery-search">
                 <input type="text" class="input" id="gallery-search" placeholder="Search prompts..." />
               </div>
@@ -385,8 +458,10 @@
   <div class="lightbox-info hidden" id="lightbox-info">
     <div class="lightbox-actions">
       <button id="lightbox-regen" class="btn btn-primary btn-sm" type="button">Regenerate</button>
+      <button id="lightbox-stage" class="btn btn-secondary btn-sm" type="button">Stage Settings</button>
       <button id="lightbox-upscale" class="btn btn-secondary btn-sm" type="button">Upscale</button>
       <button id="lightbox-inpaint" class="btn btn-secondary btn-sm" type="button">Inpaint</button>
+      <button id="lightbox-favorite" class="btn btn-secondary btn-sm" type="button">Favorite</button>
       <button id="lightbox-download" class="btn btn-secondary btn-sm" type="button">Download</button>
       <button id="lightbox-view-hd" class="btn btn-secondary btn-sm" type="button" style="display:none;">View HD</button>
       <button id="lightbox-compare" class="btn btn-secondary btn-sm" type="button" style="display:none;">Compare</button>
@@ -403,6 +478,7 @@
         <div class="lightbox-meta-item"><label>Model</label><span id="lightbox-model">Unknown</span></div>
         <div class="lightbox-meta-item"><label>Seed</label><span id="lightbox-seed">--</span></div>
         <div class="lightbox-meta-item"><label>Settings</label><span id="lightbox-settings">--</span></div>
+        <div class="lightbox-meta-item"><label>In/Outpaint</label><span id="lightbox-inoutpaint">None</span></div>
         <div class="lightbox-meta-item"><label>LoRAs</label><span id="lightbox-loras">None</span></div>
       </div>
     </div>
@@ -428,6 +504,33 @@
         <button id="modal-delete-img" class="btn btn-danger">Delete Image</button>
         <button id="modal-delete-run" class="btn btn-danger btn-outline">Delete Run</button>
         <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="help-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card help-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="help-modal-title">Help</h3>
+      </div>
+      <div class="modal-body help-body" id="help-modal-body"></div>
+      <div class="modal-actions">
+        <button id="help-modal-close" class="btn btn-primary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-confirm-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="app-confirm-title">Please confirm</h3>
+      </div>
+      <div class="modal-body">
+        <p id="app-confirm-message">Are you sure you want to continue?</p>
+      </div>
+      <div class="modal-actions">
+        <button id="app-confirm-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="app-confirm-ok" class="btn btn-primary" type="button">Continue</button>
       </div>
     </div>
   </div>
@@ -522,7 +625,7 @@
       setTimeout(bindFallbackToggle, 400);
     })();
   </script>
-  <script type="module" src="/ui/app.js?v=20260208b"></script>
+  <script type="module" src="/ui/app.js?v=20260209f"></script>
 </body>
 
 </html>

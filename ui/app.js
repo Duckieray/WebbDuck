@@ -13,13 +13,188 @@ const seenCompletedQueueJobs = new Set();
 const queueViewStartedAt = Date.now() / 1000;
 let latestQueuePayload = null;
 const expandedQueueJobs = new Set();
+const DENOISE_ACTUAL_MIN = 0.75;
+const DENOISE_ACTUAL_MAX = 1.00;
+let appConfirmResolver = null;
+const IS_COARSE_POINTER = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
 
 window._uploadedImage = null;
 window._maskBlob = null;
+window._uploadedImageDims = null;
+window._smartExtendPlacement = null;
+window._smartExtendDrag = null;
+window._smartExtendResize = null;
+window._previewEditMode = null; // "place" | "mask" | null
+window._previewMaskCanvas = null;
+window._maskDrawState = null;
+
+function mapDenoiseUiToActual(uiValue) {
+    const v = Number.isFinite(uiValue) ? uiValue : 0.85;
+    return Math.max(DENOISE_ACTUAL_MIN, Math.min(DENOISE_ACTUAL_MAX, v));
+}
+
+function roundTo8(value) {
+    return Math.max(8, Math.round(Number(value || 0) / 8) * 8);
+}
+
+function buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth) {
+    if (dstW <= srcW && dstH <= srcH) return [1.0];
+    const g = Math.max(1.05, Math.min(3.00, Number(growth || 1.25)));
+    const fractions = [];
+    let currW = srcW;
+    let currH = srcH;
+    let progress = 0.0;
+    const spanW = Math.max(1, dstW - srcW);
+    const spanH = Math.max(1, dstH - srcH);
+    for (let i = 0; i < 32; i++) {
+        if (currW >= dstW && currH >= dstH) break;
+        let nextW = Math.min(dstW, roundTo8(currW * g));
+        let nextH = Math.min(dstH, roundTo8(currH * g));
+        if (nextW === currW && currW < dstW) nextW = Math.min(dstW, currW + 8);
+        if (nextH === currH && currH < dstH) nextH = Math.min(dstH, currH + 8);
+        const pW = dstW > srcW ? (nextW - srcW) / spanW : 1.0;
+        const pH = dstH > srcH ? (nextH - srcH) / spanH : 1.0;
+        const nextProgress = Math.min(1.0, Math.max(progress + 0.01, pW, pH));
+        fractions.push(nextProgress);
+        progress = nextProgress;
+        currW = roundTo8(srcW + (dstW - srcW) * progress);
+        currH = roundTo8(srcH + (dstH - srcH) * progress);
+        if (progress >= 0.999) break;
+    }
+    if (!fractions.length || fractions[fractions.length - 1] < 1.0) fractions.push(1.0);
+    return fractions;
+}
+
+function estimateSmartExtendRuntimeSeconds() {
+    if (!window._uploadedImage || !byId('smart-extend-enabled')?.checked) return null;
+    const srcW = Number(window._uploadedImageDims?.width || 0);
+    const srcH = Number(window._uploadedImageDims?.height || 0);
+    const dstW = Number(byId('width')?.value || 0);
+    const dstH = Number(byId('height')?.value || 0);
+    if (!(srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0)) return null;
+    if (dstW <= srcW && dstH <= srcH) return null;
+
+    const steps = Math.max(1, Number(byId('steps')?.value || 30));
+    const autoStep = Boolean(byId('smart-extend-auto-step')?.checked);
+    const growth = Number(byId('smart-extend-step-growth')?.value || 1.25);
+    const refineEnabled = Boolean(byId('smart-extend-refine')?.checked);
+    const refineEach = Boolean(byId('smart-extend-refine-each-step')?.checked);
+    const batch = Math.max(1, Number(byId('batch')?.value || 1));
+    const fractions = autoStep
+        ? buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth)
+        : [1.0];
+
+    const stepCost = (mp) => 0.32 * Math.pow(Math.max(0.5, mp), 1.20); // sec/step
+    const refineCost = (mp) => 0.22 * Math.pow(Math.max(0.5, mp), 1.12); // sec/step seam pass
+    let perImageSec = 0;
+
+    for (let i = 0; i < fractions.length; i++) {
+        const p = fractions[i];
+        const isFinal = i === fractions.length - 1;
+        const stageW = isFinal ? dstW : roundTo8(srcW + (dstW - srcW) * p);
+        const stageH = isFinal ? dstH : roundTo8(srcH + (dstH - srcH) * p);
+        const mp = (stageW * stageH) / 1_000_000;
+        const stageSteps = isFinal ? steps : Math.max(12, Math.floor(steps * (0.55 + 0.45 * p)));
+        perImageSec += stageSteps * stepCost(mp);
+        if (refineEnabled && refineEach && !isFinal) {
+            const refineSteps = Math.max(6, Math.floor(stageSteps * 0.30));
+            perImageSec += refineSteps * refineCost(mp);
+        }
+    }
+
+    if (refineEnabled) {
+        const finalMp = (dstW * dstH) / 1_000_000;
+        const finalRefineSteps = Math.max(8, Math.floor(steps * 0.35));
+        perImageSec += finalRefineSteps * refineCost(finalMp);
+    }
+
+    return perImageSec * batch;
+}
+
+async function maybeShowRuntimePreflightWarning() {
+    const seconds = estimateSmartExtendRuntimeSeconds();
+    if (!Number.isFinite(seconds) || seconds <= 0) return true;
+    if (seconds < 8 * 60) return true;
+
+    const minutes = Math.max(1, Math.round(seconds / 60));
+    const hours = seconds >= 3600 ? ` (~${(seconds / 3600).toFixed(1)} hours)` : '';
+    const msg = `Grab a cup of coffee.\n\nThis run is estimated to take about ${minutes} minutes${hours} with current settings.\n\nContinue anyway?`;
+    return await showAppConfirmModal({
+        title: 'Long Outpaint Run',
+        message: msg,
+        okText: 'Start Run',
+        cancelText: 'Cancel',
+        showCancel: true,
+        danger: false,
+    });
+}
+
+function setupAppConfirmModal() {
+    const modal = byId('app-confirm-modal');
+    const btnOk = byId('app-confirm-ok');
+    const btnCancel = byId('app-confirm-cancel');
+    if (!modal || !btnOk || !btnCancel) return;
+
+    const finish = (result) => {
+        if (appConfirmResolver) {
+            appConfirmResolver(result);
+            appConfirmResolver = null;
+        }
+        modal.classList.remove('active');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    };
+
+    listen(btnOk, 'click', () => finish(true));
+    listen(btnCancel, 'click', () => finish(false));
+    listen(modal, 'click', (e) => {
+        if (e.target === modal) finish(false);
+    });
+    listen(document, 'keydown', (e) => {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+            finish(false);
+        }
+    });
+}
+
+function showAppConfirmModal({
+    title = 'Please confirm',
+    message = 'Are you sure?',
+    okText = 'Continue',
+    cancelText = 'Cancel',
+    showCancel = true,
+    danger = false,
+} = {}) {
+    const modal = byId('app-confirm-modal');
+    const titleEl = byId('app-confirm-title');
+    const msgEl = byId('app-confirm-message');
+    const btnOk = byId('app-confirm-ok');
+    const btnCancel = byId('app-confirm-cancel');
+    if (!modal || !titleEl || !msgEl || !btnOk || !btnCancel) {
+        return Promise.resolve(true);
+    }
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    btnOk.textContent = okText;
+    btnCancel.textContent = cancelText;
+    btnCancel.classList.toggle('hidden', !showCancel);
+    btnOk.classList.toggle('btn-danger', !!danger);
+    btnOk.classList.toggle('btn-primary', !danger);
+
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => modal.classList.add('active'));
+
+    return new Promise((resolve) => {
+        appConfirmResolver = resolve;
+    });
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         initState();
+        setupAppConfirmModal();
 
         window.progressManager = new ProgressManager();
         window.maskEditor = new MaskEditor();
@@ -29,12 +204,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             onUpscale: (src, cb) => startUpscale(src, cb),
             onInpaint: (src) => sendToInpaint(src),
             onRegenerate: handleRegenerateFromLightbox,
-            onDelete: (src, type) => window.galleryManager.handleDelete(src, type)
+            onStageSettings: handleStageSettingsFromLightbox,
+            onDelete: (src, type) => window.galleryManager.handleDelete(src, type),
+            onFavorite: (src, currentlyFavorite) => window.galleryManager.handleFavoriteToggle(src, currentlyFavorite),
         });
 
         window.galleryManager.init();
 
         setupNavigation();
+        setupHelpModals();
         setupMobileStudioToggle();
         setupCollapsibleSections();
         setupSliders();
@@ -42,6 +220,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupFormHandlers();
         setupGenerationButtons();
         setupUploadHandling();
+        setupSmartExtendPlacement();
         setupPreviewToolbar();
         setupQueuePanel();
         setupRealtimeGalleryRefresh();
@@ -50,6 +229,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await Promise.all([loadModels(), loadSchedulers(), window.galleryManager.load()]);
 
         syncToDOM();
+        updateSmartExtendAutoStepUI();
         updateActivePresetChip(byId('width')?.value, byId('height')?.value);
         ensureSelectDefaults();
 
@@ -70,7 +250,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         initWebSocket();
     } catch (error) {
         console.error('CRITICAL UI INIT FAILURE:', error);
-        alert(`CRITICAL UI ERROR: ${error.message}`);
+        await showAppConfirmModal({
+            title: 'Startup Error',
+            message: `A critical UI error occurred:\n${error.message}`,
+            okText: 'Close',
+            showCancel: false,
+            danger: true,
+        });
     }
 });
 
@@ -176,7 +362,11 @@ function setupSliders() {
         ['batch', 'batch-value'],
         ['second_pass_steps', 'second-steps-value'],
         ['second_pass_blend', 'blend-value'],
-        ['denoising_strength', 'denoise-value']
+        ['denoising_strength', 'denoise-value'],
+        ['smart-extend-feather', 'smart-extend-feather-value'],
+        ['smart-extend-step-growth', 'smart-extend-step-growth-value'],
+        ['smart-extend-refine-width', 'smart-extend-refine-width-value'],
+        ['smart-extend-refine-strength', 'smart-extend-refine-strength-value']
     ];
 
     pairs.forEach(([inputId, outputId]) => {
@@ -185,6 +375,15 @@ function setupSliders() {
         if (!input || !output) return;
 
         const update = () => {
+            if (inputId === 'denoising_strength') {
+                const uiValue = parseFloat(input.value);
+                output.textContent = mapDenoiseUiToActual(uiValue).toFixed(2);
+                return;
+            }
+            if (inputId === 'smart-extend-step-growth') {
+                output.textContent = Number(input.value).toFixed(2);
+                return;
+            }
             output.textContent = input.value;
         };
 
@@ -232,7 +431,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -272,6 +471,12 @@ function setupFormHandlers() {
         byId('inpaint-keep')?.classList.add('active');
         byId('inpaint-replace')?.classList.remove('active');
     });
+
+    const autoStepEl = byId('smart-extend-auto-step');
+    if (autoStepEl) {
+        listen(autoStepEl, 'change', updateSmartExtendAutoStepUI);
+        updateSmartExtendAutoStepUI();
+    }
 }
 
 function generateRandomSeed() {
@@ -337,6 +542,10 @@ function setupGenerationButtons() {
 async function startGeneration(mode) {
     try {
         syncFromDOM();
+        if (!await maybeShowRuntimePreflightWarning()) {
+            toast('Run cancelled by user', 'info');
+            return;
+        }
         const formData = collectFormData();
 
         if (mode === 'test') {
@@ -405,7 +614,27 @@ function collectFormData() {
 
     if (window._uploadedImage) {
         formData.append('image', window._uploadedImage);
-        formData.append('denoising_strength', byId('denoising_strength')?.value || 0.75);
+        const denoiseUi = parseFloat(byId('denoising_strength')?.value ?? '0.85');
+        const denoise = mapDenoiseUiToActual(denoiseUi).toFixed(2);
+        formData.append('strength', denoise);
+        // Keep legacy key for compatibility with any older handlers.
+        formData.append('denoising_strength', denoise);
+        if (byId('smart-extend-enabled')?.checked) {
+            formData.append('smart_extend', 'true');
+            formData.append('smart_extend_anchor', 'center');
+            formData.append('smart_extend_feather', byId('smart-extend-feather')?.value || '8');
+            formData.append('smart_extend_auto_step', byId('smart-extend-auto-step')?.checked ? 'true' : 'false');
+            formData.append('smart_extend_step_growth', byId('smart-extend-step-growth')?.value || '1.25');
+            formData.append('smart_extend_refine', byId('smart-extend-refine')?.checked ? 'true' : 'false');
+            formData.append('smart_extend_refine_each_step', byId('smart-extend-refine-each-step')?.checked ? 'true' : 'false');
+            formData.append('smart_extend_refine_width', byId('smart-extend-refine-width')?.value || '24');
+            formData.append('smart_extend_refine_strength', byId('smart-extend-refine-strength')?.value || '0.28');
+            const placement = window._smartExtendPlacement;
+            if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.y)) {
+                formData.append('smart_extend_offset_x', String(Math.round(placement.x)));
+                formData.append('smart_extend_offset_y', String(Math.round(placement.y)));
+            }
+        }
     }
 
     if (window._maskBlob) {
@@ -422,6 +651,13 @@ function handleGenerationResult(result) {
 
     const preview = byId('preview-image');
     const placeholder = byId('preview-placeholder');
+
+    // When showing generated output, temporarily leave edit mode so the
+    // smart-extend canvas doesn't visually override the selected result.
+    if (window._previewEditMode) {
+        window._previewEditMode = null;
+        renderSmartExtendCanvas();
+    }
 
     preview.src = result.images[0];
     preview.classList.remove('hidden');
@@ -452,9 +688,36 @@ function updateBatchStrip(images) {
     strip.querySelectorAll('.image-item').forEach(item => {
         listen(item, 'click', () => {
             const img = item.querySelector('img');
-            if (img) byId('preview-image').src = img.src;
+            if (!img) return;
+            const preview = byId('preview-image');
+            const placeholder = byId('preview-placeholder');
+            if (!preview || !placeholder) return;
+
+            // Same behavior as main result preview: selecting a generated image
+            // should display that image directly (not the edit canvas).
+            if (window._previewEditMode) {
+                window._previewEditMode = null;
+                renderSmartExtendCanvas();
+            }
+
+            preview.src = img.src;
+            preview.classList.remove('hidden');
+            placeholder.classList.add('hidden');
         });
     });
+}
+
+function updateSmartExtendAutoStepUI() {
+    const autoStepEl = byId('smart-extend-auto-step');
+    const growthEl = byId('smart-extend-step-growth');
+    const growthValueEl = byId('smart-extend-step-growth-value');
+    if (!autoStepEl || !growthEl || !growthValueEl) return;
+
+    const isEnabled = autoStepEl.checked;
+    growthEl.disabled = !isEnabled;
+    growthEl.style.opacity = isEnabled ? '1' : '0.45';
+    growthValueEl.style.opacity = isEnabled ? '1' : '0.65';
+    growthValueEl.textContent = isEnabled ? Number(growthEl.value || 1.25).toFixed(2) : 'off';
 }
 
 function cancelGeneration() {
@@ -491,7 +754,9 @@ function setupUploadHandling() {
         if (file) handleImageUpload(file);
     });
 
-    listen(byId('clear-upload'), 'click', clearUploadedImage);
+    listen(byId('clear-upload'), 'click', clearInputCanvas);
+    listen(byId('remove-upload-image'), 'click', clearUploadedImage);
+    listen(byId('preview-img'), 'click', () => showInputImageInStudio(true));
 
     listen(byId('caption-btn'), 'click', async () => {
         if (!window._uploadedImage) {
@@ -520,15 +785,800 @@ function setupUploadHandling() {
         }
     });
 
-    listen(byId('edit-mask-btn'), 'click', () => {
-        const src = byId('preview-img')?.src;
-        if (!src) {
-            toast('Upload an image first', 'error');
+    listen(byId('edit-mask-btn'), 'click', () => togglePreviewMaskMode());
+}
+
+function setupHelpModals() {
+    const modal = byId('help-modal');
+    const titleEl = byId('help-modal-title');
+    const bodyEl = byId('help-modal-body');
+    const closeBtn = byId('help-modal-close');
+    if (!modal || !titleEl || !bodyEl || !closeBtn) return;
+
+    const sectionHelp = {
+        prompt: {
+            title: 'Prompt Help',
+            html: `
+                <h4>Prompt</h4>
+                <p>Your prompt is the main idea for the picture. Write what you want to see.</p>
+                <ul>
+                  <li>Use short, clear words first (example: <code>1girl, glasses, bedroom, soft light</code>).</li>
+                  <li>Then add extra details like style, mood, or camera angle.</li>
+                  <li>If your prompt is very long, the model may ignore some words.</li>
+                  <li><strong>Best range:</strong> about <code>20-70 tokens</code> for clean, stable results.</li>
+                </ul>
+            `
+        },
+        negative: {
+            title: 'Negative Prompt Help',
+            html: `
+                <h4>Negative Prompt</h4>
+                <p>This is the "do not include" list.</p>
+                <ul>
+                  <li>Use it to avoid mistakes (like blurry, bad hands, watermark).</li>
+                  <li>If you add too many negatives, images can look flat or less creative.</li>
+                  <li><strong>Best range:</strong> keep it short, around <code>5-40 tokens</code>.</li>
+                </ul>
+            `
+        },
+        parameters: {
+            title: 'Parameters Help',
+            html: `
+                <h4>Parameters</h4>
+                <ul>
+                  <li><strong>Width / Height:</strong> image size in pixels. Bigger = more detail, but slower and heavier on VRAM. <strong>Best:</strong> <code>832-1344</code> on the long side for SDXL.</li>
+                  <li><strong>Aspect Ratio Buttons:</strong> quick size shapes like 1:1 or 9:16.</li>
+                  <li><strong>Steps:</strong> how many thinking passes the model does. More steps can improve detail, but take longer. <strong>Best:</strong> <code>25-40</code>.</li>
+                  <li><strong>CFG:</strong> how strongly the model follows your prompt. Too low = ignores prompt, too high = can look weird. <strong>Best:</strong> <code>5-8</code>.</li>
+                  <li><strong>Scheduler:</strong> the path the model uses while generating. Different schedulers give different speed/texture behavior. <strong>Best starters:</strong> <code>Euler a</code>, <code>DPM++ 2M Karras</code>, <code>UniPC</code>.</li>
+                  <li><strong>Seed:</strong> random starting number. Same seed + same settings gives a very similar image. <strong>Best use:</strong> leave random while exploring, lock seed when refining.</li>
+                </ul>
+            `
+        },
+        second_pass: {
+            title: 'Second Pass Help',
+            html: `
+                <h4>Second Pass (Refiner)</h4>
+                <p>This is an optional cleanup pass after the first image is made.</p>
+                <ul>
+                  <li><strong>Enable:</strong> turns on the second pass.</li>
+                  <li><strong>Refiner Model:</strong> model used for cleanup.</li>
+                  <li><strong>Refiner Steps:</strong> how long the cleanup pass runs. <strong>Best:</strong> <code>12-28</code>.</li>
+                  <li><strong>Blend:</strong> how much of the refiner result is mixed in. <strong>Best:</strong> <code>0.55-0.85</code>.</li>
+                </ul>
+            `
+        },
+        lora: {
+            title: 'LoRA Stack Help',
+            html: `
+                <h4>LoRA Stack</h4>
+                <p>LoRAs are mini add-ons that teach specific styles, characters, or details.</p>
+                <ul>
+                  <li>Add one or more LoRAs from the list.</li>
+                  <li>Use the weight slider to control strength. <strong>Best:</strong> <code>0.5-1.0</code> each.</li>
+                  <li>Too many strong LoRAs can fight each other and reduce quality.</li>
+                  <li><strong>Best count:</strong> <code>1-3</code> LoRAs at once.</li>
+                </ul>
+            `
+        },
+        input_image: {
+            title: 'Input Image Help',
+            html: `
+                <h4>Input Image / Inpaint / Outpaint</h4>
+                <ul>
+                  <li><strong>Upload:</strong> starts img2img flow from an existing picture.</li>
+                  <li><strong>Denoising Strength:</strong> low keeps source close, high changes more. Range is <code>0.75-1.00</code>. <strong>Best:</strong> outpaint <code>0.90-0.98</code>.</li>
+                  <li><strong>Mask:</strong> paint where edits are allowed.</li>
+                  <li><strong>Inpaint Mode:</strong> Replace edits masked area; Keep protects masked area.</li>
+                  <li><strong>Smart Extend:</strong> expands canvas and fills new space.</li>
+                  <li><strong>Auto Step Outpaint:</strong> grows canvas in smaller passes to keep identity more stable on large expansions. Turn it off for one single pass.</li>
+                  <li><strong>Refine Each Step:</strong> runs seam cleanup after every growth step. <strong>Best for quality:</strong> <code>ON</code>.</li>
+                  <li><strong>Step Growth:</strong> per-pass growth factor. <strong>Best:</strong> <code>1.15-1.30</code>.</li>
+                  <li><strong>Feather:</strong> softens blend edge. <strong>Best:</strong> <code>6-12</code>.</li>
+                  <li><strong>Seam Width:</strong> repair band around the edge. <strong>Best:</strong> <code>18-32</code>.</li>
+                  <li><strong>Refine Strength:</strong> seam cleanup strength. <strong>Best:</strong> <code>0.20-0.35</code>.</li>
+                </ul>
+            `
+        },
+        batch: {
+            title: 'Batch Size Help',
+            html: `
+                <h4>Batch Size</h4>
+                <p>How many images to generate in one request.</p>
+                <ul>
+                  <li>Bigger batch = more images at once, but more VRAM/RAM use.</li>
+                  <li>If you get memory errors, lower batch size first.</li>
+                  <li><strong>Best:</strong> <code>1-2</code> for stability. Use <code>3-4</code> only if your system has headroom.</li>
+                </ul>
+            `
+        }
+    };
+
+    const closeModal = () => {
+        modal.classList.remove('active');
+        setTimeout(() => {
+            modal.classList.add('hidden');
+            modal.setAttribute('aria-hidden', 'true');
+        }, 220);
+    };
+
+    const openModal = (title, html) => {
+        titleEl.textContent = title || 'Help';
+        bodyEl.innerHTML = html || '<p>No help content available.</p>';
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        void modal.offsetWidth;
+        modal.classList.add('active');
+    };
+
+    const renderMarkdown = (markdownText) => {
+        const escapeHtml = (s) => String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        const lines = String(markdownText || '').replace(/\r/g, '').split('\n');
+        const out = [];
+        let inCode = false;
+        let inUl = false;
+        let inOl = false;
+
+        const closeLists = () => {
+            if (inUl) { out.push('</ul>'); inUl = false; }
+            if (inOl) { out.push('</ol>'); inOl = false; }
+        };
+
+        for (const rawLine of lines) {
+            const line = rawLine.trimEnd();
+            const t = line.trim();
+
+            if (t.startsWith('```')) {
+                closeLists();
+                if (!inCode) {
+                    out.push('<pre><code>');
+                    inCode = true;
+                } else {
+                    out.push('</code></pre>');
+                    inCode = false;
+                }
+                continue;
+            }
+            if (inCode) {
+                out.push(`${escapeHtml(line)}\n`);
+                continue;
+            }
+            if (!t) {
+                closeLists();
+                continue;
+            }
+
+            if (t.startsWith('# ')) {
+                closeLists();
+                out.push(`<h4>${escapeHtml(t.slice(2))}</h4>`);
+                continue;
+            }
+            if (t.startsWith('## ')) {
+                closeLists();
+                out.push(`<h4>${escapeHtml(t.slice(3))}</h4>`);
+                continue;
+            }
+
+            const olMatch = t.match(/^\d+\.\s+(.*)$/);
+            if (olMatch) {
+                if (inUl) { out.push('</ul>'); inUl = false; }
+                if (!inOl) { out.push('<ol>'); inOl = true; }
+                out.push(`<li>${escapeHtml(olMatch[1]).replace(/`([^`]+)`/g, '<code>$1</code>')}</li>`);
+                continue;
+            }
+
+            if (t.startsWith('- ')) {
+                if (inOl) { out.push('</ol>'); inOl = false; }
+                if (!inUl) { out.push('<ul>'); inUl = true; }
+                out.push(`<li>${escapeHtml(t.slice(2)).replace(/`([^`]+)`/g, '<code>$1</code>')}</li>`);
+                continue;
+            }
+
+            closeLists();
+            out.push(`<p>${escapeHtml(t).replace(/`([^`]+)`/g, '<code>$1</code>')}</p>`);
+        }
+
+        if (inCode) out.push('</code></pre>');
+        closeLists();
+        return out.join('');
+    };
+
+    const loadGuide = async () => {
+        try {
+            const res = await fetch('/docs/simple-guide');
+            const data = await res.json();
+            const html = renderMarkdown(data?.markdown || '');
+            openModal('Studio Guide', html || '<p>Guide is empty.</p>');
+        } catch (e) {
+            console.warn('Failed to load simple guide:', e);
+            openModal('Studio Guide', '<p>Could not load guide right now.</p>');
+        }
+    };
+
+    $$('.section-help-trigger').forEach(el => {
+        const open = (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            const key = el.dataset.helpSection;
+            const help = sectionHelp[key];
+            if (!help) return;
+            openModal(help.title, help.html);
+        };
+        listen(el, 'click', open);
+        listen(el, 'keydown', (evt) => {
+            if (evt.key === 'Enter' || evt.key === ' ') open(evt);
+        });
+    });
+
+    listen(byId('studio-guide-btn'), 'click', loadGuide);
+    listen(closeBtn, 'click', closeModal);
+    listen(modal, 'click', (evt) => {
+        if (evt.target === modal) closeModal();
+    });
+    listen(document, 'keydown', (evt) => {
+        if (evt.key === 'Escape' && !modal.classList.contains('hidden')) {
+            closeModal();
+        }
+    });
+}
+
+function showInputImageInStudio(enableEditMode = false) {
+    const inputPreview = byId('preview-img');
+    const studioPreview = byId('preview-image');
+    const placeholder = byId('preview-placeholder');
+    if (!inputPreview?.src || !studioPreview || !placeholder) return;
+    inputPreview.setAttribute('draggable', 'false');
+    studioPreview.setAttribute('draggable', 'false');
+    studioPreview.src = inputPreview.src;
+    studioPreview.classList.remove('hidden');
+    placeholder.classList.add('hidden');
+    studioPreview.dataset.meta = JSON.stringify({ source: 'upload' });
+    if (enableEditMode && byId('smart-extend-enabled')?.checked && window._uploadedImage) {
+        window._previewEditMode = 'place';
+        renderSmartExtendCanvas();
+    }
+}
+
+function setupSmartExtendPlacement() {
+    const canvas = byId('preview-edit-canvas');
+    const enabled = byId('smart-extend-enabled');
+    const centerBtn = byId('smart-extend-center');
+    const width = byId('width');
+    const height = byId('height');
+    if (!canvas || !enabled || !centerBtn || !width || !height) return;
+
+    // Prevent browser touch/image-selection behavior from stealing drag handles on mobile.
+    const blockNativeGesture = (evt) => {
+        if (window._previewEditMode === 'place' || window._previewEditMode === 'mask') {
+            evt.preventDefault();
+            evt.stopPropagation();
+        }
+    };
+    canvas.addEventListener('touchstart', blockNativeGesture, { passive: false });
+    canvas.addEventListener('touchmove', blockNativeGesture, { passive: false });
+    canvas.addEventListener('gesturestart', blockNativeGesture, { passive: false });
+
+    const refresh = () => renderSmartExtendCanvas();
+    listen(enabled, 'change', () => {
+        if (enabled.checked && window._uploadedImage && window._previewEditMode !== 'mask') {
+            window._previewEditMode = 'place';
+        } else if (!enabled.checked && window._previewEditMode === 'place') {
+            window._previewEditMode = null;
+        }
+        refresh();
+    });
+    listen(width, 'input', refresh);
+    listen(height, 'input', refresh);
+
+    listen(centerBtn, 'click', () => {
+        window._smartExtendPlacement = null;
+        setState({ smartExtendOffsetX: null, smartExtendOffsetY: null });
+        renderSmartExtendCanvas(true);
+    });
+
+    const pointerPos = (evt) => {
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.width > 0 ? (canvas.width / rect.width) : 1;
+        const sy = rect.height > 0 ? (canvas.height / rect.height) : 1;
+        return {
+            x: (evt.clientX - rect.left) * sx,
+            y: (evt.clientY - rect.top) * sy,
+        };
+    };
+
+    listen(canvas, 'pointerdown', (evt) => {
+        if (window._previewEditMode !== 'place' || !byId('smart-extend-enabled')?.checked) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        const geom = renderSmartExtendCanvas();
+        if (!geom) return;
+
+        const p = pointerPos(evt);
+        const handle = hitResizeHandle(geom, p.x, p.y);
+        if (handle) {
+            canvas.setPointerCapture(evt.pointerId);
+            canvas.classList.add('dragging');
+            window._smartExtendResize = {
+                pointerId: evt.pointerId,
+                handle,
+                startClientX: p.x,
+                startClientY: p.y,
+                startW: geom.targetW,
+                startH: geom.targetH,
+                startX: geom.placeX,
+                startY: geom.placeY,
+                scale: geom.scale,
+                srcW: geom.srcW,
+                srcH: geom.srcH,
+            };
+            evt.preventDefault();
             return;
         }
 
-        window.maskEditor?.open(src);
+        const imgLeft = geom.frameX + geom.placeX * geom.scale;
+        const imgTop = geom.frameY + geom.placeY * geom.scale;
+        const imgW = geom.srcW * geom.scale;
+        const imgH = geom.srcH * geom.scale;
+        const inside = p.x >= imgLeft && p.x <= (imgLeft + imgW) && p.y >= imgTop && p.y <= (imgTop + imgH);
+        if (!inside) return;
+
+        canvas.setPointerCapture(evt.pointerId);
+        canvas.classList.add('dragging');
+        window._smartExtendDrag = {
+            pointerId: evt.pointerId,
+            grabDx: p.x - imgLeft,
+            grabDy: p.y - imgTop,
+            geom,
+        };
+        evt.preventDefault();
     });
+
+    listen(canvas, 'pointermove', (evt) => {
+        if (window._previewEditMode === 'place' || window._previewEditMode === 'mask') {
+            evt.preventDefault();
+            evt.stopPropagation();
+        }
+        if (window._previewEditMode === 'mask') {
+            drawPreviewMask(evt);
+            return;
+        }
+        const resize = window._smartExtendResize;
+        if (resize && resize.pointerId === evt.pointerId) {
+            const p = pointerPos(evt);
+            const dx = (p.x - resize.startClientX) / resize.scale;
+            const dy = (p.y - resize.startClientY) / resize.scale;
+            const minW = Math.max(512, resize.srcW);
+            const minH = Math.max(512, resize.srcH);
+            const maxW = 4096;
+            const maxH = 4096;
+
+            let newW = resize.startW;
+            let newH = resize.startH;
+            let newX = resize.startX;
+            let newY = resize.startY;
+
+            if (resize.handle.includes('right')) {
+                newW = clamp(Math.roundTo8(resize.startW + dx), minW, maxW);
+            }
+            if (resize.handle.includes('left')) {
+                newW = clamp(Math.roundTo8(resize.startW - dx), minW, maxW);
+                newX = resize.startX + (newW - resize.startW);
+            }
+            if (resize.handle.includes('bottom')) {
+                newH = clamp(Math.roundTo8(resize.startH + dy), minH, maxH);
+            }
+            if (resize.handle.includes('top')) {
+                newH = clamp(Math.roundTo8(resize.startH - dy), minH, maxH);
+                newY = resize.startY + (newH - resize.startH);
+            }
+
+            const maxX = Math.max(0, newW - resize.srcW);
+            const maxY = Math.max(0, newH - resize.srcH);
+            newX = clamp(Math.roundTo8(newX), 0, maxX);
+            newY = clamp(Math.roundTo8(newY), 0, maxY);
+
+            byId('width').value = String(newW);
+            byId('height').value = String(newH);
+            byId('width').dispatchEvent(new Event('input'));
+            byId('height').dispatchEvent(new Event('input'));
+            setState({ width: newW, height: newH, smartExtendOffsetX: newX, smartExtendOffsetY: newY });
+
+            window._smartExtendPlacement = { x: newX, y: newY, custom: true };
+            renderSmartExtendCanvas();
+            evt.preventDefault();
+            return;
+        }
+
+        if (window._previewEditMode === 'place' && byId('smart-extend-enabled')?.checked) {
+            const geom = renderSmartExtendCanvas();
+            if (geom) {
+                const p = pointerPos(evt);
+                const handle = hitResizeHandle(geom, p.x, p.y);
+                if (handle) {
+                    canvas.style.cursor = resizeHandleCursor(handle);
+                } else {
+                    const imgLeft = geom.frameX + geom.placeX * geom.scale;
+                    const imgTop = geom.frameY + geom.placeY * geom.scale;
+                    const imgW = geom.srcW * geom.scale;
+                    const imgH = geom.srcH * geom.scale;
+                    const inside = p.x >= imgLeft && p.x <= (imgLeft + imgW) && p.y >= imgTop && p.y <= (imgTop + imgH);
+                    canvas.style.cursor = inside ? 'grab' : 'default';
+                }
+            }
+        }
+
+        const drag = window._smartExtendDrag;
+        if (!drag || drag.pointerId !== evt.pointerId) return;
+
+        const p = pointerPos(evt);
+        const maxX = Math.max(0, drag.geom.targetW - drag.geom.srcW);
+        const maxY = Math.max(0, drag.geom.targetH - drag.geom.srcH);
+
+        let x = (p.x - drag.geom.frameX - drag.grabDx) / drag.geom.scale;
+        let y = (p.y - drag.geom.frameY - drag.grabDy) / drag.geom.scale;
+
+        x = Math.max(0, Math.min(maxX, x));
+        y = Math.max(0, Math.min(maxY, y));
+
+        window._smartExtendPlacement = { x, y, custom: true };
+        setState({ smartExtendOffsetX: Math.round(x), smartExtendOffsetY: Math.round(y) });
+        renderSmartExtendCanvas();
+        evt.preventDefault();
+    });
+
+    const stopDrag = (evt) => {
+        stopPreviewMaskDraw(evt);
+        const resize = window._smartExtendResize;
+        if (resize && resize.pointerId === evt.pointerId) {
+            window._smartExtendResize = null;
+            canvas.classList.remove('dragging');
+            canvas.style.cursor = 'default';
+            return;
+        }
+        const drag = window._smartExtendDrag;
+        if (!drag || drag.pointerId !== evt.pointerId) return;
+        canvas.classList.remove('dragging');
+        window._smartExtendDrag = null;
+        canvas.style.cursor = 'grab';
+    };
+
+    listen(canvas, 'pointerup', stopDrag);
+    listen(canvas, 'pointercancel', stopDrag);
+    listen(canvas, 'pointerdown', (evt) => {
+        if (window._previewEditMode === 'mask') {
+            evt.preventDefault();
+            evt.stopPropagation();
+            startPreviewMaskDraw(evt);
+        }
+    });
+    renderSmartExtendCanvas(true);
+}
+
+function updateEditInteractionLock() {
+    const canvas = byId('preview-edit-canvas');
+    const active = Boolean(
+        window._previewEditMode
+        && canvas
+        && !canvas.classList.contains('hidden')
+    );
+    document.body.classList.toggle('edit-canvas-active', active);
+}
+
+function anchorOffset(anchor, srcW, srcH, targetW, targetH) {
+    const dx = Math.max(0, targetW - srcW);
+    const dy = Math.max(0, targetH - srcH);
+    const key = String(anchor || 'center').toLowerCase();
+    if (key === 'top') return { x: dx / 2, y: 0 };
+    if (key === 'bottom') return { x: dx / 2, y: dy };
+    if (key === 'left') return { x: 0, y: dy / 2 };
+    if (key === 'right') return { x: dx, y: dy / 2 };
+    if (key === 'top_left') return { x: 0, y: 0 };
+    if (key === 'top_right') return { x: dx, y: 0 };
+    if (key === 'bottom_left') return { x: 0, y: dy };
+    if (key === 'bottom_right') return { x: dx, y: dy };
+    return { x: dx / 2, y: dy / 2 };
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+Math.roundTo8 = Math.roundTo8 || function (v) {
+    return Math.max(8, Math.round(v / 8) * 8);
+};
+
+function getResizeHandles(geom) {
+    const baseHalf = Math.max(8, Math.min(14, Math.round(Math.min(geom.frameW, geom.frameH) * 0.02)));
+    const half = IS_COARSE_POINTER ? Math.max(14, Math.round(baseHalf * 1.35)) : baseHalf;
+    const x = geom.frameX;
+    const y = geom.frameY;
+    const w = geom.frameW;
+    const h = geom.frameH;
+    return [
+        { id: 'top_left', x, y, half },
+        { id: 'top_right', x: x + w, y, half },
+        { id: 'bottom_left', x, y: y + h, half },
+        { id: 'bottom_right', x: x + w, y: y + h, half },
+        { id: 'top', x: x + w / 2, y, half },
+        { id: 'bottom', x: x + w / 2, y: y + h, half },
+        { id: 'left', x, y: y + h / 2, half },
+        { id: 'right', x: x + w, y: y + h / 2, half },
+    ];
+}
+
+function hitResizeHandle(geom, px, py) {
+    const hs = getResizeHandles(geom).map((h) => {
+        if (!IS_COARSE_POINTER) return h;
+        return { ...h, half: Math.max(20, Math.round(h.half * 1.8)) };
+    });
+    for (const h of hs) {
+        if (
+            px >= (h.x - h.half) &&
+            px <= (h.x + h.half) &&
+            py >= (h.y - h.half) &&
+            py <= (h.y + h.half)
+        ) {
+            return h.id;
+        }
+    }
+    return null;
+}
+
+function resizeHandleCursor(handle) {
+    if (handle === 'top' || handle === 'bottom') return 'ns-resize';
+    if (handle === 'left' || handle === 'right') return 'ew-resize';
+    if (handle === 'top_left' || handle === 'bottom_right') return 'nwse-resize';
+    if (handle === 'top_right' || handle === 'bottom_left') return 'nesw-resize';
+    return 'grab';
+}
+
+function renderSmartExtendCanvas(resetPlacement = false) {
+    const canvas = byId('preview-edit-canvas');
+    if (!canvas) return null;
+    const previewMain = byId('preview-main');
+    if (!previewMain) return null;
+    const rectMain = previewMain.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const targetPixelW = Math.max(1, Math.round(rectMain.width * dpr));
+    const targetPixelH = Math.max(1, Math.round(rectMain.height * dpr));
+    if (canvas.width !== targetPixelW || canvas.height !== targetPixelH) {
+        canvas.width = targetPixelW;
+        canvas.height = targetPixelH;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const srcW = window._uploadedImageDims?.width || 0;
+    const srcH = window._uploadedImageDims?.height || 0;
+    const targetW = parseInt(byId('width')?.value || '0', 10) || srcW;
+    const targetH = parseInt(byId('height')?.value || '0', 10) || srcH;
+
+    const offsetLabel = byId('smart-extend-offset');
+    const cw = canvas.width;
+    const ch = canvas.height;
+    canvas.classList.toggle('hidden', !window._uploadedImage || !window._previewEditMode);
+    canvas.classList.toggle('mode-place', window._previewEditMode === 'place');
+    updateEditInteractionLock();
+    ctx.clearRect(0, 0, cw, ch);
+    if (!window._uploadedImage || !window._previewEditMode) return null;
+
+    ctx.fillStyle = 'rgba(8,12,20,0.95)';
+    ctx.fillRect(0, 0, cw, ch);
+
+    if (!srcW || !srcH || !targetW || !targetH) {
+        ctx.fillStyle = '#8fa4c4';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('Upload an image to place smart extend area', 12, ch / 2);
+        if (offsetLabel) offsetLabel.textContent = 'Offset: auto';
+        return null;
+    }
+
+    const pad = 10;
+    const scale = Math.min((cw - pad * 2) / targetW, (ch - pad * 2) / targetH);
+    const frameW = targetW * scale;
+    const frameH = targetH * scale;
+    const frameX = (cw - frameW) / 2;
+    const frameY = (ch - frameH) / 2;
+
+    const fallback = anchorOffset(byId('smart-extend-anchor')?.value, srcW, srcH, targetW, targetH);
+    if (resetPlacement || !window._smartExtendPlacement || !window._smartExtendPlacement.custom) {
+        const saved = getState();
+        const savedX = Number(saved.smartExtendOffsetX);
+        const savedY = Number(saved.smartExtendOffsetY);
+        if (!resetPlacement && Number.isFinite(savedX) && Number.isFinite(savedY)) {
+            window._smartExtendPlacement = { x: savedX, y: savedY, custom: true };
+        } else {
+            window._smartExtendPlacement = { x: fallback.x, y: fallback.y, custom: false };
+        }
+    }
+
+    const maxX = Math.max(0, targetW - srcW);
+    const maxY = Math.max(0, targetH - srcH);
+    const placeX = Math.max(0, Math.min(maxX, window._smartExtendPlacement.x));
+    const placeY = Math.max(0, Math.min(maxY, window._smartExtendPlacement.y));
+    window._smartExtendPlacement.x = placeX;
+    window._smartExtendPlacement.y = placeY;
+
+    ctx.fillStyle = 'rgba(18,29,47,0.95)';
+    ctx.fillRect(frameX, frameY, frameW, frameH);
+    ctx.strokeStyle = 'rgba(148,163,184,0.55)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(frameX, frameY, frameW, frameH);
+
+    const imgEl = byId('preview-img');
+    const imgX = frameX + placeX * scale;
+    const imgY = frameY + placeY * scale;
+    const imgW = srcW * scale;
+    const imgH = srcH * scale;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(imgX, imgY, imgW, imgH);
+    ctx.clip();
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+        ctx.drawImage(imgEl, imgX, imgY, imgW, imgH);
+    } else {
+        ctx.fillStyle = 'rgba(96,165,250,0.35)';
+        ctx.fillRect(imgX, imgY, imgW, imgH);
+    }
+    ctx.restore();
+
+    // Shade only extension regions so the placed image stays visible.
+    ctx.fillStyle = 'rgba(14,165,233,0.16)';
+    if (imgY > frameY) {
+        ctx.fillRect(frameX, frameY, frameW, imgY - frameY);
+    }
+    const imgBottom = imgY + imgH;
+    const frameBottom = frameY + frameH;
+    if (imgBottom < frameBottom) {
+        ctx.fillRect(frameX, imgBottom, frameW, frameBottom - imgBottom);
+    }
+    if (imgX > frameX) {
+        ctx.fillRect(frameX, imgY, imgX - frameX, imgH);
+    }
+    const imgRight = imgX + imgW;
+    const frameRight = frameX + frameW;
+    if (imgRight < frameRight) {
+        ctx.fillRect(imgRight, imgY, frameRight - imgRight, imgH);
+    }
+
+    ctx.strokeStyle = 'rgba(96,165,250,0.95)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(imgX, imgY, imgW, imgH);
+
+    const handles = getResizeHandles({ frameX, frameY, frameW, frameH });
+    ctx.fillStyle = 'rgba(147, 197, 253, 0.95)';
+    ctx.strokeStyle = 'rgba(8, 13, 24, 0.98)';
+    ctx.lineWidth = 1.5;
+    for (const h of handles) {
+        ctx.fillRect(h.x - h.half, h.y - h.half, h.half * 2, h.half * 2);
+        ctx.strokeRect(h.x - h.half, h.y - h.half, h.half * 2, h.half * 2);
+    }
+
+    if (window._previewEditMode === 'place') {
+        const hint = 'Drag image to place. Drag frame handles to expand.';
+        ctx.fillStyle = 'rgba(191, 219, 254, 0.95)';
+        ctx.font = '600 12px Inter, sans-serif';
+        const tw = ctx.measureText(hint).width;
+        const tx = frameX + Math.max(10, (frameW - tw) / 2);
+        const ty = Math.max(18, frameY - 10);
+        ctx.fillText(hint, tx, ty);
+    }
+
+    if (window._previewEditMode !== 'place') {
+        canvas.style.cursor = 'crosshair';
+    } else if (!canvas.classList.contains('dragging')) {
+        canvas.style.cursor = 'default';
+    }
+
+    if (offsetLabel) {
+        offsetLabel.textContent = `Offset: x ${Math.round(placeX)}, y ${Math.round(placeY)}`;
+    }
+
+    if (window._previewEditMode === 'mask') {
+        renderPreviewMaskOverlay(ctx, { frameX, frameY, frameW, frameH, imgX, imgY, imgW, imgH, scale, targetW, targetH });
+    }
+
+    return { frameX, frameY, frameW, frameH, scale, srcW, srcH, targetW, targetH, placeX, placeY };
+}
+
+function ensurePreviewMaskCanvas(targetW, targetH) {
+    if (!window._previewMaskCanvas) {
+        window._previewMaskCanvas = document.createElement('canvas');
+    }
+    if (window._previewMaskCanvas.width !== targetW || window._previewMaskCanvas.height !== targetH) {
+        window._previewMaskCanvas.width = targetW;
+        window._previewMaskCanvas.height = targetH;
+        const c = window._previewMaskCanvas.getContext('2d');
+        if (c) c.clearRect(0, 0, targetW, targetH);
+    }
+}
+
+function renderPreviewMaskOverlay(ctx, geom) {
+    ensurePreviewMaskCanvas(geom.targetW, geom.targetH);
+    const maskCtx = window._previewMaskCanvas.getContext('2d');
+    if (!maskCtx) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(
+        window._previewMaskCanvas,
+        0, 0, geom.targetW, geom.targetH,
+        geom.frameX, geom.frameY, geom.frameW, geom.frameH
+    );
+    ctx.restore();
+}
+
+function startPreviewMaskDraw(evt) {
+    const geom = renderSmartExtendCanvas();
+    if (!geom) return;
+    const canvas = byId('preview-edit-canvas');
+    if (!canvas) return;
+    canvas.setPointerCapture(evt.pointerId);
+    window._maskDrawState = { pointerId: evt.pointerId, geom };
+    drawPreviewMask(evt);
+}
+
+function drawPreviewMask(evt) {
+    const state = window._maskDrawState;
+    if (!state || state.pointerId !== evt.pointerId) return;
+    const canvas = byId('preview-edit-canvas');
+    if (!canvas || !window._previewMaskCanvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (evt.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (evt.clientY - rect.top) * (canvas.height / rect.height);
+    const g = state.geom;
+    if (x < g.frameX || x > g.frameX + g.frameW || y < g.frameY || y > g.frameY + g.frameH) return;
+
+    const mx = ((x - g.frameX) / g.frameW) * g.targetW;
+    const my = ((y - g.frameY) / g.frameH) * g.targetH;
+    const radius = Math.max(4, Number(byId('mask_brush_size')?.value || 24));
+    const maskCtx = window._previewMaskCanvas.getContext('2d');
+    if (!maskCtx) return;
+    maskCtx.fillStyle = 'rgba(255,255,255,1)';
+    maskCtx.beginPath();
+    maskCtx.arc(mx, my, radius, 0, Math.PI * 2);
+    maskCtx.fill();
+    renderSmartExtendCanvas();
+}
+
+function stopPreviewMaskDraw(evt) {
+    const state = window._maskDrawState;
+    if (!state || state.pointerId !== evt.pointerId) return;
+    window._maskDrawState = null;
+}
+
+async function togglePreviewMaskMode() {
+    if (!window._uploadedImage || !window._uploadedImageDims) {
+        toast('Upload an image first', 'error');
+        return;
+    }
+    const btn = byId('edit-mask-btn');
+    if (!btn) return;
+
+    if (window._previewEditMode === 'mask') {
+        if (!window._previewMaskCanvas) return;
+        const blob = await new Promise((resolve) => window._previewMaskCanvas.toBlob(resolve, 'image/png'));
+        if (blob) {
+            window._maskBlob = blob;
+            show(byId('inpaint-options'));
+            toast('Mask saved', 'success');
+        }
+        window._previewEditMode = byId('smart-extend-enabled')?.checked ? 'place' : null;
+        btn.textContent = 'Mask';
+        renderSmartExtendCanvas();
+        return;
+    }
+
+    window._previewEditMode = 'mask';
+    btn.textContent = 'Save Mask';
+    renderSmartExtendCanvas();
+    toast('Draw mask on the main preview, then click Save Mask', 'info');
 }
 
 async function handleImageUpload(file) {
@@ -539,15 +1589,28 @@ async function handleImageUpload(file) {
 
     window._uploadedImage = file;
     window._maskBlob = null;
+    window._uploadedImageDims = null;
+    window._smartExtendPlacement = null;
 
     const reader = new FileReader();
     reader.onload = event => {
         const src = event.target.result;
         const preview = byId('preview-img');
         preview.src = src;
+        const studioPreview = byId('preview-image');
+        const placeholder = byId('preview-placeholder');
+        if (studioPreview && placeholder) {
+            studioPreview.src = src;
+            studioPreview.classList.remove('hidden');
+            placeholder.classList.add('hidden');
+            studioPreview.dataset.meta = JSON.stringify({ source: 'upload' });
+        }
 
         const probe = new Image();
         probe.onload = () => {
+            window._uploadedImageDims = { width: probe.width, height: probe.height };
+            window._smartExtendPlacement = null;
+            window._previewMaskCanvas = null;
             const fit = fitResolution(probe.width, probe.height, 2048);
 
             const widthInput = byId('width');
@@ -561,12 +1624,17 @@ async function handleImageUpload(file) {
 
             setState({ width: fit.width, height: fit.height });
             toast(`Resolution set to ${fit.width}x${fit.height}`, 'info');
+            if (byId('smart-extend-enabled')?.checked) {
+                window._previewEditMode = 'place';
+            }
+            renderSmartExtendCanvas(true);
         };
         probe.src = src;
 
         hide(byId('upload-drop'));
         show(byId('upload-preview'));
         show(byId('denoise-group'));
+        show(byId('smart-extend-group'));
     };
 
     reader.readAsDataURL(file);
@@ -592,16 +1660,51 @@ function fitResolution(width, height, maxDim) {
 function clearUploadedImage() {
     window._uploadedImage = null;
     window._maskBlob = null;
+    window._uploadedImageDims = null;
+    window._smartExtendPlacement = null;
+    window._previewMaskCanvas = null;
+    window._previewEditMode = null;
 
     byId('input-image').value = '';
     byId('preview-img').src = '';
+    const studioPreview = byId('preview-image');
+    const placeholder = byId('preview-placeholder');
+    if (studioPreview && placeholder) {
+        studioPreview.src = '';
+        studioPreview.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+    }
 
     show(byId('upload-drop'));
     hide(byId('upload-preview'));
     hide(byId('denoise-group'));
     hide(byId('inpaint-options'));
+    hide(byId('smart-extend-group'));
+    if (byId('smart-extend-enabled')) byId('smart-extend-enabled').checked = false;
+    const maskBtn = byId('edit-mask-btn');
+    if (maskBtn) maskBtn.textContent = 'Mask';
+    setState({ smartExtendOffsetX: null, smartExtendOffsetY: null });
+    renderSmartExtendCanvas(true);
 
     emit(Events.IMAGE_CLEAR);
+}
+
+function clearInputCanvas() {
+    if (!window._uploadedImage) {
+        toast('No uploaded image to clear edits from', 'info');
+        return;
+    }
+    window._maskBlob = null;
+    window._previewMaskCanvas = null;
+    window._maskDrawState = null;
+    window._smartExtendPlacement = null;
+    const maskBtn = byId('edit-mask-btn');
+    if (maskBtn) maskBtn.textContent = 'Mask';
+    hide(byId('inpaint-options'));
+    setState({ smartExtendOffsetX: null, smartExtendOffsetY: null });
+    showInputImageInStudio(true);
+    renderSmartExtendCanvas(true);
+    toast('Canvas edits cleared', 'success');
 }
 
 function setupPreviewToolbar() {
@@ -740,9 +1843,28 @@ async function sendToInpaint(imageSrc) {
 }
 
 async function handleRegenerateFromLightbox(curr) {
+    const ok = await applyLightboxSettingsToStudio(curr, { preserveSeed: false });
+    if (!ok) return;
+
+    const generate = byId('btn-generate');
+    if (generate) {
+        setTimeout(() => generate.click(), 120);
+    }
+
+    toast('Regenerate started', 'success');
+}
+
+async function handleStageSettingsFromLightbox(curr) {
+    const ok = await applyLightboxSettingsToStudio(curr, { preserveSeed: true });
+    if (!ok) return;
+    toast('Settings staged in Studio', 'success');
+}
+
+async function applyLightboxSettingsToStudio(curr, options = {}) {
+    const preserveSeed = options?.preserveSeed === true;
     if (!curr?.meta) {
         toast('No metadata available', 'error');
-        return;
+        return false;
     }
 
     const meta = curr.meta;
@@ -766,8 +1888,14 @@ async function handleRegenerateFromLightbox(curr) {
     setValue('base_model', baseModel);
     setValue('scheduler', meta.scheduler);
 
-    byId('seed_input').value = '';
-    setSeed(null);
+    if (preserveSeed) {
+        const stagedSeed = meta.seed !== undefined && meta.seed !== null ? String(meta.seed) : '';
+        byId('seed_input').value = stagedSeed;
+        setSeed(stagedSeed || null);
+    } else {
+        byId('seed_input').value = '';
+        setSeed(null);
+    }
 
     if (baseModel && window.loraManager) {
         try {
@@ -798,13 +1926,7 @@ async function handleRegenerateFromLightbox(curr) {
     syncFromDOM();
     switchView('studio');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-
-    const generate = byId('btn-generate');
-    if (generate) {
-        setTimeout(() => generate.click(), 120);
-    }
-
-    toast('Regenerate started', 'success');
+    return true;
 }
 
 async function loadModels() {
@@ -961,18 +2083,20 @@ function renderQueuePanel(data) {
         const seed = job.settings?.seed ?? null;
         const negative = (job.settings?.negative_prompt || '').trim();
         const loras = Array.isArray(job.settings?.loras) ? job.settings.loras : [];
+        const modeDetails = Array.isArray(job.settings?.mode_details) ? job.settings.mode_details : [];
         const thumbHtml = inputThumb
             ? `<img class="queue-item-thumb" src="${escapeHtml(inputThumb)}" alt="Queue input preview" loading="lazy" />`
             : '';
         const canCancel = status === 'queued';
         const statusText = status === 'running' ? 'Running' : status === 'queued' ? 'Queued' : status;
         const isExpanded = expandedQueueJobs.has(job.job_id);
-        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0;
+        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0 || modeDetails.length > 0;
         const detailsHtml = hasExtraDetails
             ? `
                 <div class="queue-item-details ${isExpanded ? '' : 'hidden'}" data-details-for="${job.job_id}">
                   <div class="queue-detail-row"><span class="queue-detail-label">Seed</span><span class="queue-detail-value">${seed === null ? 'Random' : escapeHtml(String(seed))}</span></div>
                   <div class="queue-detail-row"><span class="queue-detail-label">Negative</span><span class="queue-detail-value">${negative ? escapeHtml(negative.slice(0, 220)) : 'None'}</span></div>
+                  <div class="queue-detail-row"><span class="queue-detail-label">Mode</span><span class="queue-detail-value">${modeDetails.length > 0 ? escapeHtml(modeDetails.join(' | ')) : 'Default'}</span></div>
                   <div class="queue-detail-row"><span class="queue-detail-label">LoRAs</span><span class="queue-detail-value">${loras.length > 0 ? escapeHtml(loras.join(', ')) : 'None'}</span></div>
                 </div>
               `
@@ -1103,3 +2227,4 @@ function normalizeQueueThumbUrl(src) {
     if (!src.startsWith('/inputs/')) return null;
     return src;
 }
+

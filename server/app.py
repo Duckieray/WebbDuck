@@ -5,6 +5,7 @@ import json
 import uuid
 import time
 import os
+import random
 from pathlib import Path
 import shutil
 from fastapi import FastAPI, Form, WebSocket, UploadFile, File
@@ -20,10 +21,15 @@ from webbduck.server.storage import (
     resolve_web_path,
     ensure_manifest,
     search_manifest_sessions,
+    filter_manifest_sessions,
     remove_manifest_image,
     remove_manifest_run,
+    favorite_map,
+    set_favorite,
+    remove_favorite_image,
+    remove_favorite_run,
 )
-from webbduck.server.thumbnails import ensure_thumbnail
+from webbduck.server.thumbnails import ensure_thumbnail, get_thumbnail_path
 from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import (
@@ -108,6 +114,57 @@ def summarize_settings(settings: dict) -> dict:
     elif image_path:
         mode = "img2img"
 
+    mode_details = []
+    strength = settings.get("strength")
+    if strength is not None:
+        try:
+            mode_details.append(f"denoise {float(strength):.2f}")
+        except (TypeError, ValueError):
+            pass
+
+    mask_blur = settings.get("mask_blur")
+    if mask_blur is not None:
+        mode_details.append(f"mask blur {mask_blur}")
+
+    inpaint_fill = settings.get("inpainting_fill")
+    if inpaint_fill:
+        mode_details.append(f"fill {inpaint_fill}")
+
+    if settings.get("smart_extend"):
+        mode_details.append("smart extend")
+        feather = settings.get("smart_extend_feather")
+        if feather is not None:
+            mode_details.append(f"feather {feather}")
+        auto_step = settings.get("smart_extend_auto_step")
+        if auto_step is not None:
+            mode_details.append("auto-step on" if auto_step else "auto-step off")
+        if bool(auto_step):
+            step_growth = settings.get("smart_extend_step_growth")
+            if step_growth is not None:
+                try:
+                    mode_details.append(f"growth {float(step_growth):.2f}x")
+                except (TypeError, ValueError):
+                    pass
+        refine = settings.get("smart_extend_refine")
+        if refine is not None:
+            mode_details.append("seam refine on" if refine else "seam refine off")
+        refine_each_step = settings.get("smart_extend_refine_each_step")
+        if refine_each_step is not None:
+            mode_details.append("refine/step on" if refine_each_step else "refine/step off")
+        refine_width = settings.get("smart_extend_refine_width")
+        if refine_width is not None:
+            mode_details.append(f"seam width {refine_width}")
+        refine_strength = settings.get("smart_extend_refine_strength")
+        if refine_strength is not None:
+            try:
+                mode_details.append(f"seam denoise {float(refine_strength):.2f}")
+            except (TypeError, ValueError):
+                pass
+        offset_x = settings.get("smart_extend_offset_x")
+        offset_y = settings.get("smart_extend_offset_y")
+        if offset_x is not None or offset_y is not None:
+            mode_details.append(f"offset x {offset_x or 0}, y {offset_y or 0}")
+
     return {
         "prompt": prompt[:160],
         "base_model": settings.get("base_model"),
@@ -124,7 +181,18 @@ def summarize_settings(settings: dict) -> dict:
         "has_input_image": bool(settings.get("image") or settings.get("input_image")),
         "has_mask": bool(settings.get("mask_image")),
         "input_image_url": input_image_url,
+        "mode_details": mode_details[:14],
     }
+
+
+def resolve_seed(seed) -> int:
+    """Resolve optional seed to a concrete integer for queue visibility/repro."""
+    if seed is None:
+        return random.randint(0, 2**32 - 1)
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return random.randint(0, 2**32 - 1)
 
 
 def build_queue_payload() -> dict:
@@ -362,6 +430,15 @@ def ui():
     return ui_path.read_text()
 
 
+@app.get("/docs/simple-guide")
+def simple_guide():
+    """Serve the user-friendly guide markdown used by Studio help."""
+    guide_path = Path(__file__).parent.parent / "docs" / "SIMPLE_GUIDE.md"
+    if not guide_path.exists():
+        return {"markdown": ""}
+    return {"markdown": guide_path.read_text(encoding="utf-8")}
+
+
 app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
 
 # Mount dynamic output directory
@@ -397,10 +474,28 @@ async def test(
     cfg: float = Form(7.5),
     width: int = Form(1024),
     height: int = Form(1024),
+    seed: int = Form(None),
+    scheduler: str = Form("UniPC"),
     base_model: str = Form(...),
     second_pass_model: str = Form("None"),
     second_pass_mode: str = Form("auto"),
     loras: str = Form("[]"),
+    strength: float = Form(0.75),
+    image: UploadFile = File(None),
+    mask: UploadFile = File(None),
+    inpainting_fill: str = Form("replace"),
+    mask_blur: int = Form(8),
+    smart_extend: bool = Form(False),
+    smart_extend_anchor: str = Form("center"),
+    smart_extend_feather: int = Form(8),
+    smart_extend_auto_step: bool = Form(True),
+    smart_extend_step_growth: float = Form(1.25),
+    smart_extend_refine: bool = Form(True),
+    smart_extend_refine_width: int = Form(24),
+    smart_extend_refine_strength: float = Form(0.28),
+    smart_extend_refine_each_step: bool = Form(True),
+    smart_extend_offset_x: int = Form(None),
+    smart_extend_offset_y: int = Form(None),
     experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
@@ -421,9 +516,42 @@ async def test(
         "width": width,
         "height": height,
         "num_images": 1,
+        "seed": resolve_seed(seed),
+        "scheduler": scheduler,
         "loras": lora_list,
+        "strength": strength,
+        "inpainting_fill": inpainting_fill,
+        "mask_blur": mask_blur,
+        "smart_extend": smart_extend,
+        "smart_extend_anchor": smart_extend_anchor,
+        "smart_extend_feather": smart_extend_feather,
+        "smart_extend_auto_step": smart_extend_auto_step,
+        "smart_extend_step_growth": smart_extend_step_growth,
+        "smart_extend_refine": smart_extend_refine,
+        "smart_extend_refine_width": smart_extend_refine_width,
+        "smart_extend_refine_strength": smart_extend_refine_strength,
+        "smart_extend_refine_each_step": smart_extend_refine_each_step,
+        "smart_extend_offset_x": smart_extend_offset_x,
+        "smart_extend_offset_y": smart_extend_offset_y,
         "experimental_compress": experimental_compress,
     }
+
+    if image:
+        ext = Path(image.filename).suffix
+        if not ext:
+            ext = ".png"
+        unique_name = f"{uuid.uuid4()}{ext}"
+        file_path = INPUTS_DIR / unique_name
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        settings["image"] = str(file_path.absolute())
+
+    if mask:
+        unique_mask_name = f"{uuid.uuid4()}_mask.png"
+        mask_path = INPUTS_DIR / unique_mask_name
+        with open(mask_path, "wb") as buffer:
+            shutil.copyfileobj(mask.file, buffer)
+        settings["mask_image"] = str(mask_path.absolute())
 
     job_id = str(uuid.uuid4())
     job = {
@@ -477,6 +605,17 @@ async def generate(
     mask: UploadFile = File(None),
     inpainting_fill: str = Form("replace"),
     mask_blur: int = Form(8),
+    smart_extend: bool = Form(False),
+    smart_extend_anchor: str = Form("center"),
+    smart_extend_feather: int = Form(8),
+    smart_extend_auto_step: bool = Form(True),
+    smart_extend_step_growth: float = Form(1.25),
+    smart_extend_refine: bool = Form(True),
+    smart_extend_refine_width: int = Form(24),
+    smart_extend_refine_strength: float = Form(0.28),
+    smart_extend_refine_each_step: bool = Form(True),
+    smart_extend_offset_x: int = Form(None),
+    smart_extend_offset_y: int = Form(None),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
@@ -496,7 +635,7 @@ async def generate(
         "width": width,
         "height": height,
         "num_images": num_images,
-        "seed": seed,
+        "seed": resolve_seed(seed),
         "loras": lora_list,
         "experimental_compress": experimental_compress,
         "scheduler": scheduler,
@@ -504,6 +643,17 @@ async def generate(
         "refinement_strength": refinement_strength,
         "inpainting_fill": inpainting_fill,
         "mask_blur": mask_blur,
+        "smart_extend": smart_extend,
+        "smart_extend_anchor": smart_extend_anchor,
+        "smart_extend_feather": smart_extend_feather,
+        "smart_extend_auto_step": smart_extend_auto_step,
+        "smart_extend_step_growth": smart_extend_step_growth,
+        "smart_extend_refine": smart_extend_refine,
+        "smart_extend_refine_width": smart_extend_refine_width,
+        "smart_extend_refine_strength": smart_extend_refine_strength,
+        "smart_extend_refine_each_step": smart_extend_refine_each_step,
+        "smart_extend_offset_x": smart_extend_offset_x,
+        "smart_extend_offset_y": smart_extend_offset_y,
     }
 
     if image:
@@ -572,7 +722,26 @@ async def delete_image(path: str = Form(...)):
              return JSONResponse(status_code=400, content={"error": "Not a file"})
 
         target_web_path = to_web_path(target)
-        target.unlink()
+
+        def _unlink_if_exists(p: Path):
+            try:
+                if p.exists() and p.is_file():
+                    p.unlink()
+            except Exception:
+                pass
+
+        # Delete requested image and its thumbnail sidecar.
+        _unlink_if_exists(target)
+        _unlink_if_exists(get_thumbnail_path(target))
+        remove_favorite_image(target_web_path)
+
+        # If deleting a base image, also clean paired upscaled artifact + thumbnail.
+        if not target.name.endswith("_upscaled.png"):
+            paired_upscaled = target.with_name(f"{target.stem}_upscaled.png")
+            _unlink_if_exists(paired_upscaled)
+            _unlink_if_exists(get_thumbnail_path(paired_upscaled))
+            remove_favorite_image(to_web_path(paired_upscaled))
+
         remove_manifest_image(target_web_path)
         print(f"[Info] Deleted {target}")
         return {"status": "ok"}
@@ -602,6 +771,7 @@ async def delete_run(path: str = Form(...)):
         run_name = run_dir.name
         shutil.rmtree(run_dir)
         remove_manifest_run(run_name)
+        remove_favorite_run(run_name)
         print(f"[Info] Deleted run {run_dir}")
         return {"status": "ok"}
     except Exception as e:
@@ -625,6 +795,7 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
     
     out = []
     count = 0
+    favorites = favorite_map()
     
     for r in runs_slice:
         if count >= limit:
@@ -681,6 +852,7 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
             "run": r.name, 
             "images": imgs, 
             "variants": variants,
+            "favorites": {Path(p).name: True for p in imgs if favorites.get(p)},
             "meta": meta
         })
         count += 1
@@ -697,6 +869,30 @@ def gallery_search(q: str, start: int = 0, limit: int = 1000):
     bounded_limit = max(1, min(int(limit), 5000))
     bounded_start = max(0, int(start))
     return search_manifest_sessions(q, start=bounded_start, limit=bounded_limit)
+
+
+@app.get("/gallery/filter")
+def gallery_filter(kind: str, start: int = 0, limit: int = 2000):
+    """Filter gallery sessions quickly using manifest index."""
+    k = (kind or "").strip().lower()
+    if k not in {"hd", "favorites"}:
+        return []
+    bounded_limit = max(1, min(int(limit), 5000))
+    bounded_start = max(0, int(start))
+    return filter_manifest_sessions(k, start=bounded_start, limit=bounded_limit)
+
+
+@app.post("/favorite")
+async def favorite_image(path: str = Form(...), favorite: bool = Form(True)):
+    """Mark/unmark a generated image as favorite."""
+    try:
+        target = resolve_web_path(path)
+        if not target.exists() or not target.is_file():
+            return JSONResponse(status_code=404, content={"error": "Image not found"})
+        web_path, fav = set_favorite(to_web_path(target), bool(favorite))
+        return {"status": "ok", "path": web_path, "favorite": fav}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/models")

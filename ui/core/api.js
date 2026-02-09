@@ -157,6 +157,14 @@ export async function searchGallery(query, start = 0, limit = 2000) {
 }
 
 /**
+ * Filter gallery sessions by tag (`hd`, `favorites`) globally via manifest index.
+ */
+export async function filterGallery(kind, start = 0, limit = 2000) {
+    const k = encodeURIComponent(kind || '');
+    return get(`/gallery/filter?kind=${k}&start=${start}&limit=${limit}&_=${Date.now()}`);
+}
+
+/**
  * Fetch queued/running job metadata.
  */
 export async function getQueue() {
@@ -170,6 +178,16 @@ export async function cancelQueue(jobId) {
     const formData = new FormData();
     formData.append('job_id', jobId);
     return postForm('/queue/cancel', formData);
+}
+
+/**
+ * Favorite/unfavorite an image.
+ */
+export async function setFavorite(imagePath, favorite = true) {
+    const formData = new FormData();
+    formData.append('path', imagePath);
+    formData.append('favorite', favorite ? 'true' : 'false');
+    return postForm('/favorite', formData);
 }
 
 /**

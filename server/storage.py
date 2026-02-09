@@ -17,9 +17,13 @@ BASE.mkdir(exist_ok=True, parents=True)
 
 MANIFEST_FILE = BASE / "manifest.jsonl"
 SESSION_LOG = BASE / "session_log.json"
+FAVORITES_FILE = BASE / "favorites.json"
 _manifest_lock = threading.Lock()
 _manifest_cache: list[dict] | None = None
 _manifest_cache_mtime: float = -1.0
+_favorites_lock = threading.Lock()
+_favorites_cache: dict[str, bool] | None = None
+_favorites_cache_mtime: float = -1.0
 
 
 def to_web_path(path: Path) -> str:
@@ -42,10 +46,160 @@ def resolve_web_path(path_str: str) -> Path:
 def sanitize_settings(settings: dict) -> dict:
     """Remove non-serializable runtime fields from settings."""
     clean = dict(settings or {})
+
+    input_image_obj = clean.get("input_image")
+    mask_image_obj = clean.get("mask_image")
+    image_path = clean.get("image")
+    smart_extend = bool(clean.get("smart_extend"))
+
+    def _size_of(obj):
+        size = getattr(obj, "size", None)
+        if isinstance(size, tuple) and len(size) == 2:
+            try:
+                return [int(size[0]), int(size[1])]
+            except Exception:
+                return None
+        return None
+
+    input_size = _size_of(input_image_obj)
+    mask_size = _size_of(mask_image_obj)
+
+    has_input = bool(image_path or input_image_obj is not None)
+    has_mask = bool(mask_image_obj is not None)
+    mode = "txt2img"
+    if has_input and has_mask:
+        mode = "inpaint"
+    elif has_input:
+        mode = "img2img"
+
+    clean["mode"] = mode
+    clean["inoutpaint"] = {
+        "has_input_image": has_input,
+        "has_mask": has_mask,
+        "strength": clean.get("strength"),
+        "inpainting_fill": clean.get("inpainting_fill"),
+        "mask_blur": clean.get("mask_blur"),
+        "input_image_size": input_size,
+        "mask_size": mask_size,
+        "smart_extend": smart_extend,
+        "smart_extend_anchor": clean.get("smart_extend_anchor", "center"),
+        "smart_extend_feather": clean.get("smart_extend_feather"),
+        "smart_extend_auto_step": clean.get("smart_extend_auto_step"),
+        "smart_extend_step_growth": clean.get("smart_extend_step_growth"),
+        "smart_extend_offset_x": clean.get("smart_extend_offset_x"),
+        "smart_extend_offset_y": clean.get("smart_extend_offset_y"),
+        "smart_extend_source_box": clean.get("smart_extend_source_box"),
+        "smart_extend_refine": clean.get("smart_extend_refine"),
+        "smart_extend_refine_width": clean.get("smart_extend_refine_width"),
+        "smart_extend_refine_strength": clean.get("smart_extend_refine_strength"),
+        "smart_extend_refine_each_step": clean.get("smart_extend_refine_each_step"),
+    }
+
+    # Runtime-only objects/paths that should not be persisted verbatim.
     clean.pop("input_image", None)
     clean.pop("mask_image", None)
     clean.pop("image", None)
     return clean
+
+
+def _favorites_mtime() -> float:
+    try:
+        return FAVORITES_FILE.stat().st_mtime
+    except FileNotFoundError:
+        return -1.0
+
+
+def _load_favorites() -> dict[str, bool]:
+    if not FAVORITES_FILE.exists():
+        return {}
+    try:
+        with FAVORITES_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): bool(v) for k, v in data.items() if v}
+    except Exception:
+        return {}
+
+
+def _load_favorites_cached() -> dict[str, bool]:
+    global _favorites_cache, _favorites_cache_mtime
+    mtime = _favorites_mtime()
+    if _favorites_cache is not None and _favorites_cache_mtime == mtime:
+        return _favorites_cache
+    data = _load_favorites()
+    _favorites_cache = data
+    _favorites_cache_mtime = mtime
+    return data
+
+
+def _write_favorites(data: dict[str, bool]):
+    FAVORITES_FILE.parent.mkdir(exist_ok=True, parents=True)
+    tmp = FAVORITES_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    tmp.replace(FAVORITES_FILE)
+    global _favorites_cache, _favorites_cache_mtime
+    _favorites_cache = data
+    _favorites_cache_mtime = _favorites_mtime()
+
+
+def favorite_map() -> dict[str, bool]:
+    with _favorites_lock:
+        return dict(_load_favorites_cached())
+
+
+def is_favorite(path_str: str) -> bool:
+    target = to_web_path(resolve_web_path(path_str))
+    with _favorites_lock:
+        return bool(_load_favorites_cached().get(target))
+
+
+def set_favorite(path_str: str, favorite: bool) -> tuple[str, bool]:
+    target = to_web_path(resolve_web_path(path_str))
+    with _favorites_lock:
+        data = _load_favorites_cached().copy()
+        if favorite:
+            data[target] = True
+        else:
+            data.pop(target, None)
+        _write_favorites(data)
+    # Keep manifest view/search in sync without requiring rebuild.
+    with _manifest_lock:
+        entries = _load_manifest_entries_cached()
+        changed = False
+        for entry in entries:
+            if entry.get("image") != target:
+                continue
+            entry["favorite"] = bool(favorite)
+            meta = entry.get("meta")
+            if isinstance(meta, dict):
+                meta["favorite"] = bool(favorite)
+            changed = True
+        if changed:
+            _write_manifest_entries(entries)
+    return target, bool(favorite)
+
+
+def remove_favorite_image(path_str: str):
+    target = to_web_path(resolve_web_path(path_str))
+    with _favorites_lock:
+        data = _load_favorites_cached().copy()
+        if target in data:
+            data.pop(target, None)
+            _write_favorites(data)
+
+
+def remove_favorite_run(run_name: str):
+    prefix = f"outputs/{run_name}/"
+    with _favorites_lock:
+        data = _load_favorites_cached().copy()
+        keys = [k for k in data.keys() if k.startswith(prefix)]
+        if not keys:
+            return
+        for k in keys:
+            data.pop(k, None)
+        _write_favorites(data)
 
 
 def _sort_image_web_paths(images: list[str]) -> list[str]:
@@ -62,6 +216,7 @@ def _make_manifest_entry(image_path: Path, run_dir: Path, meta: dict) -> dict:
     variant_path = image_path.with_name(f"{image_path.stem}_upscaled.png")
     variant_web = to_web_path(variant_path) if variant_path.exists() else None
     safe_meta = sanitize_settings(meta)
+    safe_meta["favorite"] = is_favorite(web_image)
     timestamp = float(safe_meta.get("timestamp", 0.0) or 0.0)
     if timestamp <= 0:
         timestamp = time.time()
@@ -87,6 +242,7 @@ def _make_manifest_entry(image_path: Path, run_dir: Path, meta: dict) -> dict:
         "run": run_dir.name,
         "image": web_image,
         "variant": variant_web,
+        "favorite": bool(safe_meta.get("favorite")),
         "timestamp": timestamp,
         "meta": safe_meta,
         "searchable": " ".join(searchable_parts).lower(),
@@ -285,9 +441,42 @@ def search_manifest_sessions(query: str, start: int = 0, limit: int = 60) -> lis
         )
     )
 
+    ordered_entries = [entry for _, entry in matched]
+    return _group_entries_to_sessions(ordered_entries, start=start, limit=limit)
+
+
+def filter_manifest_sessions(kind: str, start: int = 0, limit: int = 2000) -> list[dict]:
+    """Filter manifest sessions by quick gallery tags like HD/favorites."""
+    ensure_manifest()
+    k = (kind or "").strip().lower()
+    if k not in {"hd", "favorites"}:
+        return []
+
+    entries = _load_manifest_entries_cached()
+    if not entries:
+        rebuild_manifest()
+        entries = _load_manifest_entries_cached()
+
+    matched = []
+    for entry in entries:
+        image_path = entry.get("image")
+        if not image_path:
+            continue
+        if k == "hd" and not entry.get("variant"):
+            continue
+        if k == "favorites" and not bool(entry.get("favorite")):
+            continue
+        matched.append(entry)
+
+    matched.sort(key=lambda e: -float(e.get("timestamp", 0.0)))
+    return _group_entries_to_sessions(matched, start=start, limit=limit)
+
+
+def _group_entries_to_sessions(entries: list[dict], start: int = 0, limit: int = 60) -> list[dict]:
+    """Convert flat manifest entries to gallery session structure."""
     grouped = {}
     order = []
-    for _, entry in matched:
+    for entry in entries:
         run = entry.get("run")
         if not run:
             continue
@@ -296,6 +485,7 @@ def search_manifest_sessions(query: str, start: int = 0, limit: int = 60) -> lis
                 "run": run,
                 "images": [],
                 "variants": {},
+                "favorites": {},
                 "meta": entry.get("meta", {}),
             }
             order.append(run)
@@ -307,6 +497,8 @@ def search_manifest_sessions(query: str, start: int = 0, limit: int = 60) -> lis
         variant = entry.get("variant")
         if variant and web_image:
             grouped[run]["variants"][Path(web_image).name] = variant
+        if bool(entry.get("favorite")) and web_image:
+            grouped[run]["favorites"][Path(web_image).name] = True
 
     sessions = []
     for run in order:
@@ -314,7 +506,9 @@ def search_manifest_sessions(query: str, start: int = 0, limit: int = 60) -> lis
         session["images"] = _sort_image_web_paths(session["images"])
         sessions.append(session)
 
-    return sessions[start:start + limit]
+    start_idx = max(0, int(start))
+    end_idx = start_idx + max(1, int(limit))
+    return sessions[start_idx:end_idx]
 
 
 def save_images(images, settings):

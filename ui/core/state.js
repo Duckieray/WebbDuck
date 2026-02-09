@@ -4,6 +4,8 @@
  */
 
 const STORAGE_KEY = 'webbduck_state_v2';
+const DENOISE_ACTUAL_MIN = 0.70;
+const DENOISE_ACTUAL_MAX = 1.00;
 
 // Default state values
 const DEFAULT_STATE = {
@@ -21,7 +23,19 @@ const DEFAULT_STATE = {
     secondPassModel: 'None',
     secondPassSteps: 20,
     secondPassBlend: 0.8,
-    denoisingStrength: 0.75,
+    denoisingStrength: 0.5,
+    denoisingScaleVersion: 2,
+    smartExtendEnabled: false,
+    smartExtendAnchor: 'center',
+    smartExtendFeather: 8,
+    smartExtendAutoStep: true,
+    smartExtendStepGrowth: 1.25,
+    smartExtendRefine: true,
+    smartExtendRefineEachStep: true,
+    smartExtendRefineWidth: 24,
+    smartExtendRefineStrength: 0.28,
+    smartExtendOffsetX: null,
+    smartExtendOffsetY: null,
     selectedLoras: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
@@ -42,6 +56,17 @@ export function initState() {
         if (saved) {
             const parsed = JSON.parse(saved);
             state = { ...DEFAULT_STATE, ...parsed };
+            if ((parsed.denoisingScaleVersion ?? 1) < 2) {
+                const oldActual = Number(parsed.denoisingStrength);
+                if (Number.isFinite(oldActual)) {
+                    const normalized = (oldActual - DENOISE_ACTUAL_MIN) / (DENOISE_ACTUAL_MAX - DENOISE_ACTUAL_MIN);
+                    state.denoisingStrength = Math.max(0, Math.min(1, normalized));
+                } else {
+                    state.denoisingStrength = DEFAULT_STATE.denoisingStrength;
+                }
+                state.denoisingScaleVersion = 2;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            }
         }
     } catch (error) {
         console.warn('Failed to load state from localStorage:', error);
@@ -195,6 +220,8 @@ export function clearLoras() {
 export function syncFromDOM() {
     const getValue = (id) => document.getElementById(id)?.value ?? '';
     const getChecked = (id) => document.getElementById(id)?.checked ?? false;
+    const denoiseRaw = parseFloat(getValue('denoising_strength'));
+    const denoisingStrength = Number.isFinite(denoiseRaw) ? denoiseRaw : 0.5;
 
     setState({
         prompt: getValue('prompt'),
@@ -210,7 +237,18 @@ export function syncFromDOM() {
         secondPassModel: getValue('second_pass_model'),
         secondPassSteps: parseInt(getValue('second_pass_steps')) || 20,
         secondPassBlend: parseFloat(getValue('second_pass_blend')) || 0.8,
-        denoisingStrength: parseFloat(getValue('denoising_strength')) || 0.75,
+        denoisingStrength,
+        smartExtendEnabled: getChecked('smart-extend-enabled'),
+        smartExtendAnchor: getValue('smart-extend-anchor') || 'center',
+        smartExtendFeather: parseInt(getValue('smart-extend-feather')) || 8,
+        smartExtendAutoStep: getChecked('smart-extend-auto-step'),
+        smartExtendStepGrowth: parseFloat(getValue('smart-extend-step-growth')) || 1.25,
+        smartExtendRefine: getChecked('smart-extend-refine'),
+        smartExtendRefineEachStep: getChecked('smart-extend-refine-each-step'),
+        smartExtendRefineWidth: parseInt(getValue('smart-extend-refine-width')) || 24,
+        smartExtendRefineStrength: parseFloat(getValue('smart-extend-refine-strength')) || 0.28,
+        smartExtendOffsetX: state.smartExtendOffsetX ?? null,
+        smartExtendOffsetY: state.smartExtendOffsetY ?? null,
     });
 }
 
@@ -241,6 +279,15 @@ export function syncToDOM() {
     setValue('second_pass_steps', state.secondPassSteps);
     setValue('second_pass_blend', state.secondPassBlend);
     setValue('denoising_strength', state.denoisingStrength);
+    setChecked('smart-extend-enabled', state.smartExtendEnabled);
+    setValue('smart-extend-anchor', state.smartExtendAnchor || 'center');
+    setValue('smart-extend-feather', state.smartExtendFeather ?? 8);
+    setChecked('smart-extend-auto-step', state.smartExtendAutoStep ?? true);
+    setValue('smart-extend-step-growth', state.smartExtendStepGrowth ?? 1.25);
+    setChecked('smart-extend-refine', state.smartExtendRefine ?? true);
+    setChecked('smart-extend-refine-each-step', state.smartExtendRefineEachStep ?? true);
+    setValue('smart-extend-refine-width', state.smartExtendRefineWidth ?? 24);
+    setValue('smart-extend-refine-strength', state.smartExtendRefineStrength ?? 0.28);
 
     // Sync Inpaint Mode Buttons
     const replaceBtn = document.getElementById('inpaint-replace');
@@ -270,13 +317,24 @@ function updateValueDisplays() {
         'second_pass_steps': 'second-steps-value',
         'second_pass_blend': 'blend-value',
         'denoising_strength': 'denoise-value',
+        'smart-extend-feather': 'smart-extend-feather-value',
+        'smart-extend-step-growth': 'smart-extend-step-growth-value',
+        'smart-extend-refine-width': 'smart-extend-refine-width-value',
+        'smart-extend-refine-strength': 'smart-extend-refine-strength-value',
     };
 
     for (const [inputId, displayId] of Object.entries(displays)) {
         const input = document.getElementById(inputId);
         const display = document.getElementById(displayId);
         if (input && display) {
-            display.textContent = input.value;
+            if (inputId === 'denoising_strength') {
+                const uiValue = parseFloat(input.value);
+                const clamped = Number.isFinite(uiValue) ? Math.max(0, Math.min(1, uiValue)) : 0.5;
+                const actual = DENOISE_ACTUAL_MIN + (DENOISE_ACTUAL_MAX - DENOISE_ACTUAL_MIN) * clamped;
+                display.textContent = actual.toFixed(2);
+            } else {
+                display.textContent = input.value;
+            }
         }
     }
 }
