@@ -146,8 +146,9 @@ def _build_step_fractions(src_w, src_h, dst_w, dst_h, growth):
     if dst_w <= src_w and dst_h <= src_h:
         return [1.0]
 
-    # Allow larger growth jumps so users can reduce pass count aggressively.
-    growth = max(1.05, min(3.00, float(growth)))
+    # Very large growth jumps increase semantic drift/duplication on later passes.
+    # Keep staged expansion conservative for continuity.
+    growth = max(1.05, min(1.50, float(growth)))
     fractions = []
     curr_w, curr_h = src_w, src_h
     progress = 0.0
@@ -184,7 +185,19 @@ def _build_step_fractions(src_w, src_h, dst_w, dst_h, growth):
     return fractions
 
 
-def _build_stage_canvas_and_mask(current_image, p_curr, p_next, src_w, src_h, dst_w, dst_h, left, top, feather):
+def _build_stage_canvas_and_mask(
+    current_image,
+    p_curr,
+    p_next,
+    src_w,
+    src_h,
+    dst_w,
+    dst_h,
+    left,
+    top,
+    feather,
+    stage_mask_blur=0.0,
+):
     if p_next >= 0.999:
         stage_w, stage_h = dst_w, dst_h
     else:
@@ -247,8 +260,15 @@ def _build_stage_canvas_and_mask(current_image, p_curr, p_next, src_w, src_h, ds
         "w": curr_w,
         "h": curr_h,
     }
-    stage_mask = _build_stage_soft_mask(stage_image.size, placement, feather)
-    return stage_image, stage_mask, placement
+    stage_hard_mask = _build_stage_hard_mask(stage_image.size, placement)
+    stage_mask = stage_hard_mask
+    # Optional tiny blur to soften transition while preserving strict source lock.
+    blur_r = max(0.0, float(stage_mask_blur))
+    if blur_r > 0:
+        stage_mask = stage_mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        stage_mask.paste(0, (ox, oy, ox + curr_w, oy + curr_h))
+    # Use the same mask for both inpaint and composite to avoid interpretation mismatch.
+    return stage_image, stage_mask, stage_mask, placement
 
 
 def _build_stage_soft_mask(size, placement, feather):
@@ -260,116 +280,43 @@ def _build_stage_soft_mask(size, placement, feather):
     x0, y0 = ox, oy
     x1, y1 = ox + w, oy + h
 
-    # Start with outside-region repaint, then carve source keep region.
-    # This guarantees expansion areas always update while the carried image
-    # remains protected except for controlled seam ramps.
+    # Start with outside-region repaint, then strictly protect source region.
     mask_arr = np.full((height, width), 255.0, dtype=np.float32)
     if x1 > x0 and y1 > y0:
         mask_arr[y0:y1, x0:x1] = 0.0
 
-    # "outpaint_retry" style seam ramping: fully repaint outside the source box,
-    # then apply soft overlap ramps around the source boundary to reduce hard seams.
-    outer = max(6, min(128, int(round(max(float(feather) * 2.0, 18.0)))))
-    # Preserve prior-stage pixels strictly; only repaint outside growth plus
-    # a soft outer falloff right at the seam.
-    inner = 0
-    inner_peak = 0.0
-    outer_floor = 170.0
-
-    def apply_left():
-        if x0 <= 0:
-            return
-        y_start = max(0, y0)
-        y_end = min(height, y1)
-        if y_end <= y_start:
-            return
-        if outer > 0:
-            band = min(x0, outer)
-            ramp_out = np.linspace(255.0, outer_floor, band, endpoint=True, dtype=np.float32)
-            mask_arr[y_start:y_end, x0 - band:x0] = np.maximum(
-                mask_arr[y_start:y_end, x0 - band:x0],
-                ramp_out[None, :],
-            )
-        if inner > 0 and inner_peak > 0:
-            inner_band = min(inner, max(1, w))
-            ramp_in = np.linspace(inner_peak, 0.0, inner_band, endpoint=True, dtype=np.float32)
-            mask_arr[y_start:y_end, x0:x0 + inner_band] = np.maximum(
-                mask_arr[y_start:y_end, x0:x0 + inner_band],
-                ramp_in[None, :],
-            )
-
-    def apply_right():
-        if x1 >= width:
-            return
-        y_start = max(0, y0)
-        y_end = min(height, y1)
-        if y_end <= y_start:
-            return
-        if outer > 0:
-            band = min(width - x1, outer)
-            ramp_out = np.linspace(outer_floor, 255.0, band, endpoint=True, dtype=np.float32)
-            mask_arr[y_start:y_end, x1:x1 + band] = np.maximum(
-                mask_arr[y_start:y_end, x1:x1 + band],
-                ramp_out[None, :],
-            )
-        if inner > 0 and inner_peak > 0:
-            inner_band = min(inner, max(1, w))
-            ramp_in = np.linspace(0.0, inner_peak, inner_band, endpoint=True, dtype=np.float32)
-            mask_arr[y_start:y_end, x1 - inner_band:x1] = np.maximum(
-                mask_arr[y_start:y_end, x1 - inner_band:x1],
-                ramp_in[None, :],
-            )
-
-    def apply_top():
-        if y0 <= 0:
-            return
-        x_start = max(0, x0)
-        x_end = min(width, x1)
-        if x_end <= x_start:
-            return
-        if outer > 0:
-            band = min(y0, outer)
-            ramp_out = np.linspace(255.0, outer_floor, band, endpoint=True, dtype=np.float32)
-            mask_arr[y0 - band:y0, x_start:x_end] = np.maximum(
-                mask_arr[y0 - band:y0, x_start:x_end],
-                ramp_out[:, None],
-            )
-        if inner > 0 and inner_peak > 0:
-            inner_band = min(inner, max(1, h))
-            ramp_in = np.linspace(inner_peak, 0.0, inner_band, endpoint=True, dtype=np.float32)
-            mask_arr[y0:y0 + inner_band, x_start:x_end] = np.maximum(
-                mask_arr[y0:y0 + inner_band, x_start:x_end],
-                ramp_in[:, None],
-            )
-
-    def apply_bottom():
-        if y1 >= height:
-            return
-        x_start = max(0, x0)
-        x_end = min(width, x1)
-        if x_end <= x_start:
-            return
-        if outer > 0:
-            band = min(height - y1, outer)
-            ramp_out = np.linspace(outer_floor, 255.0, band, endpoint=True, dtype=np.float32)
-            mask_arr[y1:y1 + band, x_start:x_end] = np.maximum(
-                mask_arr[y1:y1 + band, x_start:x_end],
-                ramp_out[:, None],
-            )
-        if inner > 0 and inner_peak > 0:
-            inner_band = min(inner, max(1, h))
-            ramp_in = np.linspace(0.0, inner_peak, inner_band, endpoint=True, dtype=np.float32)
-            mask_arr[y1 - inner_band:y1, x_start:x_end] = np.maximum(
-                mask_arr[y1 - inner_band:y1, x_start:x_end],
-                ramp_in[:, None],
-            )
-
-    apply_left()
-    apply_right()
-    apply_top()
-    apply_bottom()
+    # Feather only in extension areas, never inside source region.
+    feather_px = max(4, min(32, int(feather)))
+    if feather_px > 0:
+        if x0 > 0:
+            band = min(x0, feather_px)
+            ramp = np.linspace(255.0, 128.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y0:y1, x0 - band:x0] = ramp[None, :]
+        if x1 < width:
+            band = min(width - x1, feather_px)
+            ramp = np.linspace(128.0, 255.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y0:y1, x1:x1 + band] = ramp[None, :]
+        if y0 > 0:
+            band = min(y0, feather_px)
+            ramp = np.linspace(255.0, 128.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y0 - band:y0, x0:x1] = ramp[:, None]
+        if y1 < height:
+            band = min(height - y1, feather_px)
+            ramp = np.linspace(128.0, 255.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y1:y1 + band, x0:x1] = ramp[:, None]
 
     return Image.fromarray(np.clip(mask_arr, 0, 255).astype(np.uint8), mode="L")
+
+
+def _build_stage_hard_mask(size, placement):
+    width, height = size
+    ox = int(placement.get("ox", 0))
+    oy = int(placement.get("oy", 0))
+    w = int(placement.get("w", 0))
+    h = int(placement.get("h", 0))
+    mask = Image.new("L", (width, height), 255)
+    mask.paste(0, (ox, oy, ox + w, oy + h))
+    return mask
 
 
 def _composite_masked_update(base_image, updated_image, mask_image):
@@ -530,6 +477,9 @@ class InpaintMode(GenerationMode):
                 refine_final_stage = bool(settings.get("smart_extend_refine_final_stage", True))
                 refine_width = int(settings.get("smart_extend_refine_width", 24))
                 refine_strength_base = float(settings.get("smart_extend_refine_strength", 0.28))
+                stage_mask_blur = float(settings.get("smart_extend_stage_mask_blur", 0.0))
+                # CFG values that are too low often let late-stage outpaint drift or duplicate subjects.
+                stage_guidance_scale = max(guidance_scale, float(settings.get("smart_extend_min_cfg", 5.5)))
                 fractions = _build_step_fractions(sb_w, sb_h, final_w, final_h, growth)
 
                 base_seed = generator.initial_seed()
@@ -560,7 +510,7 @@ class InpaintMode(GenerationMode):
                         )
                         if callback:
                             update_stage(f"Outpaint pass {idx + 1}/{total_passes}{img_label}")
-                        stage_img, stage_mask, stage_place = _build_stage_canvas_and_mask(
+                        stage_img, stage_mask, stage_comp_mask, stage_place = _build_stage_canvas_and_mask(
                             curr_image,
                             p_curr,
                             p_next,
@@ -571,10 +521,21 @@ class InpaintMode(GenerationMode):
                             left,
                             top,
                             feather,
+                            stage_mask_blur,
                         )
                         pass_dir = f"img_{img_idx + 1:02d}/pass_{idx + 1:02d}"
                         _debug_save_image(debug_session, f"{pass_dir}/00_stage_input.png", stage_img)
                         _debug_save_image(debug_session, f"{pass_dir}/01_stage_mask.png", stage_mask)
+                        _debug_save_image(debug_session, f"{pass_dir}/01b_stage_comp_mask.png", stage_comp_mask)
+                        # Verify stage mask does not leak into protected source region.
+                        s_ox = int(stage_place.get("ox", 0))
+                        s_oy = int(stage_place.get("oy", 0))
+                        s_w = int(stage_place.get("w", 0))
+                        s_h = int(stage_place.get("h", 0))
+                        src_band = np.array(stage_mask.convert("L"), dtype=np.uint8)[s_oy:s_oy + s_h, s_ox:s_ox + s_w]
+                        leak_max = int(src_band.max()) if src_band.size > 0 else 0
+                        if leak_max > 1:
+                            log.warning("MASK LEAK in stage pass %s: source max=%s", idx + 1, leak_max)
                         _debug_log_event(debug_session, {
                             "type": "stage",
                             "img_index": img_idx + 1,
@@ -588,9 +549,12 @@ class InpaintMode(GenerationMode):
                                 "w": int(stage_place.get("w", 0)),
                                 "h": int(stage_place.get("h", 0)),
                             },
+                            "mask_source_max": leak_max,
                             "steps": int(stage_steps),
                         })
-                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
+                        # Keep stage seed stable across passes for continuity.
+                        # Per-pass seed jumps can cause large semantic drift in new regions.
+                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base)
                         stage_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
@@ -598,7 +562,7 @@ class InpaintMode(GenerationMode):
                             "image": stage_img,
                             "mask_image": stage_mask,
                             "strength": strength,
-                            "guidance_scale": guidance_scale,
+                            "guidance_scale": stage_guidance_scale,
                             "num_inference_steps": stage_steps,
                             "num_images_per_prompt": 1,
                             "width": stage_img.size[0],
@@ -617,14 +581,14 @@ class InpaintMode(GenerationMode):
 
                         # Strict stage chaining from outpaint_retry behavior:
                         # only update pixels selected by stage_mask.
-                        stage_composited = Image.composite(stage_raw, stage_img, stage_mask)
+                        stage_composited = Image.composite(stage_raw, stage_img, stage_comp_mask)
                         stage_out = [stage_composited]
                         _debug_save_image(debug_session, f"{pass_dir}/03_stage_composited.png", stage_composited)
                         _debug_log_event(debug_session, {
                             "type": "stage_composite",
                             "img_index": img_idx + 1,
                             "pass_index": idx + 1,
-                            **_debug_mask_leak_stats(stage_img, stage_composited, stage_mask),
+                            **_debug_mask_leak_stats(stage_img, stage_composited, stage_comp_mask),
                         })
 
                         # Intermediate seam polish keeps earlier stage joins from accumulating artifacts.
@@ -655,7 +619,7 @@ class InpaintMode(GenerationMode):
                                     update_stage(f"Outpaint final seam {idx + 1}/{total_passes}{img_label}")
                                 else:
                                     update_stage(f"Outpaint seam {idx + 1}/{max(1, total_passes - 1)}{img_label}")
-                            refine_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 7000 + idx)
+                            refine_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 7000)
                             refine_kwargs = {
                                 "prompt": prompt,
                                 "prompt_2": prompt_2 or None,
@@ -663,7 +627,7 @@ class InpaintMode(GenerationMode):
                                 "image": stage_out[0].convert("RGB"),
                                 "mask_image": seam_mask,
                                 "strength": stage_refine_strength,
-                                "guidance_scale": guidance_scale,
+                                "guidance_scale": stage_guidance_scale,
                                 "num_inference_steps": stage_refine_steps,
                                 "num_images_per_prompt": 1,
                                 "width": stage_img.size[0],
