@@ -1,12 +1,111 @@
 """Inpainting generation mode."""
 
+import json
 import logging
-from PIL import Image, ImageOps, ImageFilter, ImageStat
+import os
+import time
+from pathlib import Path
+
+import numpy as np
+from PIL import Image, ImageOps, ImageFilter
 import torch
 from .base import GenerationMode
 from webbduck.server.state import update_stage
 
 log = logging.getLogger(__name__)
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _smart_extend_debug_enabled(settings: dict) -> bool:
+    default_flag = os.getenv("WEBBDUCK_SMART_EXTEND_DEBUG", "1")
+    return _truthy(settings.get("smart_extend_debug", default_flag))
+
+
+def _init_smart_extend_debug_session(settings, base_seed, source_box, final_size, fractions):
+    if not _smart_extend_debug_enabled(settings):
+        return None
+    root = Path(os.getenv("WEBBDUCK_SMART_EXTEND_DEBUG_DIR", "outputs/_debug"))
+    run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}_seed{base_seed}"
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "type": "smart_extend_debug",
+        "created_at": time.time(),
+        "run_id": run_id,
+        "seed": int(base_seed),
+        "source_box": {
+            "x": int(source_box.get("x", 0)),
+            "y": int(source_box.get("y", 0)),
+            "w": int(source_box.get("w", 0)),
+            "h": int(source_box.get("h", 0)),
+        },
+        "target_size": [int(final_size[0]), int(final_size[1])],
+        "fractions": [float(x) for x in fractions],
+        "settings": {
+            "steps": int(settings.get("steps", 30)),
+            "strength": float(settings.get("strength", 0.99)),
+            "cfg": float(settings.get("cfg", 7.5)),
+            "smart_extend_feather": int(settings.get("smart_extend_feather", 8)),
+            "smart_extend_step_growth": float(settings.get("smart_extend_step_growth", 1.25)),
+            "smart_extend_refine": bool(settings.get("smart_extend_refine", True)),
+            "smart_extend_refine_each_step": bool(settings.get("smart_extend_refine_each_step", True)),
+            "smart_extend_refine_width": int(settings.get("smart_extend_refine_width", 24)),
+            "smart_extend_refine_strength": float(settings.get("smart_extend_refine_strength", 0.28)),
+        },
+        "events": [],
+    }
+    (run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return {"dir": run_dir, "meta": meta}
+
+
+def _debug_save_image(debug_session, relative_name, image):
+    if not debug_session:
+        return
+    try:
+        path = debug_session["dir"] / relative_name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+    except Exception as e:
+        log.warning("Smart-extend debug image save failed (%s): %s", relative_name, e)
+
+
+def _debug_log_event(debug_session, event):
+    if not debug_session:
+        return
+    try:
+        meta = debug_session["meta"]
+        events = meta.setdefault("events", [])
+        events.append(event)
+        (debug_session["dir"] / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.warning("Smart-extend debug meta write failed: %s", e)
+
+
+def _debug_mask_leak_stats(base_image, updated_image, mask_image):
+    base = np.array(base_image.convert("RGB"), dtype=np.int16)
+    updated = np.array(updated_image.convert("RGB"), dtype=np.int16)
+    mask = np.array(mask_image.convert("L"), dtype=np.uint8)
+    diff = np.abs(updated - base).astype(np.float32)
+    diff_map = np.max(diff, axis=2)
+    outside = mask <= 1
+    outside_count = int(np.count_nonzero(outside))
+    if outside_count <= 0:
+        return {"outside_px": 0, "outside_diff_mean": 0.0, "outside_diff_max": 0.0}
+    outside_vals = diff_map[outside]
+    return {
+        "outside_px": outside_count,
+        "outside_diff_mean": float(np.mean(outside_vals)),
+        "outside_diff_max": float(np.max(outside_vals)),
+    }
 
 
 def _build_smart_extend_seam_mask(size, source_box, seam_width):
@@ -100,41 +199,47 @@ def _build_stage_canvas_and_mask(current_image, p_curr, p_next, src_w, src_h, ds
     ox = nx - cx
     oy = ny - cy
 
-    # Context initializer for each stage.
-    # Important: do NOT project a resized full previous image into newly added areas.
-    # That can "echo" anatomy into empty space and create repeated-body artifacts.
-    top_strip = current_image.crop((0, 0, curr_w, 1)).resize((curr_w, 1))
-    bottom_strip = current_image.crop((0, curr_h - 1, curr_w, curr_h)).resize((curr_w, 1))
-    left_strip = current_image.crop((0, 0, 1, curr_h)).resize((curr_h, 1))
-    right_strip = current_image.crop((curr_w - 1, 0, curr_w, curr_h)).resize((curr_h, 1))
-    border_strip = Image.new("RGB", (curr_w * 2 + curr_h * 2, 1))
-    cursor = 0
-    for seg in (top_strip, bottom_strip, left_strip, right_strip):
-        border_strip.paste(seg, (cursor, 0))
-        cursor += seg.width
-    mean = ImageStat.Stat(border_strip).mean
-    fill_rgb = tuple(int(max(0, min(255, round(v)))) for v in mean[:3])
-
-    stage_bg = Image.new("RGB", (stage_w, stage_h), fill_rgb)
-    # Gentle blur just smooths flat fill; no structure injection.
-    blur_r = max(6, min(24, int(min(stage_w, stage_h) * 0.015)))
-    stage_bg = stage_bg.filter(ImageFilter.GaussianBlur(radius=blur_r))
-    stage_image = stage_bg
+    # Edge-strip extension initializer (from outpaint_retry logic):
+    # seed new canvas with current image border pixels, not global blur.
+    stage_image = Image.new("RGB", (stage_w, stage_h), current_image.getpixel((curr_w // 2, curr_h // 2)))
     stage_image.paste(current_image, (ox, oy))
 
-    # White = repaint; Black = keep previous stage.
-    stage_mask = Image.new("L", (stage_w, stage_h), 255)
-    stage_mask.paste(0, (ox, oy, ox + curr_w, oy + curr_h))
+    left_added = ox
+    right_added = max(0, stage_w - (ox + curr_w))
+    top_added = oy
+    bottom_added = max(0, stage_h - (oy + curr_h))
 
-    seam = max(1, min(10, 2 + int(feather) // 4))
-    if ox > 0:
-        stage_mask.paste(255, (ox, oy, min(stage_w, ox + seam), oy + curr_h))
-    if (ox + curr_w) < stage_w:
-        stage_mask.paste(255, (max(0, ox + curr_w - seam), oy, ox + curr_w, oy + curr_h))
-    if oy > 0:
-        stage_mask.paste(255, (ox, oy, ox + curr_w, min(stage_h, oy + seam)))
-    if (oy + curr_h) < stage_h:
-        stage_mask.paste(255, (ox, max(0, oy + curr_h - seam), ox + curr_w, oy + curr_h))
+    if left_added > 0:
+        left_strip = current_image.crop((0, 0, 1, curr_h)).resize((left_added, curr_h), Image.BILINEAR)
+        stage_image.paste(left_strip, (0, oy))
+    if right_added > 0:
+        right_strip = current_image.crop((curr_w - 1, 0, curr_w, curr_h)).resize((right_added, curr_h), Image.BILINEAR)
+        stage_image.paste(right_strip, (ox + curr_w, oy))
+    if top_added > 0:
+        top_strip = current_image.crop((0, 0, curr_w, 1)).resize((curr_w, top_added), Image.BILINEAR)
+        stage_image.paste(top_strip, (ox, 0))
+    if bottom_added > 0:
+        bottom_strip = current_image.crop((0, curr_h - 1, curr_w, curr_h)).resize((curr_w, bottom_added), Image.BILINEAR)
+        stage_image.paste(bottom_strip, (ox, oy + curr_h))
+
+    # Corner fills for diagonal growth.
+    if left_added > 0 and top_added > 0:
+        stage_image.paste(Image.new("RGB", (left_added, top_added), current_image.getpixel((0, 0))), (0, 0))
+    if right_added > 0 and top_added > 0:
+        stage_image.paste(
+            Image.new("RGB", (right_added, top_added), current_image.getpixel((curr_w - 1, 0))),
+            (ox + curr_w, 0),
+        )
+    if left_added > 0 and bottom_added > 0:
+        stage_image.paste(
+            Image.new("RGB", (left_added, bottom_added), current_image.getpixel((0, curr_h - 1))),
+            (0, oy + curr_h),
+        )
+    if right_added > 0 and bottom_added > 0:
+        stage_image.paste(
+            Image.new("RGB", (right_added, bottom_added), current_image.getpixel((curr_w - 1, curr_h - 1))),
+            (ox + curr_w, oy + curr_h),
+        )
 
     placement = {
         "ox": ox,
@@ -142,7 +247,138 @@ def _build_stage_canvas_and_mask(current_image, p_curr, p_next, src_w, src_h, ds
         "w": curr_w,
         "h": curr_h,
     }
+    stage_mask = _build_stage_soft_mask(stage_image.size, placement, feather)
     return stage_image, stage_mask, placement
+
+
+def _build_stage_soft_mask(size, placement, feather):
+    width, height = size
+    ox = int(placement.get("ox", 0))
+    oy = int(placement.get("oy", 0))
+    w = int(placement.get("w", 0))
+    h = int(placement.get("h", 0))
+    x0, y0 = ox, oy
+    x1, y1 = ox + w, oy + h
+
+    # Start with outside-region repaint, then carve source keep region.
+    # This guarantees expansion areas always update while the carried image
+    # remains protected except for controlled seam ramps.
+    mask_arr = np.full((height, width), 255.0, dtype=np.float32)
+    if x1 > x0 and y1 > y0:
+        mask_arr[y0:y1, x0:x1] = 0.0
+
+    # "outpaint_retry" style seam ramping: fully repaint outside the source box,
+    # then apply soft overlap ramps around the source boundary to reduce hard seams.
+    outer = max(6, min(128, int(round(max(float(feather) * 2.0, 18.0)))))
+    # Preserve prior-stage pixels strictly; only repaint outside growth plus
+    # a soft outer falloff right at the seam.
+    inner = 0
+    inner_peak = 0.0
+    outer_floor = 170.0
+
+    def apply_left():
+        if x0 <= 0:
+            return
+        y_start = max(0, y0)
+        y_end = min(height, y1)
+        if y_end <= y_start:
+            return
+        if outer > 0:
+            band = min(x0, outer)
+            ramp_out = np.linspace(255.0, outer_floor, band, endpoint=True, dtype=np.float32)
+            mask_arr[y_start:y_end, x0 - band:x0] = np.maximum(
+                mask_arr[y_start:y_end, x0 - band:x0],
+                ramp_out[None, :],
+            )
+        if inner > 0 and inner_peak > 0:
+            inner_band = min(inner, max(1, w))
+            ramp_in = np.linspace(inner_peak, 0.0, inner_band, endpoint=True, dtype=np.float32)
+            mask_arr[y_start:y_end, x0:x0 + inner_band] = np.maximum(
+                mask_arr[y_start:y_end, x0:x0 + inner_band],
+                ramp_in[None, :],
+            )
+
+    def apply_right():
+        if x1 >= width:
+            return
+        y_start = max(0, y0)
+        y_end = min(height, y1)
+        if y_end <= y_start:
+            return
+        if outer > 0:
+            band = min(width - x1, outer)
+            ramp_out = np.linspace(outer_floor, 255.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y_start:y_end, x1:x1 + band] = np.maximum(
+                mask_arr[y_start:y_end, x1:x1 + band],
+                ramp_out[None, :],
+            )
+        if inner > 0 and inner_peak > 0:
+            inner_band = min(inner, max(1, w))
+            ramp_in = np.linspace(0.0, inner_peak, inner_band, endpoint=True, dtype=np.float32)
+            mask_arr[y_start:y_end, x1 - inner_band:x1] = np.maximum(
+                mask_arr[y_start:y_end, x1 - inner_band:x1],
+                ramp_in[None, :],
+            )
+
+    def apply_top():
+        if y0 <= 0:
+            return
+        x_start = max(0, x0)
+        x_end = min(width, x1)
+        if x_end <= x_start:
+            return
+        if outer > 0:
+            band = min(y0, outer)
+            ramp_out = np.linspace(255.0, outer_floor, band, endpoint=True, dtype=np.float32)
+            mask_arr[y0 - band:y0, x_start:x_end] = np.maximum(
+                mask_arr[y0 - band:y0, x_start:x_end],
+                ramp_out[:, None],
+            )
+        if inner > 0 and inner_peak > 0:
+            inner_band = min(inner, max(1, h))
+            ramp_in = np.linspace(inner_peak, 0.0, inner_band, endpoint=True, dtype=np.float32)
+            mask_arr[y0:y0 + inner_band, x_start:x_end] = np.maximum(
+                mask_arr[y0:y0 + inner_band, x_start:x_end],
+                ramp_in[:, None],
+            )
+
+    def apply_bottom():
+        if y1 >= height:
+            return
+        x_start = max(0, x0)
+        x_end = min(width, x1)
+        if x_end <= x_start:
+            return
+        if outer > 0:
+            band = min(height - y1, outer)
+            ramp_out = np.linspace(outer_floor, 255.0, band, endpoint=True, dtype=np.float32)
+            mask_arr[y1:y1 + band, x_start:x_end] = np.maximum(
+                mask_arr[y1:y1 + band, x_start:x_end],
+                ramp_out[:, None],
+            )
+        if inner > 0 and inner_peak > 0:
+            inner_band = min(inner, max(1, h))
+            ramp_in = np.linspace(0.0, inner_peak, inner_band, endpoint=True, dtype=np.float32)
+            mask_arr[y1 - inner_band:y1, x_start:x_end] = np.maximum(
+                mask_arr[y1 - inner_band:y1, x_start:x_end],
+                ramp_in[:, None],
+            )
+
+    apply_left()
+    apply_right()
+    apply_top()
+    apply_bottom()
+
+    return Image.fromarray(np.clip(mask_arr, 0, 255).astype(np.uint8), mode="L")
+
+
+def _composite_masked_update(base_image, updated_image, mask_image):
+    """Apply diffusion update only where mask allows, preserving baseline elsewhere."""
+    return Image.composite(
+        updated_image.convert("RGB"),
+        base_image.convert("RGB"),
+        mask_image.convert("L"),
+    )
 
 
 def _build_stage_refine_mask(size, placement, seam_width):
@@ -167,7 +403,7 @@ def _build_stage_refine_mask(size, placement, seam_width):
     return mask
 
 
-def _build_soft_source_keep_mask(size, source_box, blend_radius):
+def _build_soft_source_keep_mask(size, source_box, blend_radius, inset_px=0):
     """Build soft keep mask for source region with inward/outward feather."""
     width, height = size
     x = int(source_box.get("x", 0))
@@ -177,10 +413,11 @@ def _build_soft_source_keep_mask(size, source_box, blend_radius):
     if w <= 0 or h <= 0:
         return None
 
-    x0 = max(0, x)
-    y0 = max(0, y)
-    x1 = min(width, x + w)
-    y1 = min(height, y + h)
+    inset = max(0, int(inset_px))
+    x0 = max(0, x + inset)
+    y0 = max(0, y + inset)
+    x1 = min(width, x + w - inset)
+    y1 = min(height, y + h - inset)
     if x1 <= x0 or y1 <= y0:
         return None
 
@@ -192,13 +429,26 @@ def _build_soft_source_keep_mask(size, source_box, blend_radius):
     return mask
 
 
-def _smart_extend_preserve_blend(src, generated, source_box, feather_px=8, seam_width=24, preserve_weight=1.0):
+def _smart_extend_preserve_blend(
+    src,
+    generated,
+    source_box,
+    feather_px=8,
+    seam_width=24,
+    preserve_weight=1.0,
+    preserve_inset_px=0,
+):
     """Blend original source back in with a soft source-box keep mask."""
     blend_radius = max(
         10.0,
         min(96.0, max(float(feather_px) * 2.0, float(seam_width) * 2.25)),
     )
-    keep_mask = _build_soft_source_keep_mask(generated.size, source_box, blend_radius)
+    keep_mask = _build_soft_source_keep_mask(
+        generated.size,
+        source_box,
+        blend_radius,
+        inset_px=preserve_inset_px,
+    )
     if keep_mask is None:
         return generated
     w = max(0.0, min(1.0, float(preserve_weight)))
@@ -258,6 +508,7 @@ class InpaintMode(GenerationMode):
 
         cb = callback.get_callback() if callback else None
         out = None
+        debug_session = None
 
         if settings.get("smart_extend") and bool(settings.get("smart_extend_auto_step", True)):
             source_box = settings.get("smart_extend_source_box") or {}
@@ -276,11 +527,19 @@ class InpaintMode(GenerationMode):
                 feather = int(settings.get("smart_extend_feather", 8))
                 refine_enabled = bool(settings.get("smart_extend_refine", True))
                 refine_each_step = bool(settings.get("smart_extend_refine_each_step", True))
+                refine_final_stage = bool(settings.get("smart_extend_refine_final_stage", True))
                 refine_width = int(settings.get("smart_extend_refine_width", 24))
                 refine_strength_base = float(settings.get("smart_extend_refine_strength", 0.28))
                 fractions = _build_step_fractions(sb_w, sb_h, final_w, final_h, growth)
 
                 base_seed = generator.initial_seed()
+                debug_session = _init_smart_extend_debug_session(
+                    settings,
+                    base_seed,
+                    source_box,
+                    (final_w, final_h),
+                    fractions,
+                )
                 staged_out = []
                 batch_count = max(1, num_images_per_prompt)
                 total_passes = len(fractions)
@@ -313,6 +572,24 @@ class InpaintMode(GenerationMode):
                             top,
                             feather,
                         )
+                        pass_dir = f"img_{img_idx + 1:02d}/pass_{idx + 1:02d}"
+                        _debug_save_image(debug_session, f"{pass_dir}/00_stage_input.png", stage_img)
+                        _debug_save_image(debug_session, f"{pass_dir}/01_stage_mask.png", stage_mask)
+                        _debug_log_event(debug_session, {
+                            "type": "stage",
+                            "img_index": img_idx + 1,
+                            "pass_index": idx + 1,
+                            "p_curr": float(p_curr),
+                            "p_next": float(p_next),
+                            "stage_size": [int(stage_img.size[0]), int(stage_img.size[1])],
+                            "placement": {
+                                "ox": int(stage_place.get("ox", 0)),
+                                "oy": int(stage_place.get("oy", 0)),
+                                "w": int(stage_place.get("w", 0)),
+                                "h": int(stage_place.get("h", 0)),
+                            },
+                            "steps": int(stage_steps),
+                        })
                         local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
                         stage_kwargs = {
                             "prompt": prompt,
@@ -332,36 +609,41 @@ class InpaintMode(GenerationMode):
                             stage_kwargs["callback_on_step_end"] = cb
                             stage_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
-                        stage_out = base_inpaint(**stage_kwargs).images
+                        stage_raw = base_inpaint(**stage_kwargs).images[0].convert("RGB")
+                        stage_out = [stage_raw]
+                        _debug_save_image(debug_session, f"{pass_dir}/02_stage_raw.png", stage_raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(stage_steps)
 
-                        # Keep previous stage stable and blend edge softly.
-                        keep_mask = ImageOps.invert(stage_mask)
-                        # Preserve prior pass output strongly to prevent anatomy drift
-                        # on second/third expansions.
-                        blend_r = max(0.0, min(1.0, feather / 20.0))
-                        if blend_r > 0:
-                            keep_mask = keep_mask.filter(ImageFilter.GaussianBlur(radius=blend_r))
-                        composed = []
-                        for img in stage_out:
-                            gen = img.convert("RGB")
-                            preserve = gen.copy()
-                            preserve.paste(curr_image, (stage_place["ox"], stage_place["oy"]))
-                            composed.append(Image.composite(preserve, gen, keep_mask))
-                        stage_out = composed
+                        # Strict stage chaining from outpaint_retry behavior:
+                        # only update pixels selected by stage_mask.
+                        stage_composited = Image.composite(stage_raw, stage_img, stage_mask)
+                        stage_out = [stage_composited]
+                        _debug_save_image(debug_session, f"{pass_dir}/03_stage_composited.png", stage_composited)
+                        _debug_log_event(debug_session, {
+                            "type": "stage_composite",
+                            "img_index": img_idx + 1,
+                            "pass_index": idx + 1,
+                            **_debug_mask_leak_stats(stage_img, stage_composited, stage_mask),
+                        })
 
                         # Intermediate seam polish keeps earlier stage joins from accumulating artifacts.
                         if (
                             refine_enabled
                             and refine_each_step
-                            and not is_final
                             and len(stage_out) > 0
+                            and (not is_final or refine_final_stage)
                         ):
-                            stage_refine_steps = max(6, int(stage_steps * 0.30))
+                            stage_refine_steps = max(
+                                8 if is_final else 6,
+                                int(stage_steps * (0.45 if is_final else 0.30)),
+                            )
                             stage_refine_strength = max(
-                                0.10,
-                                min(0.40, float(refine_strength_base) * 0.75),
+                                0.28 if is_final else 0.10,
+                                min(
+                                    0.55 if is_final else 0.35,
+                                    float(refine_strength_base) * (1.05 if is_final else 0.75),
+                                ),
                             )
                             seam_mask = _build_stage_refine_mask(
                                 stage_img.size,
@@ -369,7 +651,10 @@ class InpaintMode(GenerationMode):
                                 max(8, int(refine_width * 0.8)),
                             )
                             if callback:
-                                update_stage(f"Outpaint seam {idx + 1}/{max(1, total_passes - 1)}{img_label}")
+                                if is_final:
+                                    update_stage(f"Outpaint final seam {idx + 1}/{total_passes}{img_label}")
+                                else:
+                                    update_stage(f"Outpaint seam {idx + 1}/{max(1, total_passes - 1)}{img_label}")
                             refine_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 7000 + idx)
                             refine_kwargs = {
                                 "prompt": prompt,
@@ -388,10 +673,26 @@ class InpaintMode(GenerationMode):
                             if cb:
                                 refine_kwargs["callback_on_step_end"] = cb
                                 refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+                            baseline_stage = stage_out[0].convert("RGB")
+                            _debug_save_image(debug_session, f"{pass_dir}/04_refine_mask.png", seam_mask)
                             stage_refined = base_inpaint(**refine_kwargs).images[0]
+                            _debug_save_image(debug_session, f"{pass_dir}/05_refine_raw.png", stage_refined)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(stage_refine_steps)
-                            stage_out[0] = stage_refined
+                            stage_out[0] = _composite_masked_update(
+                                baseline_stage,
+                                stage_refined,
+                                seam_mask,
+                            )
+                            _debug_save_image(debug_session, f"{pass_dir}/06_refine_composited.png", stage_out[0])
+                            _debug_log_event(debug_session, {
+                                "type": "stage_refine_composite",
+                                "img_index": img_idx + 1,
+                                "pass_index": idx + 1,
+                                "refine_steps": int(stage_refine_steps),
+                                "refine_strength": float(stage_refine_strength),
+                                **_debug_mask_leak_stats(baseline_stage, stage_out[0], seam_mask),
+                            })
 
                         if is_final:
                             staged_image = stage_out[0]
@@ -439,8 +740,16 @@ class InpaintMode(GenerationMode):
             feather = int(settings.get("smart_extend_feather", 8))
             seam_width = int(settings.get("smart_extend_refine_width", 24))
 
-            # Optional second pass: seam-only harmonization for cleaner joins.
-            if bool(settings.get("smart_extend_refine", True)):
+            # Optional post-pass source-box seam harmonization.
+            # For auto-step staged outpaint, this tends to reintroduce old box seams,
+            # so keep it off by default unless explicitly enabled.
+            run_post_refine = bool(
+                settings.get(
+                    "smart_extend_post_refine",
+                    not bool(settings.get("smart_extend_auto_step", True)),
+                )
+            )
+            if bool(settings.get("smart_extend_refine", True)) and run_post_refine:
                 if callback:
                     update_stage("Seam refine pass 1/1")
                 seam_width_base = int(settings.get("smart_extend_refine_width", 24))
@@ -452,6 +761,7 @@ class InpaintMode(GenerationMode):
                 # Soft mask edges reduce visible hard transition lines.
                 seam_blur = max(4, min(20, int(max(feather * 1.2, seam_width * 0.35))))
                 seam_mask = seam_mask.filter(ImageFilter.GaussianBlur(radius=seam_blur))
+                _debug_save_image(debug_session, "final_refine/00_seam_mask.png", seam_mask)
                 refine_strength = float(settings.get("smart_extend_refine_strength", 0.28))
                 # Auto-elevate seam cleanup strength so it consistently removes boundary artifacts.
                 # User slider remains a floor; smart-extend denoise influences upper bound.
@@ -483,15 +793,33 @@ class InpaintMode(GenerationMode):
                     if cb:
                         refine_kwargs["callback_on_step_end"] = cb
                         refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+                    baseline_img = img.convert("RGB")
                     res = base_inpaint(**refine_kwargs).images[0]
+                    _debug_save_image(debug_session, f"final_refine/img_{idx + 1:02d}_01_raw.png", res)
                     if callback and hasattr(callback, "finish_pass"):
                         callback.finish_pass(refine_steps)
-                    refined.append(res)
+                    refined_img = _composite_masked_update(baseline_img, res, seam_mask)
+                    _debug_save_image(debug_session, f"final_refine/img_{idx + 1:02d}_02_composited.png", refined_img)
+                    _debug_log_event(debug_session, {
+                        "type": "final_refine_composite",
+                        "img_index": idx + 1,
+                        "refine_steps": int(refine_steps),
+                        "refine_strength": float(refine_strength),
+                        **_debug_mask_leak_stats(baseline_img, refined_img, seam_mask),
+                    })
+                    refined.append(refined_img)
                 out = refined
 
                 # Reintroduce source softly so seams blend without hard box restamping.
                 if mask is not None:
                     try:
+                        preserve_weight = float(settings.get("smart_extend_preserve_weight", 0.20))
+                        preserve_inset = int(
+                            settings.get(
+                                "smart_extend_preserve_inset",
+                                max(12, int(max(seam_width * 0.60, feather * 1.8))),
+                            )
+                        )
                         out = [
                             _smart_extend_preserve_blend(
                                 src,
@@ -499,10 +827,13 @@ class InpaintMode(GenerationMode):
                                 source_box,
                                 feather_px=feather,
                                 seam_width=seam_width,
-                                preserve_weight=0.35,
+                                preserve_weight=preserve_weight,
+                                preserve_inset_px=preserve_inset,
                             )
                             for img in out
                         ]
+                        for idx, img in enumerate(out):
+                            _debug_save_image(debug_session, f"final_refine/img_{idx + 1:02d}_03_after_preserve.png", img)
                     except Exception as e:
                         log.warning("Smart-extend post-refine preserve composite skipped: %s", e)
 
