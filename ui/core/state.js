@@ -18,6 +18,7 @@ const DEFAULT_STATE = {
     seed: null,
     scheduler: '',
     batch: 1,
+    longRunWarningMinutes: 8,
     baseModel: '',
     secondPassEnabled: false,
     secondPassModel: 'None',
@@ -232,6 +233,7 @@ export function syncFromDOM() {
         cfg: parseFloat(getValue('cfg')) || 7.5,
         scheduler: getValue('scheduler'),
         batch: parseInt(getValue('batch')) || 1,
+        longRunWarningMinutes: parseInt(getValue('long-run-warning-minutes')) || 8,
         baseModel: getValue('base_model'),
         secondPassEnabled: getChecked('second_pass_enabled'),
         secondPassModel: getValue('second_pass_model'),
@@ -273,6 +275,7 @@ export function syncToDOM() {
     setValue('cfg', state.cfg);
     setValue('scheduler', state.scheduler);
     setValue('batch', state.batch);
+    setValue('long-run-warning-minutes', state.longRunWarningMinutes ?? 8);
     setValue('base_model', state.baseModel);
     setChecked('second_pass_enabled', state.secondPassEnabled);
     setValue('second_pass_model', state.secondPassModel);

@@ -186,7 +186,7 @@ def _build_step_fractions(src_w, src_h, dst_w, dst_h, growth):
 
 
 def _auto_repeat_passes(src_w, src_h, dst_w, dst_h):
-    """Auto-select non-auto-step repeat passes from size expansion ratio."""
+    """Auto-select non-auto-step repeat passes from expansion ratio."""
     if src_w <= 0 or src_h <= 0:
         return 1
     scale_w = float(dst_w) / float(src_w)
@@ -194,13 +194,51 @@ def _auto_repeat_passes(src_w, src_h, dst_w, dst_h):
     scale = max(scale_w, scale_h)
     if scale <= 1.20:
         return 1
-    if scale <= 1.45:
+    if scale <= 1.75:
         return 2
-    if scale <= 1.80:
+    if scale <= 2.20:
+        return 2
+    if scale <= 2.80:
         return 3
-    if scale <= 2.60:
-        return 4
-    return 5
+    return 4
+
+
+def _intermediate_progress_for_large_scale(src_w, src_h, dst_w, dst_h, dim_ratio):
+    """Compute two-stage first pass progress using a target fraction of final dimensions."""
+    src_w = max(1, int(src_w))
+    src_h = max(1, int(src_h))
+    dst_w = max(src_w, int(dst_w))
+    dst_h = max(src_h, int(dst_h))
+    target_ratio = max(0.45, min(0.85, float(dim_ratio)))
+    if target_ratio >= 0.999:
+        return 1.0
+    area_src = float(src_w) * float(src_h)
+    area_dst = float(dst_w) * float(dst_h)
+    target_area = max(area_src + 1.0, min(area_dst - 1.0, area_dst * target_ratio * target_ratio))
+
+    dw = float(dst_w - src_w)
+    dh = float(dst_h - src_h)
+    if abs(dw) < 1e-6 and abs(dh) < 1e-6:
+        return 1.0
+
+    # Solve (src_w + dw*p) * (src_h + dh*p) = target_area for p in [0,1].
+    a = dw * dh
+    b = (float(src_w) * dh) + (float(src_h) * dw)
+    c = area_src - target_area
+    if abs(a) < 1e-8:
+        if abs(b) < 1e-8:
+            p = 1.0
+        else:
+            p = -c / b
+    else:
+        disc = (b * b) - (4.0 * a * c)
+        disc = max(0.0, disc)
+        sqrt_disc = disc ** 0.5
+        p1 = (-b + sqrt_disc) / (2.0 * a)
+        p2 = (-b - sqrt_disc) / (2.0 * a)
+        candidates = [x for x in (p1, p2) if 0.0 <= x <= 1.0]
+        p = candidates[0] if candidates else p1
+    return max(0.30, min(0.90, float(p)))
 
 
 def _build_stage_canvas_and_mask(
@@ -215,6 +253,7 @@ def _build_stage_canvas_and_mask(
     top,
     feather,
     stage_mask_blur=20.0,
+    initializer="edge_strips",
 ):
     if p_next >= 0.999:
         stage_w, stage_h = dst_w, dst_h
@@ -230,47 +269,54 @@ def _build_stage_canvas_and_mask(
     ox = nx - cx
     oy = ny - cy
 
-    # Edge-strip extension initializer (from outpaint_retry logic):
-    # seed new canvas with current image border pixels, not global blur.
-    stage_image = Image.new("RGB", (stage_w, stage_h), current_image.getpixel((curr_w // 2, curr_h // 2)))
-    stage_image.paste(current_image, (ox, oy))
+    if str(initializer).lower() == "soft_context":
+        # Softer context init prevents hard strip artifacts on very large chunk jumps.
+        context = ImageOps.fit(current_image, (stage_w, stage_h), method=Image.LANCZOS)
+        blur_r = max(18, min(120, int(min(stage_w, stage_h) * 0.06)))
+        stage_image = context.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        stage_image.paste(current_image, (ox, oy))
+    else:
+        # Edge-strip extension initializer (from outpaint_retry logic):
+        # seed new canvas with current image border pixels, not global blur.
+        stage_image = Image.new("RGB", (stage_w, stage_h), current_image.getpixel((curr_w // 2, curr_h // 2)))
+        stage_image.paste(current_image, (ox, oy))
 
-    left_added = ox
-    right_added = max(0, stage_w - (ox + curr_w))
-    top_added = oy
-    bottom_added = max(0, stage_h - (oy + curr_h))
+        left_added = ox
+        right_added = max(0, stage_w - (ox + curr_w))
+        top_added = oy
+        bottom_added = max(0, stage_h - (oy + curr_h))
 
-    if left_added > 0:
-        left_strip = current_image.crop((0, 0, 1, curr_h)).resize((left_added, curr_h), Image.BILINEAR)
-        stage_image.paste(left_strip, (0, oy))
-    if right_added > 0:
-        right_strip = current_image.crop((curr_w - 1, 0, curr_w, curr_h)).resize((right_added, curr_h), Image.BILINEAR)
-        stage_image.paste(right_strip, (ox + curr_w, oy))
-    if top_added > 0:
-        top_strip = current_image.crop((0, 0, curr_w, 1)).resize((curr_w, top_added), Image.BILINEAR)
-        stage_image.paste(top_strip, (ox, 0))
-    if bottom_added > 0:
-        bottom_strip = current_image.crop((0, curr_h - 1, curr_w, curr_h)).resize((curr_w, bottom_added), Image.BILINEAR)
-        stage_image.paste(bottom_strip, (ox, oy + curr_h))
+        if left_added > 0:
+            left_strip = current_image.crop((0, 0, 1, curr_h)).resize((left_added, curr_h), Image.BILINEAR)
+            stage_image.paste(left_strip, (0, oy))
+        if right_added > 0:
+            right_strip = current_image.crop((curr_w - 1, 0, curr_w, curr_h)).resize((right_added, curr_h), Image.BILINEAR)
+            stage_image.paste(right_strip, (ox + curr_w, oy))
+        if top_added > 0:
+            top_strip = current_image.crop((0, 0, curr_w, 1)).resize((curr_w, top_added), Image.BILINEAR)
+            stage_image.paste(top_strip, (ox, 0))
+        if bottom_added > 0:
+            bottom_strip = current_image.crop((0, curr_h - 1, curr_w, curr_h)).resize((curr_w, bottom_added), Image.BILINEAR)
+            stage_image.paste(bottom_strip, (ox, oy + curr_h))
 
-    # Corner fills for diagonal growth.
-    if left_added > 0 and top_added > 0:
-        stage_image.paste(Image.new("RGB", (left_added, top_added), current_image.getpixel((0, 0))), (0, 0))
-    if right_added > 0 and top_added > 0:
-        stage_image.paste(
-            Image.new("RGB", (right_added, top_added), current_image.getpixel((curr_w - 1, 0))),
-            (ox + curr_w, 0),
-        )
-    if left_added > 0 and bottom_added > 0:
-        stage_image.paste(
-            Image.new("RGB", (left_added, bottom_added), current_image.getpixel((0, curr_h - 1))),
-            (0, oy + curr_h),
-        )
-    if right_added > 0 and bottom_added > 0:
-        stage_image.paste(
-            Image.new("RGB", (right_added, bottom_added), current_image.getpixel((curr_w - 1, curr_h - 1))),
-            (ox + curr_w, oy + curr_h),
-        )
+        # Corner fills for diagonal growth.
+        if left_added > 0 and top_added > 0:
+            stage_image.paste(Image.new("RGB", (left_added, top_added), current_image.getpixel((0, 0))), (0, 0))
+        if right_added > 0 and top_added > 0:
+            stage_image.paste(
+                Image.new("RGB", (right_added, top_added), current_image.getpixel((curr_w - 1, 0))),
+                (ox + curr_w, 0),
+            )
+        if left_added > 0 and bottom_added > 0:
+            stage_image.paste(
+                Image.new("RGB", (left_added, bottom_added), current_image.getpixel((0, curr_h - 1))),
+                (0, oy + curr_h),
+            )
+        if right_added > 0 and bottom_added > 0:
+            stage_image.paste(
+                Image.new("RGB", (right_added, bottom_added), current_image.getpixel((curr_w - 1, curr_h - 1))),
+                (ox + curr_w, oy + curr_h),
+            )
 
     placement = {
         "ox": ox,
@@ -762,16 +808,67 @@ class InpaintMode(GenerationMode):
                     0.0,
                     min(0.20, float(settings.get("smart_extend_repeat_strength_drop", 0.08))),
                 )
-                repeat_cfg = max(guidance_scale, float(settings.get("smart_extend_repeat_min_cfg", 8.0)))
+                repeat_cfg = max(8.0, guidance_scale, float(settings.get("smart_extend_repeat_min_cfg", 8.0)))
+                repeat_seam_strength = max(
+                    0.18,
+                    min(0.60, float(settings.get("smart_extend_repeat_seam_strength", 0.42))),
+                )
+                repeat_seam_cfg = max(
+                    7.0,
+                    guidance_scale,
+                    float(settings.get("smart_extend_repeat_seam_cfg", 7.0)),
+                )
+                repeat_negative_prompt = negative_prompt
+                if bool(settings.get("smart_extend_repeat_anatomy_guard", True)):
+                    guard = (
+                        "duplicate person, extra person, second body, cloned body, duplicate torso, "
+                        "extra breasts, malformed anatomy, stretched limbs, elongated arms"
+                    )
+                    repeat_negative_prompt = f"{negative_prompt}, {guard}" if negative_prompt else guard
                 base_seed = generator.initial_seed()
+                scale_w = float(final_w) / float(max(1, src_base_w))
+                scale_h = float(final_h) / float(max(1, src_base_h))
+                large_scale = max(scale_w, scale_h) >= 2.20
+                use_chunked_two_stage = bool(settings.get("smart_extend_repeat_chunked", True)) and large_scale
+                intermediate_ratio = float(settings.get("smart_extend_chunk_scale", 0.60))
+                intermediate_progress = _intermediate_progress_for_large_scale(
+                    src_base_w,
+                    src_base_h,
+                    final_w,
+                    final_h,
+                    intermediate_ratio,
+                )
+                intermediate_stage_w = _round8(
+                    src_base_w + (final_w - src_base_w) * intermediate_progress,
+                    minimum=src_base_w,
+                )
+                intermediate_stage_h = _round8(
+                    src_base_h + (final_h - src_base_h) * intermediate_progress,
+                    minimum=src_base_h,
+                )
+                # Large full-canvas jumps can become unstable when repeated too many times.
+                # Cap auto repeats to a conservative range for huge expansions.
+                if auto_repeat and large_scale:
+                    repeat_passes = min(repeat_passes, 4)
                 if debug_session:
-                    debug_session["meta"]["fractions"] = [1.0 for _ in range(repeat_passes)]
+                    debug_session["meta"]["fractions"] = (
+                        [float(intermediate_progress), 1.0] + ([1.0] * max(0, repeat_passes - 2))
+                        if use_chunked_two_stage
+                        else [1.0 for _ in range(repeat_passes)]
+                    )
                     _debug_log_event(debug_session, {
                         "type": "repeat_mode_strategy",
-                        "strategy": "full_canvas_repeated_inpaint",
+                        "strategy": "chunked_two_stage_then_seam" if use_chunked_two_stage else "full_canvas_then_seam",
                         "repeat_passes": int(repeat_passes),
                         "repeat_strength": float(repeat_strength),
                         "repeat_cfg": float(repeat_cfg),
+                        "repeat_seam_strength": float(repeat_seam_strength),
+                        "repeat_seam_cfg": float(repeat_seam_cfg),
+                        "intermediate_ratio": float(intermediate_ratio),
+                        "intermediate_progress": float(intermediate_progress),
+                        "intermediate_stage_size": [int(intermediate_stage_w), int(intermediate_stage_h)],
+                        "scale_w": float(scale_w),
+                        "scale_h": float(scale_h),
                     })
 
                 out_imgs = []
@@ -781,56 +878,313 @@ class InpaintMode(GenerationMode):
                     img_label = f" (img {img_idx + 1}/{batch_count})" if batch_count > 1 else ""
                     curr_full = image.convert("RGB")
                     source_crop = None
+                    repeat_seam_mask = None
                     if sb_w > 0 and sb_h > 0:
                         source_crop = image.crop((sb_x, sb_y, sb_x + sb_w, sb_y + sb_h)).convert("RGB")
+                        if large_scale:
+                            seed_feather = int(settings.get("smart_extend_feather", 8))
+                            seed_blur = float(settings.get("smart_extend_stage_mask_blur", 20.0))
+                            # Prefer edge-strip seeded canvas on large jumps; blurred-global init can drift on pass 1.
+                            seeded_full, _, _, _ = _build_stage_canvas_and_mask(
+                                source_crop,
+                                0.0,
+                                1.0,
+                                src_base_w,
+                                src_base_h,
+                                final_w,
+                                final_h,
+                                sb_x,
+                                sb_y,
+                                seed_feather,
+                                seed_blur,
+                            )
+                            curr_full = seeded_full
+                        seam_w = max(12, int(settings.get("smart_extend_refine_width", 64)))
+                        seam_blur = max(4, min(20, int(max(8, seam_w * 0.28))))
+                        repeat_seam_mask = _build_smart_extend_seam_mask(
+                            curr_full.size,
+                            {"x": sb_x, "y": sb_y, "w": sb_w, "h": sb_h},
+                            seam_w,
+                        ).filter(ImageFilter.GaussianBlur(radius=seam_blur))
 
-                    for idx in range(repeat_passes):
+                    if use_chunked_two_stage and source_crop is not None and repeat_passes >= 2:
+                        # Pass 1: outpaint to intermediate size (~60% of target dims by default).
+                        p_curr = 0.0
+                        p_next = float(intermediate_progress)
+                        stage_img, stage_mask, stage_comp_mask, _ = _build_stage_canvas_and_mask(
+                            source_crop,
+                            p_curr,
+                            p_next,
+                            src_base_w,
+                            src_base_h,
+                            final_w,
+                            final_h,
+                            sb_x,
+                            sb_y,
+                            int(settings.get("smart_extend_feather", 8)),
+                            float(settings.get("smart_extend_stage_mask_blur", 20.0)),
+                            "edge_strips",
+                        )
                         if callback:
-                            update_stage(f"Outpaint repeat {idx + 1}/{repeat_passes}{img_label}")
-                        pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_{idx + 1:02d}"
-                        _debug_save_image(debug_session, f"{pass_dir}/00_input.png", curr_full)
-                        _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", mask_image)
-
-                        pass_strength = max(0.60, min(0.95, repeat_strength - (idx * repeat_strength_drop)))
-                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
+                            update_stage(f"Outpaint repeat 1/{repeat_passes}{img_label}")
+                        pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_01"
+                        _debug_save_image(debug_session, f"{pass_dir}/00_input.png", stage_img)
+                        _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", stage_mask)
+                        s1_strength = min(repeat_strength, float(settings.get("smart_extend_large_first_strength", 0.55)))
+                        s1_cfg = max(6.5, float(settings.get("smart_extend_large_first_cfg", 7.5)))
+                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 1009)
                         pass_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
-                            "negative_prompt": negative_prompt,
-                            "image": curr_full,
-                            "mask_image": mask_image,
-                            "strength": pass_strength,
-                            "guidance_scale": repeat_cfg,
+                            "negative_prompt": repeat_negative_prompt,
+                            "image": stage_img,
+                            "mask_image": stage_mask,
+                            "strength": s1_strength,
+                            "guidance_scale": s1_cfg,
                             "num_inference_steps": num_inference_steps,
                             "num_images_per_prompt": 1,
-                            "width": curr_full.size[0],
-                            "height": curr_full.size[1],
+                            "width": stage_img.size[0],
+                            "height": stage_img.size[1],
                             "generator": local_gen,
                         }
                         if cb:
                             pass_kwargs["callback_on_step_end"] = cb
                             pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-
                         raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
                         _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(num_inference_steps)
-
-                        composited = Image.composite(raw, curr_full, mask_image)
-                        if source_crop is not None:
-                            composited.paste(source_crop, (sb_x, sb_y))
-                        _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", composited)
+                        curr_full = Image.composite(raw, stage_img, stage_comp_mask)
+                        curr_full.paste(source_crop, (int(round(sb_x * p_next)), int(round(sb_y * p_next))))
+                        _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", curr_full)
                         _debug_log_event(debug_session, {
                             "type": "repeat_full_composite",
                             "img_index": img_idx + 1,
-                            "pass_index": idx + 1,
+                            "pass_index": 1,
                             "repeat_passes": int(repeat_passes),
                             "repeat_strength": float(repeat_strength),
-                            "pass_strength": float(pass_strength),
+                            "pass_strength": float(s1_strength),
+                            "pass_mask_mode": "intermediate_outpaint",
                             "repeat_cfg": float(repeat_cfg),
-                            **_debug_mask_leak_stats(curr_full, composited, mask_image),
+                            "pass_guidance_scale": float(s1_cfg),
+                            "stage_size": [int(stage_img.size[0]), int(stage_img.size[1])],
+                            **_debug_mask_leak_stats(stage_img, curr_full, stage_comp_mask),
                         })
-                        curr_full = composited
+
+                        # Pass 2: expand intermediate to full target.
+                        p_curr = p_next
+                        p_next = 1.0
+                        stage_img, stage_mask, stage_comp_mask, _ = _build_stage_canvas_and_mask(
+                            curr_full,
+                            p_curr,
+                            p_next,
+                            src_base_w,
+                            src_base_h,
+                            final_w,
+                            final_h,
+                            sb_x,
+                            sb_y,
+                            int(settings.get("smart_extend_feather", 8)),
+                            float(settings.get("smart_extend_stage_mask_blur", 20.0)),
+                            "edge_strips",
+                        )
+                        if callback:
+                            update_stage(f"Outpaint repeat 2/{repeat_passes}{img_label}")
+                        pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_02"
+                        _debug_save_image(debug_session, f"{pass_dir}/00_input.png", stage_img)
+                        _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", stage_mask)
+                        s2_strength = max(
+                            0.52,
+                            min(0.64, float(settings.get("smart_extend_large_second_strength", 0.58))),
+                        )
+                        s2_cfg = max(8.0, float(settings.get("smart_extend_large_second_cfg", 10.0)))
+                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 2018)
+                        pass_kwargs = {
+                            "prompt": prompt,
+                            "prompt_2": prompt_2 or None,
+                            "negative_prompt": repeat_negative_prompt,
+                            "image": stage_img,
+                            "mask_image": stage_mask,
+                            "strength": s2_strength,
+                            "guidance_scale": s2_cfg,
+                            "num_inference_steps": num_inference_steps,
+                            "num_images_per_prompt": 1,
+                            "width": stage_img.size[0],
+                            "height": stage_img.size[1],
+                            "generator": local_gen,
+                        }
+                        if cb:
+                            pass_kwargs["callback_on_step_end"] = cb
+                            pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+                        raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                        _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
+                        if callback and hasattr(callback, "finish_pass"):
+                            callback.finish_pass(num_inference_steps)
+                        curr_full = Image.composite(raw, stage_img, stage_comp_mask)
+                        if source_crop is not None:
+                            curr_full.paste(source_crop, (sb_x, sb_y))
+                        _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", curr_full)
+                        _debug_log_event(debug_session, {
+                            "type": "repeat_full_composite",
+                            "img_index": img_idx + 1,
+                            "pass_index": 2,
+                            "repeat_passes": int(repeat_passes),
+                            "repeat_strength": float(repeat_strength),
+                            "pass_strength": float(s2_strength),
+                            "pass_mask_mode": "chunk_to_final",
+                            "repeat_cfg": float(repeat_cfg),
+                            "pass_guidance_scale": float(s2_cfg),
+                            "stage_size": [int(stage_img.size[0]), int(stage_img.size[1])],
+                            **_debug_mask_leak_stats(stage_img, curr_full, stage_comp_mask),
+                        })
+
+                        # Remaining passes become seam-only refinement on final canvas.
+                        seam_start = 3
+                        seam_total = int(repeat_passes)
+                        for pass_index in range(seam_start, seam_total + 1):
+                            if repeat_seam_mask is None:
+                                break
+                            if callback:
+                                update_stage(f"Outpaint repeat {pass_index}/{repeat_passes}{img_label}")
+                            pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_{pass_index:02d}"
+                            _debug_save_image(debug_session, f"{pass_dir}/00_input.png", curr_full)
+                            _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", repeat_seam_mask)
+                            seam_strength = max(
+                                0.20,
+                                min(repeat_seam_strength, repeat_strength - ((pass_index - 1) * repeat_strength_drop)),
+                            )
+                            seam_cfg = repeat_seam_cfg
+                            local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (pass_index * 1009))
+                            pass_kwargs = {
+                                "prompt": prompt,
+                                "prompt_2": prompt_2 or None,
+                                "negative_prompt": repeat_negative_prompt,
+                                "image": curr_full,
+                                "mask_image": repeat_seam_mask,
+                                "strength": seam_strength,
+                                "guidance_scale": seam_cfg,
+                                "num_inference_steps": num_inference_steps,
+                                "num_images_per_prompt": 1,
+                                "width": curr_full.size[0],
+                                "height": curr_full.size[1],
+                                "generator": local_gen,
+                            }
+                            if cb:
+                                pass_kwargs["callback_on_step_end"] = cb
+                                pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+                            raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                            _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
+                            if callback and hasattr(callback, "finish_pass"):
+                                callback.finish_pass(num_inference_steps)
+                            composited = Image.composite(raw, curr_full, repeat_seam_mask)
+                            _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", composited)
+                            _debug_log_event(debug_session, {
+                                "type": "repeat_full_composite",
+                                "img_index": img_idx + 1,
+                                "pass_index": int(pass_index),
+                                "repeat_passes": int(repeat_passes),
+                                "repeat_strength": float(repeat_strength),
+                                "pass_strength": float(seam_strength),
+                                "pass_mask_mode": "seam_refine",
+                                "repeat_cfg": float(repeat_cfg),
+                                "pass_guidance_scale": float(seam_cfg),
+                                **_debug_mask_leak_stats(curr_full, composited, repeat_seam_mask),
+                            })
+                            mask_np = np.array(repeat_seam_mask.convert("L"), dtype=np.uint8)
+                            before_np = np.array(curr_full.convert("RGB"), dtype=np.int16)
+                            after_np = np.array(composited.convert("RGB"), dtype=np.int16)
+                            seam_sel = mask_np > 1
+                            if np.any(seam_sel):
+                                seam_diff = np.abs(after_np - before_np).max(axis=2)[seam_sel]
+                                seam_mean = float(np.mean(seam_diff))
+                                _debug_log_event(debug_session, {
+                                    "type": "repeat_seam_delta",
+                                    "img_index": img_idx + 1,
+                                    "pass_index": int(pass_index),
+                                    "seam_mean_delta": seam_mean,
+                                })
+                                curr_full = composited
+                                if seam_mean < float(settings.get("smart_extend_repeat_seam_stop_delta", 1.6)):
+                                    break
+                            else:
+                                curr_full = composited
+                    else:
+                        for idx in range(repeat_passes):
+                            if callback:
+                                update_stage(f"Outpaint repeat {idx + 1}/{repeat_passes}{img_label}")
+                            pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_{idx + 1:02d}"
+                            _debug_save_image(debug_session, f"{pass_dir}/00_input.png", curr_full)
+                            pass_mask_mode = "full_outpaint" if idx == 0 else "seam_refine"
+                            pass_mask = mask_image if (idx == 0 or repeat_seam_mask is None) else repeat_seam_mask
+                            pass_strength = max(0.58, min(0.90, repeat_strength - (idx * repeat_strength_drop)))
+                            pass_guidance_scale = repeat_cfg if idx == 0 else min(repeat_cfg, 7.0)
+                            if large_scale and idx == 0:
+                                pass_strength = min(pass_strength, float(settings.get("smart_extend_large_first_strength", 0.62)))
+                                pass_guidance_scale = min(pass_guidance_scale, float(settings.get("smart_extend_large_first_cfg", 5.5)))
+                            if idx > 0 and pass_mask_mode == "seam_refine":
+                                pass_strength = max(0.20, min(repeat_seam_strength, pass_strength))
+                                pass_guidance_scale = repeat_seam_cfg
+                            _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", pass_mask)
+
+                            local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
+                            pass_kwargs = {
+                                "prompt": prompt,
+                                "prompt_2": prompt_2 or None,
+                                "negative_prompt": repeat_negative_prompt,
+                                "image": curr_full,
+                                "mask_image": pass_mask,
+                                "strength": pass_strength,
+                                "guidance_scale": pass_guidance_scale,
+                                "num_inference_steps": num_inference_steps,
+                                "num_images_per_prompt": 1,
+                                "width": curr_full.size[0],
+                                "height": curr_full.size[1],
+                                "generator": local_gen,
+                            }
+                            if cb:
+                                pass_kwargs["callback_on_step_end"] = cb
+                                pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+
+                            raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                            _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
+                            if callback and hasattr(callback, "finish_pass"):
+                                callback.finish_pass(num_inference_steps)
+
+                            composited = Image.composite(raw, curr_full, pass_mask)
+                            if source_crop is not None and idx == 0:
+                                composited.paste(source_crop, (sb_x, sb_y))
+                            _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", composited)
+                            _debug_log_event(debug_session, {
+                                "type": "repeat_full_composite",
+                                "img_index": img_idx + 1,
+                                "pass_index": idx + 1,
+                                "repeat_passes": int(repeat_passes),
+                                "repeat_strength": float(repeat_strength),
+                                "pass_strength": float(pass_strength),
+                                "pass_mask_mode": pass_mask_mode,
+                                "repeat_cfg": float(repeat_cfg),
+                                "pass_guidance_scale": float(pass_guidance_scale),
+                                **_debug_mask_leak_stats(curr_full, composited, pass_mask),
+                            })
+
+                            if idx > 0 and pass_mask_mode == "seam_refine":
+                                mask_np = np.array(pass_mask.convert("L"), dtype=np.uint8)
+                                before_np = np.array(curr_full.convert("RGB"), dtype=np.int16)
+                                after_np = np.array(composited.convert("RGB"), dtype=np.int16)
+                                seam_sel = mask_np > 1
+                                if np.any(seam_sel):
+                                    seam_diff = np.abs(after_np - before_np).max(axis=2)[seam_sel]
+                                    seam_mean = float(np.mean(seam_diff))
+                                    _debug_log_event(debug_session, {
+                                        "type": "repeat_seam_delta",
+                                        "img_index": img_idx + 1,
+                                        "pass_index": idx + 1,
+                                        "seam_mean_delta": seam_mean,
+                                    })
+                                    if seam_mean < float(settings.get("smart_extend_repeat_seam_stop_delta", 1.6)):
+                                        curr_full = composited
+                                        break
+                            curr_full = composited
 
                     out_imgs.append(curr_full)
                 out = out_imgs

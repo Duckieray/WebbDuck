@@ -9,7 +9,7 @@ from PIL import Image, ImageOps, ImageStat, ImageFilter
 from webbduck.core.pipeline import pipeline_manager
 from webbduck.core.captioner import unload_captioners
 from webbduck.modes import select_mode
-from webbduck.modes.inpaint import _build_step_fractions
+from webbduck.modes.inpaint import _build_step_fractions, _auto_repeat_passes
 from webbduck.server.state import update_progress
 
 log = logging.getLogger(__name__)
@@ -59,22 +59,32 @@ class GlobalProgress:
 def estimate_total_steps(settings):
     """Estimate total steps based on settings."""
     steps = int(settings.get("steps", 30))
+    batch_count = max(1, int(settings.get("num_images", 1)))
     smart_extend = bool(settings.get("smart_extend"))
     smart_extend_auto_step = bool(settings.get("smart_extend_auto_step", True))
+    refine_enabled = bool(settings.get("smart_extend_refine", True))
+
+    def _get_src_dims():
+        source_box = settings.get("smart_extend_source_box") or {}
+        if source_box.get("w") and source_box.get("h"):
+            return int(source_box.get("w")), int(source_box.get("h"))
+        if settings.get("input_image") is not None:
+            try:
+                return settings["input_image"].size
+            except Exception:
+                return None, None
+        return None, None
+
+    def _post_refine_enabled_for_non_auto(src_w, src_h, dst_w, dst_h):
+        explicit = settings.get("smart_extend_post_refine")
+        if explicit is not None:
+            return bool(explicit)
+        return _auto_repeat_passes(src_w, src_h, dst_w, dst_h) <= 1
 
     # Smart-extend multi-pass inpaint can run several denoise passes plus optional seam refine.
     # Estimate these so the progress bar represents staged generation more accurately.
     if smart_extend and smart_extend_auto_step:
-        src_w = src_h = None
-        source_box = settings.get("smart_extend_source_box") or {}
-        if source_box.get("w") and source_box.get("h"):
-            src_w = int(source_box.get("w"))
-            src_h = int(source_box.get("h"))
-        elif settings.get("input_image") is not None:
-            try:
-                src_w, src_h = settings["input_image"].size
-            except Exception:
-                src_w = src_h = None
+        src_w, src_h = _get_src_dims()
 
         dst_w = int(settings.get("width", 1024))
         dst_h = int(settings.get("height", 1024))
@@ -83,8 +93,9 @@ def estimate_total_steps(settings):
         if src_w and src_h:
             fractions = _build_step_fractions(src_w, src_h, dst_w, dst_h, growth)
             passes = len(fractions)
-            batch_count = max(1, int(settings.get("num_images", 1)))
             per_image_total = 0
+            refine_each = bool(settings.get("smart_extend_refine_each_step", True))
+            refine_final_stage = bool(settings.get("smart_extend_refine_final_stage", True))
             for idx, p_next in enumerate(fractions):
                 is_final = idx == (passes - 1)
                 stage_steps = steps if is_final else max(
@@ -92,16 +103,36 @@ def estimate_total_steps(settings):
                     int(steps * (0.55 + 0.45 * float(p_next))),
                 )
                 per_image_total += stage_steps
-                if (
-                    bool(settings.get("smart_extend_refine_each_step", True))
-                    and bool(settings.get("smart_extend_refine", True))
-                    and not is_final
-                ):
-                    per_image_total += max(6, int(stage_steps * 0.30))
+                if refine_enabled and refine_each and (not is_final or refine_final_stage):
+                    per_image_total += max(
+                        8 if is_final else 6,
+                        int(stage_steps * (0.45 if is_final else 0.30)),
+                    )
             total = per_image_total * batch_count
-            if bool(settings.get("smart_extend_refine", True)):
-                total += max(8, int(steps * 0.35)) * batch_count
+            if refine_enabled and bool(settings.get("smart_extend_post_refine", False)):
+                total += max(10, int(steps * 0.45)) * batch_count
             return total
+    elif smart_extend and not smart_extend_auto_step:
+        src_w, src_h = _get_src_dims()
+        if src_w and src_h:
+            dst_w = int(settings.get("width", src_w))
+            dst_h = int(settings.get("height", src_h))
+            repeat_raw = settings.get("smart_extend_repeat_passes", "auto")
+            auto_repeat = repeat_raw is None or (
+                isinstance(repeat_raw, str) and repeat_raw.strip().lower() == "auto"
+            )
+            if auto_repeat:
+                repeat_passes = _auto_repeat_passes(src_w, src_h, dst_w, dst_h)
+            else:
+                try:
+                    repeat_passes = max(1, int(repeat_raw))
+                except Exception:
+                    repeat_passes = _auto_repeat_passes(src_w, src_h, dst_w, dst_h)
+
+            per_image_total = steps * (repeat_passes if repeat_passes > 1 else 1)
+            if refine_enabled and _post_refine_enabled_for_non_auto(src_w, src_h, dst_w, dst_h):
+                per_image_total += max(10, int(steps * 0.45))
+            return per_image_total * batch_count
 
     second_pass = settings.get("second_pass_model")
     

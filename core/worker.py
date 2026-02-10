@@ -3,6 +3,7 @@
 import asyncio
 import gc
 import logging
+import time
 import torch
 import cv2
 import numpy as np
@@ -137,12 +138,22 @@ async def gpu_worker(queue):
             update_progress(0.4)
             await broadcast_state(snapshot())
 
+            gen_started_monotonic = time.perf_counter()
+            gen_started_utc = datetime.utcnow().isoformat() + "Z"
             images, seed = await loop.run_in_executor(
                 None, run_generation, job["settings"]
             )
+            gen_finished_monotonic = time.perf_counter()
+            gen_finished_utc = datetime.utcnow().isoformat() + "Z"
 
             # Ensure actual seed is saved in metadata
             job["settings"]["seed"] = seed
+            job["settings"]["generation_started_at"] = gen_started_utc
+            job["settings"]["generation_finished_at"] = gen_finished_utc
+            job["settings"]["generation_elapsed_seconds"] = round(
+                max(0.0, gen_finished_monotonic - gen_started_monotonic),
+                3,
+            )
 
             update_stage("Decoding")
             update_progress(0.85)

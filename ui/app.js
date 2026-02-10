@@ -65,47 +65,87 @@ function buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth) {
     return fractions;
 }
 
+function estimateAutoRepeatPasses(srcW, srcH, dstW, dstH) {
+    if (!(srcW > 0 && srcH > 0)) return 1;
+    const scaleW = dstW / srcW;
+    const scaleH = dstH / srcH;
+    const scale = Math.max(scaleW, scaleH);
+    const maxExtraDim = Math.max(0, dstW - srcW, dstH - srcH);
+    const repeatByPixels = Math.max(1, Math.ceil(maxExtraDim / 320.0));
+    let repeatByScale = 1;
+    if (scale > 1.20) repeatByScale = 2;
+    if (scale > 1.45) repeatByScale = 3;
+    if (scale > 1.80) repeatByScale = 4;
+    if (scale > 2.60) repeatByScale = 5;
+    return Math.max(1, Math.min(7, Math.max(repeatByPixels, repeatByScale) + (scale > 2.20 ? 1 : 0)));
+}
+
 function estimateSmartExtendRuntimeSeconds() {
-    if (!window._uploadedImage || !byId('smart-extend-enabled')?.checked) return null;
-    const srcW = Number(window._uploadedImageDims?.width || 0);
-    const srcH = Number(window._uploadedImageDims?.height || 0);
+    const steps = Math.max(1, Number(byId('steps')?.value || 30));
+    const batch = Math.max(1, Number(byId('batch')?.value || 1));
     const dstW = Number(byId('width')?.value || 0);
     const dstH = Number(byId('height')?.value || 0);
+    const secondPassEnabled = Boolean(byId('second_pass_enabled')?.checked);
+
+    // Base fallback estimate for non-smart runs.
+    if (!(window._uploadedImage && byId('smart-extend-enabled')?.checked)) {
+        if (!(dstW > 0 && dstH > 0)) return null;
+        const mp = (dstW * dstH) / 1_000_000;
+        const stepCost = 0.32 * Math.pow(Math.max(0.5, mp), 1.20);
+        let perImage = steps * stepCost;
+        if (secondPassEnabled) {
+            perImage += Math.max(6, Math.floor(steps * 0.7)) * (stepCost * 0.90);
+        }
+        return perImage * batch;
+    }
+
+    const srcW = Number(window._uploadedImageDims?.width || 0);
+    const srcH = Number(window._uploadedImageDims?.height || 0);
     if (!(srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0)) return null;
     if (dstW <= srcW && dstH <= srcH) return null;
 
-    const steps = Math.max(1, Number(byId('steps')?.value || 30));
     const autoStep = Boolean(byId('smart-extend-auto-step')?.checked);
     const growth = Number(byId('smart-extend-step-growth')?.value || 1.25);
     const refineEnabled = Boolean(byId('smart-extend-refine')?.checked);
     const refineEach = Boolean(byId('smart-extend-refine-each-step')?.checked);
-    const batch = Math.max(1, Number(byId('batch')?.value || 1));
-    const fractions = autoStep
-        ? buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth)
-        : [1.0];
 
     const stepCost = (mp) => 0.32 * Math.pow(Math.max(0.5, mp), 1.20); // sec/step
     const refineCost = (mp) => 0.22 * Math.pow(Math.max(0.5, mp), 1.12); // sec/step seam pass
     let perImageSec = 0;
 
-    for (let i = 0; i < fractions.length; i++) {
-        const p = fractions[i];
-        const isFinal = i === fractions.length - 1;
-        const stageW = isFinal ? dstW : roundTo8(srcW + (dstW - srcW) * p);
-        const stageH = isFinal ? dstH : roundTo8(srcH + (dstH - srcH) * p);
-        const mp = (stageW * stageH) / 1_000_000;
-        const stageSteps = isFinal ? steps : Math.max(12, Math.floor(steps * (0.55 + 0.45 * p)));
-        perImageSec += stageSteps * stepCost(mp);
-        if (refineEnabled && refineEach && !isFinal) {
-            const refineSteps = Math.max(6, Math.floor(stageSteps * 0.30));
-            perImageSec += refineSteps * refineCost(mp);
+    if (autoStep) {
+        const fractions = buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth);
+        for (let i = 0; i < fractions.length; i++) {
+            const p = fractions[i];
+            const isFinal = i === fractions.length - 1;
+            const stageW = isFinal ? dstW : roundTo8(srcW + (dstW - srcW) * p);
+            const stageH = isFinal ? dstH : roundTo8(srcH + (dstH - srcH) * p);
+            const mp = (stageW * stageH) / 1_000_000;
+            const stageSteps = isFinal ? steps : Math.max(12, Math.floor(steps * (0.55 + 0.45 * p)));
+            perImageSec += stageSteps * stepCost(mp);
+            if (refineEnabled && refineEach && !isFinal) {
+                const refineSteps = Math.max(6, Math.floor(stageSteps * 0.30));
+                perImageSec += refineSteps * refineCost(mp);
+            }
+        }
+        if (refineEnabled) {
+            const finalMp = (dstW * dstH) / 1_000_000;
+            const finalRefineSteps = Math.max(8, Math.floor(steps * 0.35));
+            perImageSec += finalRefineSteps * refineCost(finalMp);
+        }
+    } else {
+        const repeatPasses = estimateAutoRepeatPasses(srcW, srcH, dstW, dstH);
+        const fullMp = (dstW * dstH) / 1_000_000;
+        perImageSec += repeatPasses * steps * stepCost(fullMp);
+        if (refineEnabled && repeatPasses <= 1) {
+            const finalRefineSteps = Math.max(10, Math.floor(steps * 0.45));
+            perImageSec += finalRefineSteps * refineCost(fullMp);
         }
     }
 
-    if (refineEnabled) {
-        const finalMp = (dstW * dstH) / 1_000_000;
-        const finalRefineSteps = Math.max(8, Math.floor(steps * 0.35));
-        perImageSec += finalRefineSteps * refineCost(finalMp);
+    if (secondPassEnabled) {
+        const mp = (dstW * dstH) / 1_000_000;
+        perImageSec += Math.max(6, Math.floor(steps * 0.7)) * (stepCost(mp) * 0.90);
     }
 
     return perImageSec * batch;
@@ -114,13 +154,14 @@ function estimateSmartExtendRuntimeSeconds() {
 async function maybeShowRuntimePreflightWarning() {
     const seconds = estimateSmartExtendRuntimeSeconds();
     if (!Number.isFinite(seconds) || seconds <= 0) return true;
-    if (seconds < 8 * 60) return true;
+    const thresholdMin = Math.max(1, Number(byId('long-run-warning-minutes')?.value || getState('longRunWarningMinutes') || 8));
+    if (seconds < thresholdMin * 60) return true;
 
     const minutes = Math.max(1, Math.round(seconds / 60));
     const hours = seconds >= 3600 ? ` (~${(seconds / 3600).toFixed(1)} hours)` : '';
-    const msg = `Grab a cup of coffee.\n\nThis run is estimated to take about ${minutes} minutes${hours} with current settings.\n\nContinue anyway?`;
+    const msg = `Get some coffee.\n\nThis run is estimated to take about ${minutes} minutes${hours} with current settings.\n\nContinue anyway?`;
     return await showAppConfirmModal({
-        title: 'Long Outpaint Run',
+        title: 'Get Some Coffee',
         message: msg,
         okText: 'Start Run',
         cancelText: 'Cancel',
@@ -431,7 +472,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -2227,4 +2268,3 @@ function normalizeQueueThumbUrl(src) {
     if (!src.startsWith('/inputs/')) return null;
     return src;
 }
-
