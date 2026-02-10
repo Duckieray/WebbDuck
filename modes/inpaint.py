@@ -185,6 +185,24 @@ def _build_step_fractions(src_w, src_h, dst_w, dst_h, growth):
     return fractions
 
 
+def _auto_repeat_passes(src_w, src_h, dst_w, dst_h):
+    """Auto-select non-auto-step repeat passes from size expansion ratio."""
+    if src_w <= 0 or src_h <= 0:
+        return 1
+    scale_w = float(dst_w) / float(src_w)
+    scale_h = float(dst_h) / float(src_h)
+    scale = max(scale_w, scale_h)
+    if scale <= 1.20:
+        return 1
+    if scale <= 1.45:
+        return 2
+    if scale <= 1.80:
+        return 3
+    if scale <= 2.60:
+        return 4
+    return 5
+
+
 def _build_stage_canvas_and_mask(
     current_image,
     p_curr,
@@ -196,7 +214,7 @@ def _build_stage_canvas_and_mask(
     left,
     top,
     feather,
-    stage_mask_blur=0.0,
+    stage_mask_blur=20.0,
 ):
     if p_next >= 0.999:
         stage_w, stage_h = dst_w, dst_h
@@ -421,7 +439,6 @@ class InpaintMode(GenerationMode):
         # Actually SDXL Inpaint takes `strength` (0.0-1.0). 1.0 = destruct.
         strength = float(settings.get("strength", 0.99)) # Default to high replacement if not specified? 
         # Frontend slider defaults to 0.75 which is good.
-        smart_extend_enabled = bool(settings.get("smart_extend"))
         
         guidance_scale = float(settings.get("cfg", 7.5))
         num_inference_steps = int(settings.get("steps", 30))
@@ -477,9 +494,21 @@ class InpaintMode(GenerationMode):
                 refine_final_stage = bool(settings.get("smart_extend_refine_final_stage", True))
                 refine_width = int(settings.get("smart_extend_refine_width", 24))
                 refine_strength_base = float(settings.get("smart_extend_refine_strength", 0.28))
-                stage_mask_blur = float(settings.get("smart_extend_stage_mask_blur", 0.0))
-                # CFG values that are too low often let late-stage outpaint drift or duplicate subjects.
-                stage_guidance_scale = max(guidance_scale, float(settings.get("smart_extend_min_cfg", 5.5)))
+                stage_mask_blur = float(settings.get("smart_extend_stage_mask_blur", 20.0))
+                # Outpaint typically needs stronger CFG for scene/subject continuity.
+                stage_guidance_scale = max(guidance_scale, float(settings.get("smart_extend_min_cfg", 10.0)))
+                stage_inpaint_strength = max(
+                    0.60,
+                    min(0.95, float(settings.get("smart_extend_stage_inpaint_strength", 0.80))),
+                )
+                stage_late_strength_drop = max(
+                    0.0,
+                    min(0.20, float(settings.get("smart_extend_stage_late_strength_drop", 0.12))),
+                )
+                stage_negative_prompt = negative_prompt
+                if bool(settings.get("smart_extend_anatomy_guard", True)):
+                    guard = "elongated limbs, long arms, extra limbs, duplicated body, malformed shoulders"
+                    stage_negative_prompt = f"{negative_prompt}, {guard}" if negative_prompt else guard
                 fractions = _build_step_fractions(sb_w, sb_h, final_w, final_h, growth)
 
                 base_seed = generator.initial_seed()
@@ -536,6 +565,13 @@ class InpaintMode(GenerationMode):
                         leak_max = int(src_band.max()) if src_band.size > 0 else 0
                         if leak_max > 1:
                             log.warning("MASK LEAK in stage pass %s: source max=%s", idx + 1, leak_max)
+                        stage_strength_this_pass = max(
+                            0.68,
+                            min(
+                                0.92,
+                                stage_inpaint_strength - (stage_late_strength_drop if p_next > 0.85 else 0.0),
+                            ),
+                        )
                         _debug_log_event(debug_session, {
                             "type": "stage",
                             "img_index": img_idx + 1,
@@ -549,6 +585,9 @@ class InpaintMode(GenerationMode):
                                 "w": int(stage_place.get("w", 0)),
                                 "h": int(stage_place.get("h", 0)),
                             },
+                            "stage_strength": float(stage_strength_this_pass),
+                            "stage_cfg": float(stage_guidance_scale),
+                            "stage_mask_blur": float(stage_mask_blur),
                             "mask_source_max": leak_max,
                             "steps": int(stage_steps),
                         })
@@ -558,10 +597,10 @@ class InpaintMode(GenerationMode):
                         stage_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
-                            "negative_prompt": negative_prompt,
+                            "negative_prompt": stage_negative_prompt,
                             "image": stage_img,
                             "mask_image": stage_mask,
-                            "strength": strength,
+                            "strength": stage_strength_this_pass,
                             "guidance_scale": stage_guidance_scale,
                             "num_inference_steps": stage_steps,
                             "num_images_per_prompt": 1,
@@ -582,6 +621,8 @@ class InpaintMode(GenerationMode):
                         # Strict stage chaining from outpaint_retry behavior:
                         # only update pixels selected by stage_mask.
                         stage_composited = Image.composite(stage_raw, stage_img, stage_comp_mask)
+                        # Explicitly lock previous stage pixels.
+                        stage_composited.paste(curr_image, (stage_place["ox"], stage_place["oy"]))
                         stage_out = [stage_composited]
                         _debug_save_image(debug_session, f"{pass_dir}/03_stage_composited.png", stage_composited)
                         _debug_log_event(debug_session, {
@@ -603,10 +644,10 @@ class InpaintMode(GenerationMode):
                                 int(stage_steps * (0.45 if is_final else 0.30)),
                             )
                             stage_refine_strength = max(
-                                0.28 if is_final else 0.10,
+                                0.16 if is_final else 0.08,
                                 min(
-                                    0.55 if is_final else 0.35,
-                                    float(refine_strength_base) * (1.05 if is_final else 0.75),
+                                    0.24 if is_final else 0.16,
+                                    float(refine_strength_base) * (0.72 if is_final else 0.58),
                                 ),
                             )
                             seam_mask = _build_stage_refine_mask(
@@ -623,7 +664,7 @@ class InpaintMode(GenerationMode):
                             refine_kwargs = {
                                 "prompt": prompt,
                                 "prompt_2": prompt_2 or None,
-                                "negative_prompt": negative_prompt,
+                                "negative_prompt": stage_negative_prompt,
                                 "image": stage_out[0].convert("RGB"),
                                 "mask_image": seam_mask,
                                 "strength": stage_refine_strength,
@@ -669,6 +710,136 @@ class InpaintMode(GenerationMode):
 
                 out = staged_out
 
+        elif settings.get("smart_extend") and not bool(settings.get("smart_extend_auto_step", True)):
+            source_box = settings.get("smart_extend_source_box") or {}
+            sb_x = int(source_box.get("x", 0))
+            sb_y = int(source_box.get("y", 0))
+            sb_w = int(source_box.get("w", 0))
+            sb_h = int(source_box.get("h", 0))
+            final_w = int(settings.get("width", image.size[0]))
+            final_h = int(settings.get("height", image.size[1]))
+            src_base_w = sb_w if sb_w > 0 else int(image.size[0])
+            src_base_h = sb_h if sb_h > 0 else int(image.size[1])
+
+            repeat_raw = settings.get("smart_extend_repeat_passes", "auto")
+            auto_repeat = repeat_raw is None or (isinstance(repeat_raw, str) and repeat_raw.strip().lower() == "auto")
+            if auto_repeat:
+                repeat_passes = _auto_repeat_passes(src_base_w, src_base_h, final_w, final_h)
+            else:
+                try:
+                    repeat_passes = max(1, int(repeat_raw))
+                except Exception:
+                    repeat_passes = _auto_repeat_passes(src_base_w, src_base_h, final_w, final_h)
+
+            debug_session = _init_smart_extend_debug_session(
+                settings,
+                generator.initial_seed(),
+                {
+                    "x": sb_x,
+                    "y": sb_y,
+                    "w": src_base_w,
+                    "h": src_base_h,
+                },
+                (final_w, final_h),
+                [1.0],
+            )
+            _debug_log_event(debug_session, {
+                "type": "repeat_mode_selected",
+                "auto_repeat": bool(auto_repeat),
+                "repeat_raw": str(repeat_raw),
+                "repeat_passes": int(repeat_passes),
+                "source_size": [int(src_base_w), int(src_base_h)],
+                "target_size": [int(final_w), int(final_h)],
+                "scale_w": float(final_w / max(1, src_base_w)),
+                "scale_h": float(final_h / max(1, src_base_h)),
+            })
+            if repeat_passes > 1:
+                repeat_strength = max(
+                    0.60,
+                    min(0.95, float(settings.get("smart_extend_repeat_strength", 0.80))),
+                )
+                repeat_strength_drop = max(
+                    0.0,
+                    min(0.20, float(settings.get("smart_extend_repeat_strength_drop", 0.08))),
+                )
+                repeat_cfg = max(guidance_scale, float(settings.get("smart_extend_repeat_min_cfg", 8.0)))
+                base_seed = generator.initial_seed()
+                if debug_session:
+                    debug_session["meta"]["fractions"] = [1.0 for _ in range(repeat_passes)]
+                    _debug_log_event(debug_session, {
+                        "type": "repeat_mode_strategy",
+                        "strategy": "full_canvas_repeated_inpaint",
+                        "repeat_passes": int(repeat_passes),
+                        "repeat_strength": float(repeat_strength),
+                        "repeat_cfg": float(repeat_cfg),
+                    })
+
+                out_imgs = []
+                batch_count = max(1, num_images_per_prompt)
+                for img_idx in range(batch_count):
+                    image_seed_base = base_seed + (img_idx * 1000003)
+                    img_label = f" (img {img_idx + 1}/{batch_count})" if batch_count > 1 else ""
+                    curr_full = image.convert("RGB")
+                    source_crop = None
+                    if sb_w > 0 and sb_h > 0:
+                        source_crop = image.crop((sb_x, sb_y, sb_x + sb_w, sb_y + sb_h)).convert("RGB")
+
+                    for idx in range(repeat_passes):
+                        if callback:
+                            update_stage(f"Outpaint repeat {idx + 1}/{repeat_passes}{img_label}")
+                        pass_dir = f"img_{img_idx + 1:02d}/repeat_full_pass_{idx + 1:02d}"
+                        _debug_save_image(debug_session, f"{pass_dir}/00_input.png", curr_full)
+                        _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", mask_image)
+
+                        pass_strength = max(0.60, min(0.95, repeat_strength - (idx * repeat_strength_drop)))
+                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
+                        pass_kwargs = {
+                            "prompt": prompt,
+                            "prompt_2": prompt_2 or None,
+                            "negative_prompt": negative_prompt,
+                            "image": curr_full,
+                            "mask_image": mask_image,
+                            "strength": pass_strength,
+                            "guidance_scale": repeat_cfg,
+                            "num_inference_steps": num_inference_steps,
+                            "num_images_per_prompt": 1,
+                            "width": curr_full.size[0],
+                            "height": curr_full.size[1],
+                            "generator": local_gen,
+                        }
+                        if cb:
+                            pass_kwargs["callback_on_step_end"] = cb
+                            pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
+
+                        raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                        _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
+                        if callback and hasattr(callback, "finish_pass"):
+                            callback.finish_pass(num_inference_steps)
+
+                        composited = Image.composite(raw, curr_full, mask_image)
+                        if source_crop is not None:
+                            composited.paste(source_crop, (sb_x, sb_y))
+                        _debug_save_image(debug_session, f"{pass_dir}/03_composited.png", composited)
+                        _debug_log_event(debug_session, {
+                            "type": "repeat_full_composite",
+                            "img_index": img_idx + 1,
+                            "pass_index": idx + 1,
+                            "repeat_passes": int(repeat_passes),
+                            "repeat_strength": float(repeat_strength),
+                            "pass_strength": float(pass_strength),
+                            "repeat_cfg": float(repeat_cfg),
+                            **_debug_mask_leak_stats(curr_full, composited, mask_image),
+                        })
+                        curr_full = composited
+
+                    out_imgs.append(curr_full)
+                out = out_imgs
+            else:
+                _debug_log_event(debug_session, {
+                    "type": "repeat_mode_fallback_single",
+                    "reason": "repeat_passes<=1",
+                })
+
         if out is None:
             if callback:
                 update_stage("Inpaint pass 1/1")
@@ -710,7 +881,15 @@ class InpaintMode(GenerationMode):
             run_post_refine = bool(
                 settings.get(
                     "smart_extend_post_refine",
-                    not bool(settings.get("smart_extend_auto_step", True)),
+                    not bool(settings.get("smart_extend_auto_step", True))
+                    and (
+                        _auto_repeat_passes(
+                            int((settings.get("smart_extend_source_box") or {}).get("w", image.size[0])),
+                            int((settings.get("smart_extend_source_box") or {}).get("h", image.size[1])),
+                            int(settings.get("width", image.size[0])),
+                            int(settings.get("height", image.size[1])),
+                        ) <= 1
+                    ),
                 )
             )
             if bool(settings.get("smart_extend_refine", True)) and run_post_refine:
@@ -733,6 +912,8 @@ class InpaintMode(GenerationMode):
                     refine_strength,
                     min(0.75, max(0.50, float(strength) * 0.70))
                 )
+                if not bool(settings.get("smart_extend_auto_step", True)):
+                    target_cleanup_strength = min(target_cleanup_strength, 0.45)
                 refine_strength = max(0.12, min(0.75, target_cleanup_strength))
                 refine_steps = max(10, int(num_inference_steps * 0.45))
 
