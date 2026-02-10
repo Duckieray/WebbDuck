@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 import torch
 from .base import GenerationMode
+from . import outpaint as pyramid_outpaint
 from webbduck.server.state import update_stage
 
 log = logging.getLogger(__name__)
@@ -799,7 +800,81 @@ class InpaintMode(GenerationMode):
                 "scale_w": float(final_w / max(1, src_base_w)),
                 "scale_h": float(final_h / max(1, src_base_h)),
             })
-            if repeat_passes > 1:
+
+            # Optional pyramid path for very large non-auto outpaints.
+            # Kept behind explicit feature flag to avoid surprising behavior changes.
+            pyramid_enabled = bool(settings.get("smart_extend_pyramid_enable", False))
+            pyramid_ratio_trigger = float(settings.get("smart_extend_pyramid_trigger_ratio", 2.4))
+            scale_w = float(final_w) / float(max(1, src_base_w))
+            scale_h = float(final_h) / float(max(1, src_base_h))
+            pyramid_ratio = max(scale_w, scale_h)
+            pyramid_eligible = (
+                pyramid_enabled
+                and sb_w > 0
+                and sb_h > 0
+                and pyramid_ratio >= pyramid_ratio_trigger
+            )
+            if pyramid_eligible:
+                _debug_log_event(debug_session, {
+                    "type": "pyramid_selected",
+                    "enabled": bool(pyramid_enabled),
+                    "trigger_ratio": float(pyramid_ratio_trigger),
+                    "expansion_ratio": float(pyramid_ratio),
+                    "source_box": {"x": int(sb_x), "y": int(sb_y), "w": int(sb_w), "h": int(sb_h)},
+                    "target_size": [int(final_w), int(final_h)],
+                })
+                out_imgs = []
+                batch_count = max(1, num_images_per_prompt)
+                base_seed = generator.initial_seed()
+                source_crop = image.crop((sb_x, sb_y, sb_x + sb_w, sb_y + sb_h)).convert("RGB")
+                pyramid_failed = False
+                for img_idx in range(batch_count):
+                    img_label = f" (img {img_idx + 1}/{batch_count})" if batch_count > 1 else ""
+                    if callback:
+                        update_stage(f"Pyramid outpaint {img_idx + 1}/{batch_count}{img_label}")
+                    local_gen = torch.Generator(base_inpaint.device).manual_seed(base_seed + (img_idx * 1000003))
+                    pass_dir = f"img_{img_idx + 1:02d}/pyramid"
+                    _debug_save_image(debug_session, f"{pass_dir}/00_source_crop.png", source_crop)
+                    try:
+                        result = pyramid_outpaint.run_pyramid_outpaint(
+                            source_image=source_crop,
+                            source_box={"x": sb_x, "y": sb_y, "w": sb_w, "h": sb_h},
+                            target_size=(final_w, final_h),
+                            prompt=prompt,
+                            negative_prompt=negative_prompt,
+                            base_inpaint=base_inpaint,
+                            generator=local_gen,
+                            settings=settings,
+                            callback=callback,
+                            update_stage_fn=update_stage if callback else None,
+                            debug_dir=(debug_session["dir"] / f"img_{img_idx + 1:02d}") if debug_session else None,
+                        )
+                        out_imgs.append(result)
+                        _debug_save_image(debug_session, f"{pass_dir}/99_result.png", result)
+                        _debug_log_event(debug_session, {
+                            "type": "pyramid_complete",
+                            "img_index": img_idx + 1,
+                            "seed": int(base_seed + (img_idx * 1000003)),
+                            "result_size": [int(result.size[0]), int(result.size[1])],
+                        })
+                    except Exception as e:
+                        pyramid_failed = True
+                        log.exception("Pyramid outpaint failed for image %s", img_idx + 1)
+                        _debug_log_event(debug_session, {
+                            "type": "pyramid_failed",
+                            "img_index": img_idx + 1,
+                            "error": str(e),
+                        })
+                        break
+                if not pyramid_failed and len(out_imgs) == batch_count:
+                    out = out_imgs
+                else:
+                    _debug_log_event(debug_session, {
+                        "type": "pyramid_fallback_to_repeat",
+                        "reason": "exception_or_incomplete_batch",
+                    })
+
+            if out is None and repeat_passes > 1:
                 repeat_strength = max(
                     0.60,
                     min(0.95, float(settings.get("smart_extend_repeat_strength", 0.80))),

@@ -117,6 +117,19 @@ def estimate_total_steps(settings):
         if src_w and src_h:
             dst_w = int(settings.get("width", src_w))
             dst_h = int(settings.get("height", src_h))
+            pyramid_enabled = bool(settings.get("smart_extend_pyramid_enable", False))
+            pyramid_ratio_trigger = float(settings.get("smart_extend_pyramid_trigger_ratio", 2.4))
+            expansion_ratio = max(
+                float(dst_w) / max(1.0, float(src_w)),
+                float(dst_h) / max(1.0, float(src_h)),
+            )
+            if pyramid_enabled and expansion_ratio >= pyramid_ratio_trigger:
+                # Pyramid path does one outpaint pass plus optional final refine pass.
+                per_image_total = steps
+                if refine_enabled and bool(settings.get("smart_extend_refine", True)):
+                    per_image_total += max(12, int(steps * 0.5))
+                return per_image_total * batch_count
+
             repeat_raw = settings.get("smart_extend_repeat_passes", "auto")
             auto_repeat = repeat_raw is None or (
                 isinstance(repeat_raw, str) and repeat_raw.strip().lower() == "auto"

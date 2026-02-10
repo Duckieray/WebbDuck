@@ -275,6 +275,15 @@
                       <input type="checkbox" id="smart-extend-auto-step" checked />
                       <span>Auto Step Outpaint (multi-pass)</span>
                     </label>
+                    <label class="toggle-row" for="smart-extend-pyramid-enable">
+                      <input type="checkbox" id="smart-extend-pyramid-enable" />
+                      <span>Pyramid Large Outpaint (non-auto only)</span>
+                    </label>
+                    <div class="param-row">
+                      <label class="form-label" for="smart-extend-pyramid-trigger-ratio">Pyramid Trigger Ratio</label>
+                      <span class="param-value" id="smart-extend-pyramid-trigger-ratio-value">2.40</span>
+                    </div>
+                    <input class="slider" type="range" id="smart-extend-pyramid-trigger-ratio" min="1.50" max="4.00" step="0.10" value="2.40" />
                     <div class="param-row">
                       <label class="form-label" for="smart-extend-step-growth">Step Growth</label>
                       <span class="param-value" id="smart-extend-step-growth-value">1.25</span>

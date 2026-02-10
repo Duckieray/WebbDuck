@@ -164,6 +164,15 @@ def summarize_settings(settings: dict) -> dict:
         offset_y = settings.get("smart_extend_offset_y")
         if offset_x is not None or offset_y is not None:
             mode_details.append(f"offset x {offset_x or 0}, y {offset_y or 0}")
+        pyramid_enabled = settings.get("smart_extend_pyramid_enable")
+        if pyramid_enabled is not None:
+            mode_details.append("pyramid on" if pyramid_enabled else "pyramid off")
+        pyramid_ratio = settings.get("smart_extend_pyramid_trigger_ratio")
+        if pyramid_ratio is not None:
+            try:
+                mode_details.append(f"pyr ratio {float(pyramid_ratio):.2f}x")
+            except (TypeError, ValueError):
+                pass
 
     return {
         "prompt": prompt[:160],
@@ -496,6 +505,8 @@ async def test(
     smart_extend_refine_each_step: bool = Form(True),
     smart_extend_offset_x: int = Form(None),
     smart_extend_offset_y: int = Form(None),
+    smart_extend_pyramid_enable: bool = Form(False),
+    smart_extend_pyramid_trigger_ratio: float = Form(2.4),
     experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
@@ -533,6 +544,8 @@ async def test(
         "smart_extend_refine_each_step": smart_extend_refine_each_step,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
+        "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
+        "smart_extend_pyramid_trigger_ratio": smart_extend_pyramid_trigger_ratio,
         "experimental_compress": experimental_compress,
     }
 
@@ -616,6 +629,8 @@ async def generate(
     smart_extend_refine_each_step: bool = Form(True),
     smart_extend_offset_x: int = Form(None),
     smart_extend_offset_y: int = Form(None),
+    smart_extend_pyramid_enable: bool = Form(False),
+    smart_extend_pyramid_trigger_ratio: float = Form(2.4),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
@@ -654,6 +669,8 @@ async def generate(
         "smart_extend_refine_each_step": smart_extend_refine_each_step,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
+        "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
+        "smart_extend_pyramid_trigger_ratio": smart_extend_pyramid_trigger_ratio,
     }
 
     if image:

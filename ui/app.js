@@ -406,6 +406,7 @@ function setupSliders() {
         ['denoising_strength', 'denoise-value'],
         ['smart-extend-feather', 'smart-extend-feather-value'],
         ['smart-extend-step-growth', 'smart-extend-step-growth-value'],
+        ['smart-extend-pyramid-trigger-ratio', 'smart-extend-pyramid-trigger-ratio-value'],
         ['smart-extend-refine-width', 'smart-extend-refine-width-value'],
         ['smart-extend-refine-strength', 'smart-extend-refine-strength-value']
     ];
@@ -472,7 +473,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-pyramid-enable', 'smart-extend-pyramid-trigger-ratio', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -670,6 +671,8 @@ function collectFormData() {
             formData.append('smart_extend_refine_each_step', byId('smart-extend-refine-each-step')?.checked ? 'true' : 'false');
             formData.append('smart_extend_refine_width', byId('smart-extend-refine-width')?.value || '24');
             formData.append('smart_extend_refine_strength', byId('smart-extend-refine-strength')?.value || '0.28');
+            formData.append('smart_extend_pyramid_enable', byId('smart-extend-pyramid-enable')?.checked ? 'true' : 'false');
+            formData.append('smart_extend_pyramid_trigger_ratio', byId('smart-extend-pyramid-trigger-ratio')?.value || '2.4');
             const placement = window._smartExtendPlacement;
             if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.y)) {
                 formData.append('smart_extend_offset_x', String(Math.round(placement.x)));
