@@ -9,7 +9,7 @@ import random
 from pathlib import Path
 import shutil
 from fastapi import FastAPI, Form, WebSocket, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from webbduck.server.state import snapshot, update_stage, update_progress
@@ -30,7 +30,6 @@ from webbduck.server.storage import (
     remove_favorite_run,
 )
 from webbduck.server.thumbnails import ensure_thumbnail, get_thumbnail_path
-from fastapi.responses import FileResponse
 from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import (
     MODEL_REGISTRY,
@@ -173,6 +172,12 @@ def summarize_settings(settings: dict) -> dict:
                 mode_details.append(f"pyr ratio {float(pyramid_ratio):.2f}x")
             except (TypeError, ValueError):
                 pass
+        repeat_seed_initializer = settings.get("smart_extend_repeat_seed_initializer")
+        if repeat_seed_initializer is not None:
+            mode_details.append(f"repeat seed {repeat_seed_initializer}")
+        pyramid_initializer = settings.get("smart_extend_pyramid_initializer")
+        if pyramid_initializer is not None:
+            mode_details.append(f"pyr init {pyramid_initializer}")
 
     return {
         "prompt": prompt[:160],
@@ -629,8 +634,12 @@ async def generate(
     smart_extend_refine_each_step: bool = Form(True),
     smart_extend_offset_x: int = Form(None),
     smart_extend_offset_y: int = Form(None),
+    smart_extend_repeat_chunked: bool = Form(True),
+    smart_extend_repeat_passes: str = Form("auto"),
+    smart_extend_repeat_seed_initializer: str = Form("none"),
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(2.4),
+    smart_extend_pyramid_initializer: str = Form("edge_strips"),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
@@ -669,8 +678,12 @@ async def generate(
         "smart_extend_refine_each_step": smart_extend_refine_each_step,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
+        "smart_extend_repeat_chunked": smart_extend_repeat_chunked,
+        "smart_extend_repeat_passes": smart_extend_repeat_passes,
+        "smart_extend_repeat_seed_initializer": smart_extend_repeat_seed_initializer,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "smart_extend_pyramid_trigger_ratio": smart_extend_pyramid_trigger_ratio,
+        "smart_extend_pyramid_initializer": smart_extend_pyramid_initializer,
     }
 
     if image:
@@ -1219,11 +1232,12 @@ async def get_thumbnail(path: str):
             # Run resizing in thread pool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             thumb_path = await loop.run_in_executor(None, ensure_thumbnail, path)
-        response = FileResponse(thumb_path)
-        # Smaller chunks reduce peak per-request memory under high concurrency.
-        response.chunk_size = 16 * 1024
-        response.headers["Cache-Control"] = "public, max-age=86400"
-        return response
+        data = thumb_path.read_bytes()
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
     except FileNotFoundError:
         return JSONResponse(status_code=404, content={"error": "Image not found"})
     except Exception as e:

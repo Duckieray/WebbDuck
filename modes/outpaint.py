@@ -9,7 +9,7 @@ import json
 import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageFilter, ImageStat
+from PIL import Image, ImageFilter, ImageStat
 import torch
 
 log = logging.getLogger(__name__)
@@ -156,33 +156,6 @@ def _ensure_min_steps_for_strength(num_steps, strength):
     return max(steps, needed)
 
 
-def _build_pyramid_mask(size, source_box, feather_px=12, core_inset=0):
-    """Build outpaint mask with optional seam-edit ring around source box."""
-    width, height = size
-    x = int(source_box.get("x", 0))
-    y = int(source_box.get("y", 0))
-    w = int(source_box.get("w", 0))
-    h = int(source_box.get("h", 0))
-
-    mask = Image.new("L", (width, height), 255)
-    mask.paste(0, (x, y, x + w, y + h))
-    if feather_px > 0:
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=max(0, int(feather_px))))
-    inset = max(0, int(core_inset))
-    if inset <= 0:
-        mask.paste(0, (x, y, x + w, y + h))
-        return mask
-    core_x0 = max(x, x + inset)
-    core_y0 = max(y, y + inset)
-    core_x1 = min(x + w, x + w - inset)
-    core_y1 = min(y + h, y + h - inset)
-    if core_x1 > core_x0 and core_y1 > core_y0:
-        mask.paste(0, (core_x0, core_y0, core_x1, core_y1))
-    else:
-        mask.paste(0, (x, y, x + w, y + h))
-    return mask
-
-
 def _build_stage_seam_mask(size, source_box, seam_width):
     width, height = size
     x = int(source_box.get("x", 0))
@@ -203,12 +176,6 @@ def _build_stage_seam_mask(size, source_box, seam_width):
         mask.paste(255, (x, max(0, y + h - inner), x + w, min(height, y + h + outer)))
     blur_r = max(4, int(seam * 0.30))
     return mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
-
-
-def _merge_mask_union(base_mask, add_mask):
-    if base_mask is None:
-        return add_mask
-    return ImageChops.lighter(base_mask.convert("L"), add_mask.convert("L"))
 
 
 def _save_debug_image(debug_dir, relative_name, image):
@@ -369,6 +336,66 @@ def _build_refine_seam_mask(size, source_box, seam_width):
     return mask.filter(ImageFilter.GaussianBlur(radius=max(4, int(seam * 0.25))))
 
 
+def _build_stage_hard_mask(size, placement):
+    width, height = size
+    ox = int(placement.get("x", 0))
+    oy = int(placement.get("y", 0))
+    w = int(placement.get("w", 0))
+    h = int(placement.get("h", 0))
+    mask = Image.new("L", (width, height), 255)
+    mask.paste(0, (ox, oy, ox + w, oy + h))
+    return mask
+
+
+def _build_progressive_stage(
+    current_image,
+    p_curr,
+    p_next,
+    src_w,
+    src_h,
+    dst_w,
+    dst_h,
+    final_x,
+    final_y,
+    stage_mask_blur=20.0,
+    initializer="edge_strips",
+):
+    if p_next >= 0.999:
+        stage_w, stage_h = dst_w, dst_h
+    else:
+        stage_w = _round8(src_w + (dst_w - src_w) * p_next, minimum=src_w)
+        stage_h = _round8(src_h + (dst_h - src_h) * p_next, minimum=src_h)
+
+    curr_w, curr_h = current_image.size
+    nx = int(round(final_x * p_next))
+    ny = int(round(final_y * p_next))
+    cx = int(round(final_x * p_curr))
+    cy = int(round(final_y * p_curr))
+    ox = max(0, min(stage_w - curr_w, nx - cx))
+    oy = max(0, min(stage_h - curr_h, ny - cy))
+    placement = {"x": int(ox), "y": int(oy), "w": int(curr_w), "h": int(curr_h)}
+
+    resolved_init = _resolve_canvas_initializer(
+        initializer,
+        placement["x"],
+        max(0, stage_w - (placement["x"] + placement["w"])),
+        placement["y"],
+        max(0, stage_h - (placement["y"] + placement["h"])),
+    )
+    stage_image = _build_pyramid_canvas(
+        current_image,
+        placement,
+        (stage_w, stage_h),
+        initializer=resolved_init,
+    )
+    stage_mask = _build_stage_hard_mask((stage_w, stage_h), placement)
+    blur_r = max(0.0, float(stage_mask_blur))
+    if blur_r > 0:
+        stage_mask = stage_mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        stage_mask.paste(0, (ox, oy, ox + curr_w, oy + curr_h))
+    return stage_image, stage_mask, placement, resolved_init
+
+
 def run_pyramid_outpaint(
     source_image,
     source_box,
@@ -401,6 +428,7 @@ def run_pyramid_outpaint(
     cfg = max(7.0, min(10.5, float(settings.get("smart_extend_pyramid_cfg_stage1", 8.5))))
     strength = max(0.64, min(0.92, float(settings.get("smart_extend_pyramid_strength_stage1", 0.82))))
     feather = int(settings.get("smart_extend_feather", 12))
+    stage_mask_blur = float(settings.get("smart_extend_stage_mask_blur", 20.0))
 
     guard = (
         "duplicate person, multiple people, second body, cloned body, duplicate torso, "
@@ -448,57 +476,28 @@ def run_pyramid_outpaint(
     growth = float(settings.get("smart_extend_pyramid_step_growth", settings.get("smart_extend_step_growth", 1.25)))
     fractions = _build_step_fractions(src_gen_w, src_gen_h, gen_dst_w, gen_dst_h, growth)
     total_passes = len(fractions)
+    seam_each_step = bool(settings.get("smart_extend_pyramid_seam_each_step", False))
 
     p_curr = 0.0
-    seam_history = []
     for pass_idx, p_next in enumerate(fractions, start=1):
         pass_start = time.time()
         if update_stage_fn:
             update_stage_fn(f"Pyramid: outpaint pass {pass_idx}/{total_passes}")
-        if p_next >= 0.999:
-            stage_w, stage_h = gen_dst_w, gen_dst_h
-        else:
-            stage_w = _round8(src_gen_w + (gen_dst_w - src_gen_w) * p_next, minimum=src_gen_w)
-            stage_h = _round8(src_gen_h + (gen_dst_h - src_gen_h) * p_next, minimum=src_gen_h)
-
-        nx = int(round(final_x * p_next))
-        ny = int(round(final_y * p_next))
-        cx = int(round(final_x * p_curr))
-        cy = int(round(final_y * p_curr))
-        ox = nx - cx
-        oy = ny - cy
-        place_box = {
-            "x": max(0, min(stage_w - current_image.size[0], ox)),
-            "y": max(0, min(stage_h - current_image.size[1], oy)),
-            "w": int(current_image.size[0]),
-            "h": int(current_image.size[1]),
-        }
-
-        # Keep all previous-stage pixels fixed during outpaint; only generate new border areas.
-        lock_box = dict(place_box)
-        if seam_history:
-            translated = []
-            for prev_box in seam_history:
-                translated.append(
-                    {
-                        "x": int(prev_box["x"]) + int(lock_box["x"]),
-                        "y": int(prev_box["y"]) + int(lock_box["y"]),
-                        "w": int(prev_box["w"]),
-                        "h": int(prev_box["h"]),
-                    }
-                )
-            seam_history = translated
-        seam_history.append(dict(lock_box))
-        init_mode = settings.get("smart_extend_pyramid_initializer", "auto")
-        resolved_init_mode = _resolve_canvas_initializer(
-            init_mode,
-            lock_box["x"],
-            max(0, stage_w - (lock_box["x"] + lock_box["w"])),
-            lock_box["y"],
-            max(0, stage_h - (lock_box["y"] + lock_box["h"])),
+        init_mode = settings.get("smart_extend_pyramid_initializer", "edge_strips")
+        canvas, mask, lock_box, resolved_init_mode = _build_progressive_stage(
+            current_image=current_image,
+            p_curr=p_curr,
+            p_next=p_next,
+            src_w=src_gen_w,
+            src_h=src_gen_h,
+            dst_w=gen_dst_w,
+            dst_h=gen_dst_h,
+            final_x=final_x,
+            final_y=final_y,
+            stage_mask_blur=stage_mask_blur,
+            initializer=init_mode,
         )
-        canvas = _build_pyramid_canvas(current_image, lock_box, (stage_w, stage_h), initializer=resolved_init_mode)
-        mask = _build_pyramid_mask((stage_w, stage_h), lock_box, feather, core_inset=0)
+        stage_w, stage_h = canvas.size
         _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_10_stage_canvas.png", canvas)
         _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_11_stage_mask.png", mask)
         # Keep legacy file names for quick inspection in latest pass.
@@ -534,33 +533,30 @@ def run_pyramid_outpaint(
         if callback and hasattr(callback, "finish_pass"):
             callback.finish_pass(stage_steps)
 
-        # Strictly preserve previous-stage pixels before seam polish.
+        # Progressive chaining: only update outside the locked previous stage.
         composed = Image.composite(outpainted, canvas, mask)
-        composed.paste(current_image, (lock_box["x"], lock_box["y"]))
-        # Explicit seam polish after each pass to avoid persistent inner-frame artifacts.
+        # Seam polish defaults to final stage only to avoid nested interior frame artifacts.
+        run_seam = bool(seam_each_step or (pass_idx == total_passes))
         seam_width = int(settings.get("smart_extend_pyramid_stage_seam_width", max(20, int(feather * 2.6))))
-        seam_mask = None
-        for seam_box in seam_history:
-            m = _build_stage_seam_mask(
-                (stage_w, stage_h),
-                seam_box,
-                seam_width=seam_width,
-            )
-            seam_mask = _merge_mask_union(seam_mask, m)
-        if seam_mask is None:
+        seam_mask = Image.new("L", (stage_w, stage_h), 0)
+        seam_steps = 0
+        seam_strength = 0.0
+        if run_seam:
             seam_mask = _build_stage_seam_mask(
                 (stage_w, stage_h),
                 lock_box,
                 seam_width=seam_width,
             )
-        seam_steps = max(8, int(stage_steps * 0.30))
-        seam_raw = float(settings.get("smart_extend_pyramid_seam_strength", 0.12))
-        if seam_raw <= 0.0:
-            seam_strength = 0.0
-        else:
-            # For large staged outpaint, seam cleanup needs enough denoise to actually remove frame lines.
-            seam_strength = max(0.18, min(0.36, seam_raw))
-            seam_steps = _ensure_min_steps_for_strength(seam_steps, seam_strength)
+            seam_steps = max(8, int(stage_steps * 0.30))
+            seam_raw = float(
+                settings.get(
+                    "smart_extend_pyramid_seam_strength",
+                    settings.get("smart_extend_refine_strength", 0.28),
+                )
+            )
+            if seam_raw > 0.0:
+                seam_strength = max(0.14, min(0.42, seam_raw))
+                seam_steps = _ensure_min_steps_for_strength(seam_steps, seam_strength)
         _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_14_seam_mask.png", seam_mask)
         if seam_strength > 0.0:
             seam_gen = torch.Generator(base_inpaint.device).manual_seed(seed + 777)
@@ -601,10 +597,10 @@ def run_pyramid_outpaint(
                 "total_passes": int(total_passes),
                 "stage_size": [int(stage_w), int(stage_h)],
                 "place_box": {
-                    "x": int(place_box["x"]),
-                    "y": int(place_box["y"]),
-                    "w": int(place_box["w"]),
-                    "h": int(place_box["h"]),
+                    "x": int(lock_box["x"]),
+                    "y": int(lock_box["y"]),
+                    "w": int(lock_box["w"]),
+                    "h": int(lock_box["h"]),
                 },
                 "lock_box": {
                     "x": int(lock_box["x"]),
@@ -620,7 +616,9 @@ def run_pyramid_outpaint(
                 "canvas_initializer": str(resolved_init_mode),
                 "seam_width": int(seam_width),
                 "seam_strength": float(seam_strength),
-                "seam_box_count": int(len(seam_history)),
+                "seam_box_count": 1,
+                "seam_applied": bool(seam_strength > 0.0),
+                "seam_mode": "each_step" if seam_each_step else "final_only",
                 "elapsed_sec": float(time.time() - pass_start),
             },
         )

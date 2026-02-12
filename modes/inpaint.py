@@ -934,6 +934,7 @@ class InpaintMode(GenerationMode):
                     _debug_log_event(debug_session, {
                         "type": "repeat_mode_strategy",
                         "strategy": "chunked_two_stage_then_seam" if use_chunked_two_stage else "full_canvas_then_seam",
+                        "repeat_seed_initializer": str(settings.get("smart_extend_repeat_seed_initializer", "none")),
                         "repeat_passes": int(repeat_passes),
                         "repeat_strength": float(repeat_strength),
                         "repeat_cfg": float(repeat_cfg),
@@ -956,10 +957,11 @@ class InpaintMode(GenerationMode):
                     repeat_seam_mask = None
                     if sb_w > 0 and sb_h > 0:
                         source_crop = image.crop((sb_x, sb_y, sb_x + sb_w, sb_y + sb_h)).convert("RGB")
-                        if large_scale:
+                        seed_initializer = str(settings.get("smart_extend_repeat_seed_initializer", "none")).strip().lower()
+                        if large_scale and seed_initializer in {"edge_strips", "soft_context"}:
                             seed_feather = int(settings.get("smart_extend_feather", 8))
                             seed_blur = float(settings.get("smart_extend_stage_mask_blur", 20.0))
-                            # Prefer edge-strip seeded canvas on large jumps; blurred-global init can drift on pass 1.
+                            # Optional large-scale preseed. Default is off to match small/medium full-canvas behavior.
                             seeded_full, _, _, _ = _build_stage_canvas_and_mask(
                                 source_crop,
                                 0.0,
@@ -972,6 +974,7 @@ class InpaintMode(GenerationMode):
                                 sb_y,
                                 seed_feather,
                                 seed_blur,
+                                seed_initializer,
                             )
                             curr_full = seeded_full
                         seam_w = max(12, int(settings.get("smart_extend_refine_width", 64)))

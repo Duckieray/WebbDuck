@@ -15,6 +15,7 @@ let latestQueuePayload = null;
 const expandedQueueJobs = new Set();
 const DENOISE_ACTUAL_MIN = 0.75;
 const DENOISE_ACTUAL_MAX = 1.00;
+const MEDIUM_SIZE_THRESHOLD = { width: 1728, height: 2176 };
 let appConfirmResolver = null;
 const IS_COARSE_POINTER = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
 
@@ -164,6 +165,31 @@ async function maybeShowRuntimePreflightWarning() {
         title: 'Get Some Coffee',
         message: msg,
         okText: 'Start Run',
+        cancelText: 'Cancel',
+        showCancel: true,
+        danger: false,
+    });
+}
+
+function isAboveMediumResolution(width, height) {
+    const w = Number(width || 0);
+    const h = Number(height || 0);
+    if (!(w > 0 && h > 0)) return false;
+    const area = w * h;
+    const mediumArea = MEDIUM_SIZE_THRESHOLD.width * MEDIUM_SIZE_THRESHOLD.height;
+    const longEdge = Math.max(w, h);
+    const mediumLongEdge = Math.max(MEDIUM_SIZE_THRESHOLD.width, MEDIUM_SIZE_THRESHOLD.height);
+    return area > mediumArea || longEdge > mediumLongEdge;
+}
+
+async function maybeShowLargeResolutionWarning() {
+    const width = Number(byId('width')?.value || getState('width') || 0);
+    const height = Number(byId('height')?.value || getState('height') || 0);
+    if (!isAboveMediumResolution(width, height)) return true;
+    return await showAppConfirmModal({
+        title: 'Experimental Large Resolution',
+        message: 'Experimental: Results may vary. It is usually better to generate a medium-sized image first, then upscale or continue outpainting from that result.\n\nContinue anyway?',
+        okText: 'Continue',
         cancelText: 'Cancel',
         showCancel: true,
         danger: false,
@@ -584,6 +610,10 @@ function setupGenerationButtons() {
 async function startGeneration(mode) {
     try {
         syncFromDOM();
+        if (!await maybeShowLargeResolutionWarning()) {
+            toast('Run cancelled by user', 'info');
+            return;
+        }
         if (!await maybeShowRuntimePreflightWarning()) {
             toast('Run cancelled by user', 'info');
             return;

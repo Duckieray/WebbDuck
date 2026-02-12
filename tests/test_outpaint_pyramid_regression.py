@@ -110,7 +110,6 @@ def test_large_ratio_stage_lock_is_preserved(tmp_path):
         "smart_extend_step_growth": 1.5,
         "smart_extend_refine": False,
         "smart_extend_pyramid_seam_strength": 0.0,
-        "smart_extend_pyramid_initializer": "auto",
     }
 
     pyramid_outpaint.run_pyramid_outpaint(
@@ -135,10 +134,12 @@ def test_large_ratio_stage_lock_is_preserved(tmp_path):
         assert "seam_width" in event
         assert "seam_strength" in event
         assert "seam_box_count" in event
-        assert int(event["seam_box_count"]) == idx
+        assert int(event["seam_box_count"]) == 1
+        assert event["canvas_initializer"] == "edge_strips"
+        assert event["seam_mode"] == "final_only"
         assert event["seam_strength"] >= 0.0
         if event["seam_strength"] > 0.0:
-            assert event["seam_strength"] >= 0.18
+            assert event["seam_strength"] >= 0.14
         if idx == 1:
             continue
         prev = Image.open(tmp_path / "pyramid" / f"pass_{idx - 1:02d}_13_stage_composited.png").convert("RGB")
@@ -146,3 +147,44 @@ def test_large_ratio_stage_lock_is_preserved(tmp_path):
         box = event["place_box"]
         preserved = curr.crop((box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]))
         assert ImageChops.difference(preserved, prev).getbbox() is None
+
+
+def test_pyramid_default_seam_is_final_only(tmp_path):
+    """By default seam denoise should run only on the final pyramid pass."""
+    src_size = (208, 304)
+    dst_size = (616, 768)
+    source_box = {"x": 275, "y": 51, "w": src_size[0], "h": src_size[1]}
+    source_image = _make_source_image(*src_size)
+
+    settings = {
+        "steps": 12,
+        "smart_extend_feather": 12,
+        "smart_extend_step_growth": 1.5,
+        "smart_extend_refine": False,
+        "smart_extend_pyramid_seam_strength": 0.32,
+    }
+
+    pyramid_outpaint.run_pyramid_outpaint(
+        source_image=source_image,
+        source_box=source_box,
+        target_size=dst_size,
+        prompt="regression prompt",
+        negative_prompt="regression negative",
+        base_inpaint=_FakeInpaint(),
+        generator=_FakeGenerator(seed=888),
+        settings=settings,
+        debug_dir=tmp_path,
+    )
+
+    pass_events = _load_pass_events(tmp_path)
+    assert len(pass_events) == 4
+    for idx, event in enumerate(pass_events, start=1):
+        is_last = idx == len(pass_events)
+        assert event["seam_mode"] == "final_only"
+        assert bool(event["seam_applied"]) is is_last
+        if is_last:
+            assert float(event["seam_strength"]) > 0.0
+            assert int(event["seam_steps"]) > 0
+        else:
+            assert float(event["seam_strength"]) == 0.0
+            assert int(event["seam_steps"]) == 0
