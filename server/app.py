@@ -60,6 +60,14 @@ generation_queue = asyncio.Queue(maxsize=32)
 job_registry = {}
 active_job_id = None
 CATALOG_POLL_SECONDS = max(1.0, float(os.getenv("WEBBDUCK_CATALOG_POLL_SECONDS", "3.0")))
+SMART_EXTEND_FEATHER_DEFAULT = 12
+SMART_EXTEND_STEP_GROWTH_DEFAULT = 1.25
+SMART_EXTEND_AUTO_STEP_DEFAULT = False
+SMART_EXTEND_REFINE_DEFAULT = True
+SMART_EXTEND_REFINE_EACH_STEP_DEFAULT = True
+SMART_EXTEND_REFINE_WIDTH_DEFAULT = 64
+SMART_EXTEND_REFINE_STRENGTH_DEFAULT = 0.32
+SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT = 2.4
 
 
 def summarize_loras(loras) -> list[str]:
@@ -501,17 +509,17 @@ async def test(
     mask_blur: int = Form(8),
     smart_extend: bool = Form(False),
     smart_extend_anchor: str = Form("center"),
-    smart_extend_feather: int = Form(8),
-    smart_extend_auto_step: bool = Form(True),
-    smart_extend_step_growth: float = Form(1.25),
-    smart_extend_refine: bool = Form(True),
-    smart_extend_refine_width: int = Form(24),
-    smart_extend_refine_strength: float = Form(0.28),
-    smart_extend_refine_each_step: bool = Form(True),
+    smart_extend_feather: int = Form(SMART_EXTEND_FEATHER_DEFAULT),
+    smart_extend_auto_step: bool = Form(SMART_EXTEND_AUTO_STEP_DEFAULT),
+    smart_extend_step_growth: float = Form(SMART_EXTEND_STEP_GROWTH_DEFAULT),
+    smart_extend_refine: bool = Form(SMART_EXTEND_REFINE_DEFAULT),
+    smart_extend_refine_width: int = Form(SMART_EXTEND_REFINE_WIDTH_DEFAULT),
+    smart_extend_refine_strength: float = Form(SMART_EXTEND_REFINE_STRENGTH_DEFAULT),
+    smart_extend_refine_each_step: bool = Form(SMART_EXTEND_REFINE_EACH_STEP_DEFAULT),
     smart_extend_offset_x: int = Form(None),
     smart_extend_offset_y: int = Form(None),
     smart_extend_pyramid_enable: bool = Form(False),
-    smart_extend_pyramid_trigger_ratio: float = Form(2.4),
+    smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
@@ -540,17 +548,17 @@ async def test(
         "mask_blur": mask_blur,
         "smart_extend": smart_extend,
         "smart_extend_anchor": smart_extend_anchor,
-        "smart_extend_feather": smart_extend_feather,
-        "smart_extend_auto_step": smart_extend_auto_step,
-        "smart_extend_step_growth": smart_extend_step_growth,
-        "smart_extend_refine": smart_extend_refine,
-        "smart_extend_refine_width": smart_extend_refine_width,
-        "smart_extend_refine_strength": smart_extend_refine_strength,
-        "smart_extend_refine_each_step": smart_extend_refine_each_step,
+        "smart_extend_feather": SMART_EXTEND_FEATHER_DEFAULT,
+        "smart_extend_auto_step": SMART_EXTEND_AUTO_STEP_DEFAULT,
+        "smart_extend_step_growth": SMART_EXTEND_STEP_GROWTH_DEFAULT,
+        "smart_extend_refine": SMART_EXTEND_REFINE_DEFAULT,
+        "smart_extend_refine_width": SMART_EXTEND_REFINE_WIDTH_DEFAULT,
+        "smart_extend_refine_strength": SMART_EXTEND_REFINE_STRENGTH_DEFAULT,
+        "smart_extend_refine_each_step": SMART_EXTEND_REFINE_EACH_STEP_DEFAULT,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
-        "smart_extend_pyramid_trigger_ratio": smart_extend_pyramid_trigger_ratio,
+        "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "experimental_compress": experimental_compress,
     }
 
@@ -625,20 +633,20 @@ async def generate(
     mask_blur: int = Form(8),
     smart_extend: bool = Form(False),
     smart_extend_anchor: str = Form("center"),
-    smart_extend_feather: int = Form(8),
-    smart_extend_auto_step: bool = Form(True),
-    smart_extend_step_growth: float = Form(1.25),
-    smart_extend_refine: bool = Form(True),
-    smart_extend_refine_width: int = Form(24),
-    smart_extend_refine_strength: float = Form(0.28),
-    smart_extend_refine_each_step: bool = Form(True),
+    smart_extend_feather: int = Form(SMART_EXTEND_FEATHER_DEFAULT),
+    smart_extend_auto_step: bool = Form(SMART_EXTEND_AUTO_STEP_DEFAULT),
+    smart_extend_step_growth: float = Form(SMART_EXTEND_STEP_GROWTH_DEFAULT),
+    smart_extend_refine: bool = Form(SMART_EXTEND_REFINE_DEFAULT),
+    smart_extend_refine_width: int = Form(SMART_EXTEND_REFINE_WIDTH_DEFAULT),
+    smart_extend_refine_strength: float = Form(SMART_EXTEND_REFINE_STRENGTH_DEFAULT),
+    smart_extend_refine_each_step: bool = Form(SMART_EXTEND_REFINE_EACH_STEP_DEFAULT),
     smart_extend_offset_x: int = Form(None),
     smart_extend_offset_y: int = Form(None),
     smart_extend_repeat_chunked: bool = Form(True),
     smart_extend_repeat_passes: str = Form("auto"),
     smart_extend_repeat_seed_initializer: str = Form("none"),
     smart_extend_pyramid_enable: bool = Form(False),
-    smart_extend_pyramid_trigger_ratio: float = Form(2.4),
+    smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     smart_extend_pyramid_initializer: str = Form("edge_strips"),
     wait_for_result: bool = Form(True),
 ):
@@ -669,20 +677,20 @@ async def generate(
         "mask_blur": mask_blur,
         "smart_extend": smart_extend,
         "smart_extend_anchor": smart_extend_anchor,
-        "smart_extend_feather": smart_extend_feather,
-        "smart_extend_auto_step": smart_extend_auto_step,
-        "smart_extend_step_growth": smart_extend_step_growth,
-        "smart_extend_refine": smart_extend_refine,
-        "smart_extend_refine_width": smart_extend_refine_width,
-        "smart_extend_refine_strength": smart_extend_refine_strength,
-        "smart_extend_refine_each_step": smart_extend_refine_each_step,
+        "smart_extend_feather": SMART_EXTEND_FEATHER_DEFAULT,
+        "smart_extend_auto_step": SMART_EXTEND_AUTO_STEP_DEFAULT,
+        "smart_extend_step_growth": SMART_EXTEND_STEP_GROWTH_DEFAULT,
+        "smart_extend_refine": SMART_EXTEND_REFINE_DEFAULT,
+        "smart_extend_refine_width": SMART_EXTEND_REFINE_WIDTH_DEFAULT,
+        "smart_extend_refine_strength": SMART_EXTEND_REFINE_STRENGTH_DEFAULT,
+        "smart_extend_refine_each_step": SMART_EXTEND_REFINE_EACH_STEP_DEFAULT,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_repeat_chunked": smart_extend_repeat_chunked,
         "smart_extend_repeat_passes": smart_extend_repeat_passes,
         "smart_extend_repeat_seed_initializer": smart_extend_repeat_seed_initializer,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
-        "smart_extend_pyramid_trigger_ratio": smart_extend_pyramid_trigger_ratio,
+        "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "smart_extend_pyramid_initializer": smart_extend_pyramid_initializer,
     }
 

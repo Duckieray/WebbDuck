@@ -558,6 +558,22 @@ body::before {
   font-size: 12px;
 }
 
+.smart-extend-size-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.input.input-danger {
+  border-color: rgba(239, 68, 68, 0.85);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.22);
+}
+
 .nova-segmented-row {
   display: flex;
   gap: 8px;

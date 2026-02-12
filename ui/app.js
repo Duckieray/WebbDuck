@@ -13,9 +13,22 @@ const seenCompletedQueueJobs = new Set();
 const queueViewStartedAt = Date.now() / 1000;
 let latestQueuePayload = null;
 const expandedQueueJobs = new Set();
-const DENOISE_ACTUAL_MIN = 0.75;
+const DENOISE_DETAIL_MIN = 0.75;
+const DENOISE_PRESERVE_MIN = 0.30;
+const DENOISE_PRESERVE_MAX = 0.50;
 const DENOISE_ACTUAL_MAX = 1.00;
-const MEDIUM_SIZE_THRESHOLD = { width: 1728, height: 2176 };
+const SMART_EXTEND_MAX_RESOLUTION = { width: 1600, height: 2048 };
+const SMART_EXTEND_MAX_AREA = SMART_EXTEND_MAX_RESOLUTION.width * SMART_EXTEND_MAX_RESOLUTION.height;
+const SMART_EXTEND_FIXED = Object.freeze({
+    feather: 12,
+    stepGrowth: 1.25,
+    autoStep: false,
+    refine: true,
+    refineEachStep: true,
+    refineWidth: 64,
+    refineStrength: 0.32,
+    pyramidTriggerRatio: 2.4,
+});
 let appConfirmResolver = null;
 const IS_COARSE_POINTER = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
 
@@ -30,8 +43,64 @@ window._previewMaskCanvas = null;
 window._maskDrawState = null;
 
 function mapDenoiseUiToActual(uiValue) {
+    const mode = getDenoiseMode();
+    const range = getDenoiseRange(mode);
     const v = Number.isFinite(uiValue) ? uiValue : 0.85;
-    return Math.max(DENOISE_ACTUAL_MIN, Math.min(DENOISE_ACTUAL_MAX, v));
+    return Math.max(range.min, Math.min(range.max, v));
+}
+
+function getDenoiseMode() {
+    const raw = (byId('denoise-mode')?.value || '').trim().toLowerCase();
+    return raw === 'preserve' ? 'preserve' : 'details';
+}
+
+function getDenoiseRange(mode) {
+    if (mode === 'preserve') {
+        return { min: DENOISE_PRESERVE_MIN, max: DENOISE_PRESERVE_MAX };
+    }
+    return { min: DENOISE_DETAIL_MIN, max: DENOISE_ACTUAL_MAX };
+}
+
+function refreshDenoiseControls() {
+    const slider = byId('denoising_strength');
+    const valueOutput = byId('denoise-value');
+    const hint = byId('denoise-range-hint');
+    const mode = getDenoiseMode();
+    const range = getDenoiseRange(mode);
+    if (!slider) return;
+
+    slider.min = range.min.toFixed(2);
+    slider.max = range.max.toFixed(2);
+    slider.step = '0.01';
+
+    const clamped = mapDenoiseUiToActual(parseFloat(slider.value));
+    slider.value = clamped.toFixed(2);
+    if (valueOutput) valueOutput.textContent = clamped.toFixed(2);
+    const preserveBtn = byId('denoise-mode-preserve');
+    const detailsBtn = byId('denoise-mode-details');
+    preserveBtn?.classList.toggle('active', mode === 'preserve');
+    detailsBtn?.classList.toggle('active', mode !== 'preserve');
+    if (hint) {
+        hint.textContent = mode === 'preserve'
+            ? 'Keep mostly the same uses 0.30-0.50 for subtle edits.'
+            : 'Change details uses 0.75-1.00 for stronger variation.';
+    }
+}
+
+function setupDenoiseModeToggle() {
+    const modeInput = byId('denoise-mode');
+    const preserveBtn = byId('denoise-mode-preserve');
+    const detailsBtn = byId('denoise-mode-details');
+    if (!modeInput || !preserveBtn || !detailsBtn) return;
+
+    const setMode = (mode) => {
+        modeInput.value = mode === 'preserve' ? 'preserve' : 'details';
+        refreshDenoiseControls();
+        syncFromDOM();
+    };
+
+    listen(preserveBtn, 'click', () => setMode('preserve'));
+    listen(detailsBtn, 'click', () => setMode('details'));
 }
 
 function roundTo8(value) {
@@ -105,10 +174,10 @@ function estimateSmartExtendRuntimeSeconds() {
     if (!(srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0)) return null;
     if (dstW <= srcW && dstH <= srcH) return null;
 
-    const autoStep = Boolean(byId('smart-extend-auto-step')?.checked);
-    const growth = Number(byId('smart-extend-step-growth')?.value || 1.25);
-    const refineEnabled = Boolean(byId('smart-extend-refine')?.checked);
-    const refineEach = Boolean(byId('smart-extend-refine-each-step')?.checked);
+    const autoStep = SMART_EXTEND_FIXED.autoStep;
+    const growth = SMART_EXTEND_FIXED.stepGrowth;
+    const refineEnabled = SMART_EXTEND_FIXED.refine;
+    const refineEach = SMART_EXTEND_FIXED.refineEachStep;
 
     const stepCost = (mp) => 0.32 * Math.pow(Math.max(0.5, mp), 1.20); // sec/step
     const refineCost = (mp) => 0.22 * Math.pow(Math.max(0.5, mp), 1.12); // sec/step seam pass
@@ -171,24 +240,48 @@ async function maybeShowRuntimePreflightWarning() {
     });
 }
 
-function isAboveMediumResolution(width, height) {
+function isAboveOutpaintSafetyResolution(width, height) {
     const w = Number(width || 0);
     const h = Number(height || 0);
     if (!(w > 0 && h > 0)) return false;
     const area = w * h;
-    const mediumArea = MEDIUM_SIZE_THRESHOLD.width * MEDIUM_SIZE_THRESHOLD.height;
-    const longEdge = Math.max(w, h);
-    const mediumLongEdge = Math.max(MEDIUM_SIZE_THRESHOLD.width, MEDIUM_SIZE_THRESHOLD.height);
-    return area > mediumArea || longEdge > mediumLongEdge;
+    return area > SMART_EXTEND_MAX_AREA;
+}
+
+function updateSmartExtendSizeWarning(width, height) {
+    const warning = byId('smart-extend-size-warning');
+    const widthInput = byId('width');
+    const heightInput = byId('height');
+    const smartExtendOn = Boolean(byId('smart-extend-enabled')?.checked);
+    const show = Boolean(window._uploadedImage && smartExtendOn && isAboveOutpaintSafetyResolution(width, height));
+
+    if (warning) {
+        warning.classList.toggle('hidden', !show);
+        if (show) {
+            const currW = Math.round(Number(width) || 0);
+            const currH = Math.round(Number(height) || 0);
+            const currArea = currW * currH;
+            warning.textContent = `Warning: Smart Extend above ${SMART_EXTEND_MAX_RESOLUTION.width}x${SMART_EXTEND_MAX_RESOLUTION.height} may fail or produce artifacts. Current target is ${currW}x${currH}.`;
+        }
+    }
+    widthInput?.classList.toggle('input-danger', show);
+    heightInput?.classList.toggle('input-danger', show);
 }
 
 async function maybeShowLargeResolutionWarning() {
+    const smartExtendOn = Boolean(byId('smart-extend-enabled')?.checked && window._uploadedImage);
+    if (!smartExtendOn) return true;
+
     const width = Number(byId('width')?.value || getState('width') || 0);
     const height = Number(byId('height')?.value || getState('height') || 0);
-    if (!isAboveMediumResolution(width, height)) return true;
+    if (!isAboveOutpaintSafetyResolution(width, height)) return true;
+
+    const currW = Math.round(width || 0);
+    const currH = Math.round(height || 0);
+    const currArea = currW * currH;
     return await showAppConfirmModal({
-        title: 'Experimental Large Resolution',
-        message: 'Experimental: Results may vary. It is usually better to generate a medium-sized image first, then upscale or continue outpainting from that result.\n\nContinue anyway?',
+        title: 'Smart Extend Warning',
+        message: `Smart Extend above (${SMART_EXTEND_MAX_RESOLUTION.width}x${SMART_EXTEND_MAX_RESOLUTION.height} or ${SMART_EXTEND_MAX_RESOLUTION.height}x${SMART_EXTEND_MAX_RESOLUTION.width}) may fail or produce artifacts.\n\nCurrent target: ${currW}x${currH}.\n\nContinue anyway?`,
         okText: 'Continue',
         cancelText: 'Cancel',
         showCancel: true,
@@ -283,6 +376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupMobileStudioToggle();
         setupCollapsibleSections();
         setupSliders();
+        setupDenoiseModeToggle();
         setupPresetChips();
         setupFormHandlers();
         setupGenerationButtons();
@@ -296,7 +390,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await Promise.all([loadModels(), loadSchedulers(), window.galleryManager.load()]);
 
         syncToDOM();
-        updateSmartExtendAutoStepUI();
+        refreshDenoiseControls();
         updateActivePresetChip(byId('width')?.value, byId('height')?.value);
         ensureSelectDefaults();
 
@@ -430,11 +524,6 @@ function setupSliders() {
         ['second_pass_steps', 'second-steps-value'],
         ['second_pass_blend', 'blend-value'],
         ['denoising_strength', 'denoise-value'],
-        ['smart-extend-feather', 'smart-extend-feather-value'],
-        ['smart-extend-step-growth', 'smart-extend-step-growth-value'],
-        ['smart-extend-pyramid-trigger-ratio', 'smart-extend-pyramid-trigger-ratio-value'],
-        ['smart-extend-refine-width', 'smart-extend-refine-width-value'],
-        ['smart-extend-refine-strength', 'smart-extend-refine-strength-value']
     ];
 
     pairs.forEach(([inputId, outputId]) => {
@@ -448,16 +537,14 @@ function setupSliders() {
                 output.textContent = mapDenoiseUiToActual(uiValue).toFixed(2);
                 return;
             }
-            if (inputId === 'smart-extend-step-growth') {
-                output.textContent = Number(input.value).toFixed(2);
-                return;
-            }
             output.textContent = input.value;
         };
 
         update();
         listen(input, 'input', update);
     });
+
+    refreshDenoiseControls();
 }
 
 function setupPresetChips() {
@@ -499,12 +586,20 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'smart-extend-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-pyramid-enable', 'smart-extend-pyramid-trigger-ratio', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
         listen(el, 'change', saveState);
     });
+
+    const refreshSmartExtendSizeWarning = () => {
+        updateSmartExtendSizeWarning(Number(byId('width')?.value || 0), Number(byId('height')?.value || 0));
+    };
+    listen(byId('width'), 'input', refreshSmartExtendSizeWarning);
+    listen(byId('height'), 'input', refreshSmartExtendSizeWarning);
+    listen(byId('smart-extend-enabled'), 'change', refreshSmartExtendSizeWarning);
+    refreshSmartExtendSizeWarning();
 
     const promptEl = byId('prompt');
     if (promptEl) {
@@ -540,11 +635,6 @@ function setupFormHandlers() {
         byId('inpaint-replace')?.classList.remove('active');
     });
 
-    const autoStepEl = byId('smart-extend-auto-step');
-    if (autoStepEl) {
-        listen(autoStepEl, 'change', updateSmartExtendAutoStepUI);
-        updateSmartExtendAutoStepUI();
-    }
 }
 
 function generateRandomSeed() {
@@ -694,15 +784,15 @@ function collectFormData() {
         if (byId('smart-extend-enabled')?.checked) {
             formData.append('smart_extend', 'true');
             formData.append('smart_extend_anchor', 'center');
-            formData.append('smart_extend_feather', byId('smart-extend-feather')?.value || '8');
-            formData.append('smart_extend_auto_step', byId('smart-extend-auto-step')?.checked ? 'true' : 'false');
-            formData.append('smart_extend_step_growth', byId('smart-extend-step-growth')?.value || '1.25');
-            formData.append('smart_extend_refine', byId('smart-extend-refine')?.checked ? 'true' : 'false');
-            formData.append('smart_extend_refine_each_step', byId('smart-extend-refine-each-step')?.checked ? 'true' : 'false');
-            formData.append('smart_extend_refine_width', byId('smart-extend-refine-width')?.value || '24');
-            formData.append('smart_extend_refine_strength', byId('smart-extend-refine-strength')?.value || '0.28');
+            formData.append('smart_extend_feather', String(SMART_EXTEND_FIXED.feather));
+            formData.append('smart_extend_auto_step', SMART_EXTEND_FIXED.autoStep ? 'true' : 'false');
+            formData.append('smart_extend_step_growth', String(SMART_EXTEND_FIXED.stepGrowth));
+            formData.append('smart_extend_refine', SMART_EXTEND_FIXED.refine ? 'true' : 'false');
+            formData.append('smart_extend_refine_each_step', SMART_EXTEND_FIXED.refineEachStep ? 'true' : 'false');
+            formData.append('smart_extend_refine_width', String(SMART_EXTEND_FIXED.refineWidth));
+            formData.append('smart_extend_refine_strength', SMART_EXTEND_FIXED.refineStrength.toFixed(2));
             formData.append('smart_extend_pyramid_enable', byId('smart-extend-pyramid-enable')?.checked ? 'true' : 'false');
-            formData.append('smart_extend_pyramid_trigger_ratio', byId('smart-extend-pyramid-trigger-ratio')?.value || '2.4');
+            formData.append('smart_extend_pyramid_trigger_ratio', SMART_EXTEND_FIXED.pyramidTriggerRatio.toFixed(1));
             const placement = window._smartExtendPlacement;
             if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.y)) {
                 formData.append('smart_extend_offset_x', String(Math.round(placement.x)));
@@ -779,19 +869,6 @@ function updateBatchStrip(images) {
             placeholder.classList.add('hidden');
         });
     });
-}
-
-function updateSmartExtendAutoStepUI() {
-    const autoStepEl = byId('smart-extend-auto-step');
-    const growthEl = byId('smart-extend-step-growth');
-    const growthValueEl = byId('smart-extend-step-growth-value');
-    if (!autoStepEl || !growthEl || !growthValueEl) return;
-
-    const isEnabled = autoStepEl.checked;
-    growthEl.disabled = !isEnabled;
-    growthEl.style.opacity = isEnabled ? '1' : '0.45';
-    growthValueEl.style.opacity = isEnabled ? '1' : '0.65';
-    growthValueEl.textContent = isEnabled ? Number(growthEl.value || 1.25).toFixed(2) : 'off';
 }
 
 function cancelGeneration() {
@@ -945,12 +1022,9 @@ function setupHelpModals() {
                   <li><strong>Mask:</strong> paint where edits are allowed.</li>
                   <li><strong>Inpaint Mode:</strong> Replace edits masked area; Keep protects masked area.</li>
                   <li><strong>Smart Extend:</strong> expands canvas and fills new space.</li>
-                  <li><strong>Auto Step Outpaint:</strong> grows canvas in smaller passes to keep identity more stable on large expansions. Turn it off for one single pass.</li>
-                  <li><strong>Refine Each Step:</strong> runs seam cleanup after every growth step. <strong>Best for quality:</strong> <code>ON</code>.</li>
-                  <li><strong>Step Growth:</strong> per-pass growth factor. <strong>Best:</strong> <code>1.15-1.30</code>.</li>
-                  <li><strong>Feather:</strong> softens blend edge. <strong>Best:</strong> <code>6-12</code>.</li>
-                  <li><strong>Seam Width:</strong> repair band around the edge. <strong>Best:</strong> <code>18-32</code>.</li>
-                  <li><strong>Refine Strength:</strong> seam cleanup strength. <strong>Best:</strong> <code>0.20-0.35</code>.</li>
+                  <li><strong>Feather:</strong> fixed at <code>12</code>.</li>
+                  <li><strong>Seam Refinement:</strong> always on with fixed settings for consistency (width <code>64</code>, strength <code>0.32</code>).</li>
+                  <li><strong>Pyramid Trigger Ratio:</strong> fixed at <code>2.4</code>.</li>
                 </ul>
             `
         },
@@ -1120,10 +1194,9 @@ function showInputImageInStudio(enableEditMode = false) {
 function setupSmartExtendPlacement() {
     const canvas = byId('preview-edit-canvas');
     const enabled = byId('smart-extend-enabled');
-    const centerBtn = byId('smart-extend-center');
     const width = byId('width');
     const height = byId('height');
-    if (!canvas || !enabled || !centerBtn || !width || !height) return;
+    if (!canvas || !enabled || !width || !height) return;
 
     // Prevent browser touch/image-selection behavior from stealing drag handles on mobile.
     const blockNativeGesture = (evt) => {
@@ -1147,12 +1220,6 @@ function setupSmartExtendPlacement() {
     });
     listen(width, 'input', refresh);
     listen(height, 'input', refresh);
-
-    listen(centerBtn, 'click', () => {
-        window._smartExtendPlacement = null;
-        setState({ smartExtendOffsetX: null, smartExtendOffsetY: null });
-        renderSmartExtendCanvas(true);
-    });
 
     const pointerPos = (evt) => {
         const rect = canvas.getBoundingClientRect();
@@ -1262,7 +1329,17 @@ function setupSmartExtendPlacement() {
             setState({ width: newW, height: newH, smartExtendOffsetX: newX, smartExtendOffsetY: newY });
 
             window._smartExtendPlacement = { x: newX, y: newY, custom: true };
-            renderSmartExtendCanvas();
+            const updatedGeom = renderSmartExtendCanvas();
+            // Rebase drag deltas every move so resize stays smooth even as scale changes.
+            resize.startClientX = p.x;
+            resize.startClientY = p.y;
+            resize.startW = newW;
+            resize.startH = newH;
+            resize.startX = newX;
+            resize.startY = newY;
+            if (updatedGeom && Number.isFinite(updatedGeom.scale) && updatedGeom.scale > 0) {
+                resize.scale = updatedGeom.scale;
+            }
             evt.preventDefault();
             return;
         }
@@ -1366,8 +1443,8 @@ Math.roundTo8 = Math.roundTo8 || function (v) {
 };
 
 function getResizeHandles(geom) {
-    const baseHalf = Math.max(8, Math.min(14, Math.round(Math.min(geom.frameW, geom.frameH) * 0.02)));
-    const half = IS_COARSE_POINTER ? Math.max(14, Math.round(baseHalf * 1.35)) : baseHalf;
+    const baseHalf = Math.max(12, Math.min(22, Math.round(Math.min(geom.frameW, geom.frameH) * 0.03)));
+    const half = IS_COARSE_POINTER ? Math.max(22, Math.round(baseHalf * 1.35)) : baseHalf;
     const x = geom.frameX;
     const y = geom.frameY;
     const w = geom.frameW;
@@ -1386,8 +1463,7 @@ function getResizeHandles(geom) {
 
 function hitResizeHandle(geom, px, py) {
     const hs = getResizeHandles(geom).map((h) => {
-        if (!IS_COARSE_POINTER) return h;
-        return { ...h, half: Math.max(20, Math.round(h.half * 1.8)) };
+        return { ...h, half: Math.max(20, Math.round(h.half * (IS_COARSE_POINTER ? 2.0 : 1.5))) };
     });
     for (const h of hs) {
         if (
@@ -1399,6 +1475,24 @@ function hitResizeHandle(geom, px, py) {
             return h.id;
         }
     }
+
+    // Fallback: allow edge drags anywhere near the frame border (not only on corner/edge boxes).
+    const edgeTol = IS_COARSE_POINTER ? 30 : 22;
+    const withinX = px >= (geom.frameX - edgeTol) && px <= (geom.frameX + geom.frameW + edgeTol);
+    const withinY = py >= (geom.frameY - edgeTol) && py <= (geom.frameY + geom.frameH + edgeTol);
+    if (!withinX || !withinY) return null;
+    const nearLeft = Math.abs(px - geom.frameX) <= edgeTol;
+    const nearRight = Math.abs(px - (geom.frameX + geom.frameW)) <= edgeTol;
+    const nearTop = Math.abs(py - geom.frameY) <= edgeTol;
+    const nearBottom = Math.abs(py - (geom.frameY + geom.frameH)) <= edgeTol;
+    if (nearTop && nearLeft) return 'top_left';
+    if (nearTop && nearRight) return 'top_right';
+    if (nearBottom && nearLeft) return 'bottom_left';
+    if (nearBottom && nearRight) return 'bottom_right';
+    if (nearLeft) return 'left';
+    if (nearRight) return 'right';
+    if (nearTop) return 'top';
+    if (nearBottom) return 'bottom';
     return null;
 }
 
@@ -1430,6 +1524,7 @@ function renderSmartExtendCanvas(resetPlacement = false) {
     const srcH = window._uploadedImageDims?.height || 0;
     const targetW = parseInt(byId('width')?.value || '0', 10) || srcW;
     const targetH = parseInt(byId('height')?.value || '0', 10) || srcH;
+    updateSmartExtendSizeWarning(targetW, targetH);
 
     const offsetLabel = byId('smart-extend-offset');
     const cw = canvas.width;
@@ -1488,6 +1583,7 @@ function renderSmartExtendCanvas(resetPlacement = false) {
     const imgY = frameY + placeY * scale;
     const imgW = srcW * scale;
     const imgH = srcH * scale;
+    const riskyOutpaint = Boolean(byId('smart-extend-enabled')?.checked && isAboveOutpaintSafetyResolution(targetW, targetH));
 
     ctx.save();
     ctx.beginPath();
@@ -1520,12 +1616,12 @@ function renderSmartExtendCanvas(resetPlacement = false) {
         ctx.fillRect(imgRight, imgY, frameRight - imgRight, imgH);
     }
 
-    ctx.strokeStyle = 'rgba(96,165,250,0.95)';
+    ctx.strokeStyle = riskyOutpaint ? 'rgba(239,68,68,0.95)' : 'rgba(96,165,250,0.95)';
     ctx.lineWidth = 2;
     ctx.strokeRect(imgX, imgY, imgW, imgH);
 
     const handles = getResizeHandles({ frameX, frameY, frameW, frameH });
-    ctx.fillStyle = 'rgba(147, 197, 253, 0.95)';
+    ctx.fillStyle = riskyOutpaint ? 'rgba(254, 202, 202, 0.95)' : 'rgba(147, 197, 253, 0.95)';
     ctx.strokeStyle = 'rgba(8, 13, 24, 0.98)';
     ctx.lineWidth = 1.5;
     for (const h of handles) {
@@ -1541,6 +1637,14 @@ function renderSmartExtendCanvas(resetPlacement = false) {
         const tx = frameX + Math.max(10, (frameW - tw) / 2);
         const ty = Math.max(18, frameY - 10);
         ctx.fillText(hint, tx, ty);
+        if (riskyOutpaint) {
+            const warn = 'Large target: outpaint can fail or artifact.';
+            ctx.fillStyle = 'rgba(254, 202, 202, 0.95)';
+            const ww = ctx.measureText(warn).width;
+            const wx = frameX + Math.max(10, (frameW - ww) / 2);
+            const wy = Math.min(ch - 12, frameY + frameH + 18);
+            ctx.fillText(warn, wx, wy);
+        }
     }
 
     if (window._previewEditMode !== 'place') {
