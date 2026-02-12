@@ -19,6 +19,9 @@ weights/
 *.safetensors
 PROJECT_DUMP.txt
 dump_project.sh
+tests/curl_test.sh
+tests/regression.png
+tests/test.jpg
 
 # IDE
 .vscode/
