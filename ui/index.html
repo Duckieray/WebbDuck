@@ -270,6 +270,59 @@
                       <input type="checkbox" id="smart-extend-pyramid-enable" />
                       <span>Experimental: Pyramid Large Outpaint</span>
                     </label>
+                    <label class="toggle-row" for="smart-extend-advanced-enabled">
+                      <input type="checkbox" id="smart-extend-advanced-enabled" />
+                      <span>Advanced Smart Extend Controls</span>
+                    </label>
+                    <div class="smart-extend-advanced hidden" id="smart-extend-advanced-panel">
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="smart-extend-feather">Feather</label>
+                          <span class="param-value" id="smart-extend-feather-value">12</span>
+                        </div>
+                        <input class="slider" type="range" id="smart-extend-feather" min="0" max="64" step="1" value="12" />
+                      </div>
+                      <label class="toggle-row" for="smart-extend-auto-step">
+                        <input type="checkbox" id="smart-extend-auto-step" />
+                        <span>Auto Step Outpaint</span>
+                      </label>
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="smart-extend-step-growth">Step Growth</label>
+                          <span class="param-value" id="smart-extend-step-growth-value">1.25</span>
+                        </div>
+                        <input class="slider" type="range" id="smart-extend-step-growth" min="1.05" max="1.80" step="0.05" value="1.25" />
+                      </div>
+                      <label class="toggle-row" for="smart-extend-refine">
+                        <input type="checkbox" id="smart-extend-refine" checked />
+                        <span>Seam Refine</span>
+                      </label>
+                      <label class="toggle-row" for="smart-extend-refine-each-step">
+                        <input type="checkbox" id="smart-extend-refine-each-step" checked />
+                        <span>Refine Each Step</span>
+                      </label>
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="smart-extend-refine-width">Seam Width</label>
+                          <span class="param-value" id="smart-extend-refine-width-value">64</span>
+                        </div>
+                        <input class="slider" type="range" id="smart-extend-refine-width" min="16" max="128" step="8" value="64" />
+                      </div>
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="smart-extend-refine-strength">Refine Strength</label>
+                          <span class="param-value" id="smart-extend-refine-strength-value">0.32</span>
+                        </div>
+                        <input class="slider" type="range" id="smart-extend-refine-strength" min="0.05" max="0.60" step="0.01" value="0.32" />
+                      </div>
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="smart-extend-pyramid-trigger-ratio">Pyramid Trigger Ratio</label>
+                          <span class="param-value" id="smart-extend-pyramid-trigger-ratio-value">2.4</span>
+                        </div>
+                        <input class="slider" type="range" id="smart-extend-pyramid-trigger-ratio" min="1.20" max="3.50" step="0.10" value="2.4" />
+                      </div>
+                    </div>
                     <div class="smart-extend-size-warning hidden" id="smart-extend-size-warning" role="status" aria-live="polite">
                       Warning: Smart Extend target resolution may be unstable.
                     </div>

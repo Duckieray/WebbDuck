@@ -30,6 +30,7 @@ const DEFAULT_STATE = {
     denoisingMode: 'details', // 'details' | 'preserve'
     denoisingScaleVersion: 5,
     smartExtendEnabled: false,
+    smartExtendAdvanced: false,
     smartExtendAnchor: 'center',
     smartExtendFeather: 12,
     smartExtendAutoStep: false,
@@ -38,6 +39,7 @@ const DEFAULT_STATE = {
     smartExtendRefineEachStep: true,
     smartExtendRefineWidth: 64,
     smartExtendRefineStrength: 0.32,
+    smartExtendPyramidTriggerRatio: 2.4,
     smartExtendOffsetX: null,
     smartExtendOffsetY: null,
     clipSkip2: false,
@@ -94,14 +96,6 @@ export function initState() {
         if (saved) {
             const parsed = JSON.parse(saved);
             state = { ...DEFAULT_STATE, ...parsed };
-            // Smart-extend seam settings are fixed in current UI and should not be overridden by old saved state.
-            state.smartExtendAutoStep = false;
-            state.smartExtendFeather = 12;
-            state.smartExtendStepGrowth = 1.25;
-            state.smartExtendRefine = true;
-            state.smartExtendRefineEachStep = true;
-            state.smartExtendRefineWidth = 64;
-            state.smartExtendRefineStrength = 0.32;
             const inferredMode = parsed.denoisingMode
                 ?? ((Boolean(parsed.denoisingFullControl) && Number(parsed.denoisingStrength) <= DENOISE_PRESERVE_MAX)
                     ? 'preserve'
@@ -296,14 +290,16 @@ export function syncFromDOM() {
         denoisingMode,
         denoisingStrength,
         smartExtendEnabled: getChecked('smart-extend-enabled'),
+        smartExtendAdvanced: getChecked('smart-extend-advanced-enabled'),
         smartExtendAnchor: getValue('smart-extend-anchor') || 'center',
-        smartExtendFeather: 12,
-        smartExtendAutoStep: false,
-        smartExtendStepGrowth: 1.25,
-        smartExtendRefine: true,
-        smartExtendRefineEachStep: true,
-        smartExtendRefineWidth: 64,
-        smartExtendRefineStrength: 0.32,
+        smartExtendFeather: parseInt(getValue('smart-extend-feather')) || 12,
+        smartExtendAutoStep: getChecked('smart-extend-auto-step'),
+        smartExtendStepGrowth: parseFloat(getValue('smart-extend-step-growth')) || 1.25,
+        smartExtendRefine: getChecked('smart-extend-refine'),
+        smartExtendRefineEachStep: getChecked('smart-extend-refine-each-step'),
+        smartExtendRefineWidth: parseInt(getValue('smart-extend-refine-width')) || 64,
+        smartExtendRefineStrength: parseFloat(getValue('smart-extend-refine-strength')) || 0.32,
+        smartExtendPyramidTriggerRatio: parseFloat(getValue('smart-extend-pyramid-trigger-ratio')) || 2.4,
         smartExtendOffsetX: state.smartExtendOffsetX ?? null,
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
         clipSkip2: getChecked('clip-skip-2-enabled'),
@@ -355,7 +351,16 @@ export function syncToDOM() {
         scaleVersion: state.denoisingScaleVersion,
     }));
     setChecked('smart-extend-enabled', state.smartExtendEnabled);
+    setChecked('smart-extend-advanced-enabled', Boolean(state.smartExtendAdvanced));
     setValue('smart-extend-anchor', state.smartExtendAnchor || 'center');
+    setValue('smart-extend-feather', state.smartExtendFeather ?? 12);
+    setChecked('smart-extend-auto-step', Boolean(state.smartExtendAutoStep));
+    setValue('smart-extend-step-growth', state.smartExtendStepGrowth ?? 1.25);
+    setChecked('smart-extend-refine', Boolean(state.smartExtendRefine ?? true));
+    setChecked('smart-extend-refine-each-step', Boolean(state.smartExtendRefineEachStep ?? true));
+    setValue('smart-extend-refine-width', state.smartExtendRefineWidth ?? 64);
+    setValue('smart-extend-refine-strength', state.smartExtendRefineStrength ?? 0.32);
+    setValue('smart-extend-pyramid-trigger-ratio', state.smartExtendPyramidTriggerRatio ?? 2.4);
 
     // Sync Inpaint Mode Buttons
     const replaceBtn = document.getElementById('inpaint-replace');
@@ -385,6 +390,11 @@ function updateValueDisplays() {
         'second_pass_steps': 'second-steps-value',
         'second_pass_blend': 'blend-value',
         'denoising_strength': 'denoise-value',
+        'smart-extend-feather': 'smart-extend-feather-value',
+        'smart-extend-step-growth': 'smart-extend-step-growth-value',
+        'smart-extend-refine-width': 'smart-extend-refine-width-value',
+        'smart-extend-refine-strength': 'smart-extend-refine-strength-value',
+        'smart-extend-pyramid-trigger-ratio': 'smart-extend-pyramid-trigger-ratio-value',
     };
 
     for (const [inputId, displayId] of Object.entries(displays)) {
@@ -398,6 +408,10 @@ function updateValueDisplays() {
                     scaleVersion: state.denoisingScaleVersion,
                 });
                 display.textContent = denoiseValue.toFixed(2);
+            } else if (inputId === 'smart-extend-refine-strength') {
+                display.textContent = Number(input.value).toFixed(2);
+            } else if (inputId === 'smart-extend-step-growth' || inputId === 'smart-extend-pyramid-trigger-ratio') {
+                display.textContent = Number(input.value).toFixed(2);
             } else {
                 display.textContent = input.value;
             }
