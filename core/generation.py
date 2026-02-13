@@ -40,14 +40,14 @@ class GlobalProgress:
             # Clamping
             global_step = min(global_step, self.total_estimated_steps)
             
-            # Calculate percentage (35% to 90% is the generation phase)
-            # We reserve 0-35% for loading, and 90-100% for saving/decoding
-            # So generation maps 0-100% of steps to 35-90% of global progress
+            # Generation occupies the bulk of runtime.
+            # Keep loading mostly in 0-40% and reserve only a tiny tail for decode/save.
+            # This avoids the UI appearing "90% done" while most work is still running.
             
             gen_progress = global_step / max(1, self.total_estimated_steps)
             
-            # Map generation progress (0-1) to UI progress range (0.35 - 0.90)
-            ui_progress = 0.35 + (gen_progress * 0.55)
+            # Map generation progress (0-1) to UI range (0.40 - 0.97)
+            ui_progress = 0.40 + (gen_progress * 0.57)
             
             update_progress(ui_progress, step=global_step, total_steps=self.total_estimated_steps)
             

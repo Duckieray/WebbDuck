@@ -622,8 +622,8 @@ class PipelineManager:
 
                 def mark_load(stage: str, step: int):
                     self._ensure_not_cancelled(cancel_event)
-                    # Reserve the first 30% of overall progress for loading.
-                    progress = 0.02 + (min(step, load_total_steps) / load_total_steps) * 0.30
+                    # Loading should stay below the denoising band so runtime percentages feel linear.
+                    progress = 0.04 + (min(step, load_total_steps) / load_total_steps) * 0.34
                     update_stage(f"Loading pipeline components... ({step}/{load_total_steps}) - {stage}")
                     update_progress(progress, step=step, total_steps=load_total_steps)
 

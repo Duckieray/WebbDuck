@@ -339,6 +339,24 @@ export class LightboxManager {
         if (meta.cfg) settings.push(`CFG: ${meta.cfg}`);
         if (meta.scheduler) settings.push(meta.scheduler);
         if (meta.width && meta.height) settings.push(`${meta.width}x${meta.height}`);
+        const elapsedRaw = Number(meta.generation_elapsed_seconds);
+        let elapsedSeconds = Number.isFinite(elapsedRaw) && elapsedRaw > 0 ? elapsedRaw : null;
+        if (!elapsedSeconds && meta.generation_started_at && meta.generation_finished_at) {
+            const started = Date.parse(meta.generation_started_at);
+            const finished = Date.parse(meta.generation_finished_at);
+            if (Number.isFinite(started) && Number.isFinite(finished) && finished > started) {
+                elapsedSeconds = (finished - started) / 1000.0;
+            }
+        }
+        if (elapsedSeconds) {
+            const batch = Math.max(1, Number(meta.num_images || 1));
+            const perImage = elapsedSeconds / batch;
+            if (batch > 1) {
+                settings.push(`Time: ${elapsedSeconds.toFixed(1)}s total (${perImage.toFixed(1)}s/img, batch ${batch})`);
+            } else {
+                settings.push(`Time: ${elapsedSeconds.toFixed(1)}s`);
+            }
+        }
 
         setText('lightbox-settings', settings.join(' | ') || '--');
 

@@ -153,8 +153,8 @@ async def gpu_worker(queue):
             continue
 
         try:
-            update_stage("Generating")
-            update_progress(0.4)
+            update_stage("Preparing")
+            update_progress(0.02)
             await broadcast_state(snapshot())
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelledError("Generation cancelled before denoising")
@@ -177,11 +177,11 @@ async def gpu_worker(queue):
             )
 
             update_stage("Decoding")
-            update_progress(0.85)
+            update_progress(0.98)
             await broadcast_state(snapshot())
 
             update_stage("Saving")
-            update_progress(0.9)
+            update_progress(0.995)
             await broadcast_state(snapshot())
 
             paths = save_images(images, job["settings"])
