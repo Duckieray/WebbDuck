@@ -72,6 +72,48 @@ SMART_EXTEND_REFINE_STRENGTH_DEFAULT = 0.32
 SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT = 2.4
 
 
+def _resolve_smart_extend_settings(
+    *,
+    advanced: bool,
+    feather: int,
+    auto_step: bool,
+    step_growth: float,
+    refine: bool,
+    refine_width: int,
+    refine_strength: float,
+    refine_each_step: bool,
+    pyramid_trigger_ratio: float,
+) -> dict:
+    """Return effective smart-extend settings.
+
+    When advanced is disabled, server-enforced defaults are used.
+    """
+    if not advanced:
+        return {
+            "smart_extend_advanced": False,
+            "smart_extend_feather": SMART_EXTEND_FEATHER_DEFAULT,
+            "smart_extend_auto_step": SMART_EXTEND_AUTO_STEP_DEFAULT,
+            "smart_extend_step_growth": SMART_EXTEND_STEP_GROWTH_DEFAULT,
+            "smart_extend_refine": SMART_EXTEND_REFINE_DEFAULT,
+            "smart_extend_refine_width": SMART_EXTEND_REFINE_WIDTH_DEFAULT,
+            "smart_extend_refine_strength": SMART_EXTEND_REFINE_STRENGTH_DEFAULT,
+            "smart_extend_refine_each_step": SMART_EXTEND_REFINE_EACH_STEP_DEFAULT,
+            "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
+        }
+
+    return {
+        "smart_extend_advanced": True,
+        "smart_extend_feather": max(0, int(feather)),
+        "smart_extend_auto_step": bool(auto_step),
+        "smart_extend_step_growth": max(1.01, float(step_growth)),
+        "smart_extend_refine": bool(refine),
+        "smart_extend_refine_width": max(1, int(refine_width)),
+        "smart_extend_refine_strength": max(0.0, float(refine_strength)),
+        "smart_extend_refine_each_step": bool(refine_each_step),
+        "smart_extend_pyramid_trigger_ratio": max(1.0, float(pyramid_trigger_ratio)),
+    }
+
+
 def _round_to_8(value, fallback=1024) -> int:
     """Normalize dimensions to nearest multiple of 8."""
     try:
@@ -155,6 +197,8 @@ def summarize_settings(settings: dict) -> dict:
 
     if settings.get("smart_extend"):
         mode_details.append("smart extend")
+        if settings.get("smart_extend_advanced"):
+            mode_details.append("advanced controls")
         feather = settings.get("smart_extend_feather")
         if feather is not None:
             mode_details.append(f"feather {feather}")
@@ -531,6 +575,7 @@ async def test(
     inpainting_fill: str = Form("replace"),
     mask_blur: int = Form(8),
     smart_extend: bool = Form(False),
+    smart_extend_advanced: bool = Form(False),
     smart_extend_anchor: str = Form("center"),
     smart_extend_feather: int = Form(SMART_EXTEND_FEATHER_DEFAULT),
     smart_extend_auto_step: bool = Form(SMART_EXTEND_AUTO_STEP_DEFAULT),
@@ -573,20 +618,25 @@ async def test(
         "mask_blur": mask_blur,
         "smart_extend": smart_extend,
         "smart_extend_anchor": smart_extend_anchor,
-        "smart_extend_feather": SMART_EXTEND_FEATHER_DEFAULT,
-        "smart_extend_auto_step": SMART_EXTEND_AUTO_STEP_DEFAULT,
-        "smart_extend_step_growth": SMART_EXTEND_STEP_GROWTH_DEFAULT,
-        "smart_extend_refine": SMART_EXTEND_REFINE_DEFAULT,
-        "smart_extend_refine_width": SMART_EXTEND_REFINE_WIDTH_DEFAULT,
-        "smart_extend_refine_strength": SMART_EXTEND_REFINE_STRENGTH_DEFAULT,
-        "smart_extend_refine_each_step": SMART_EXTEND_REFINE_EACH_STEP_DEFAULT,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
-        "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "clip_skip": clip_skip,
         "experimental_compress": experimental_compress,
     }
+    settings.update(
+        _resolve_smart_extend_settings(
+            advanced=smart_extend_advanced,
+            feather=smart_extend_feather,
+            auto_step=smart_extend_auto_step,
+            step_growth=smart_extend_step_growth,
+            refine=smart_extend_refine,
+            refine_width=smart_extend_refine_width,
+            refine_strength=smart_extend_refine_strength,
+            refine_each_step=smart_extend_refine_each_step,
+            pyramid_trigger_ratio=smart_extend_pyramid_trigger_ratio,
+        )
+    )
 
     if image:
         ext = Path(image.filename).suffix
@@ -659,6 +709,7 @@ async def generate(
     inpainting_fill: str = Form("replace"),
     mask_blur: int = Form(8),
     smart_extend: bool = Form(False),
+    smart_extend_advanced: bool = Form(False),
     smart_extend_anchor: str = Form("center"),
     smart_extend_feather: int = Form(SMART_EXTEND_FEATHER_DEFAULT),
     smart_extend_auto_step: bool = Form(SMART_EXTEND_AUTO_STEP_DEFAULT),
@@ -706,23 +757,28 @@ async def generate(
         "mask_blur": mask_blur,
         "smart_extend": smart_extend,
         "smart_extend_anchor": smart_extend_anchor,
-        "smart_extend_feather": SMART_EXTEND_FEATHER_DEFAULT,
-        "smart_extend_auto_step": SMART_EXTEND_AUTO_STEP_DEFAULT,
-        "smart_extend_step_growth": SMART_EXTEND_STEP_GROWTH_DEFAULT,
-        "smart_extend_refine": SMART_EXTEND_REFINE_DEFAULT,
-        "smart_extend_refine_width": SMART_EXTEND_REFINE_WIDTH_DEFAULT,
-        "smart_extend_refine_strength": SMART_EXTEND_REFINE_STRENGTH_DEFAULT,
-        "smart_extend_refine_each_step": SMART_EXTEND_REFINE_EACH_STEP_DEFAULT,
         "smart_extend_offset_x": smart_extend_offset_x,
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_repeat_chunked": smart_extend_repeat_chunked,
         "smart_extend_repeat_passes": smart_extend_repeat_passes,
         "smart_extend_repeat_seed_initializer": smart_extend_repeat_seed_initializer,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
-        "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "smart_extend_pyramid_initializer": smart_extend_pyramid_initializer,
         "clip_skip": clip_skip,
     }
+    settings.update(
+        _resolve_smart_extend_settings(
+            advanced=smart_extend_advanced,
+            feather=smart_extend_feather,
+            auto_step=smart_extend_auto_step,
+            step_growth=smart_extend_step_growth,
+            refine=smart_extend_refine,
+            refine_width=smart_extend_refine_width,
+            refine_strength=smart_extend_refine_strength,
+            refine_each_step=smart_extend_refine_each_step,
+            pyramid_trigger_ratio=smart_extend_pyramid_trigger_ratio,
+        )
+    )
 
     if image:
         # Use UUID to prevent file locking issues on Windows

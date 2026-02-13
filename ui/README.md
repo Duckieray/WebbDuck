@@ -39,6 +39,7 @@ ui/
 - Seed randomize icon sets true random mode (clears seed input) with persisted seed handling.
 - Dedicated Queue modal with job metadata, cancel action for queued/running jobs, and img2img thumbnail previews.
 - Settings modal for long-run warning threshold and CLIP_SKIP2 toggle.
+- Smart Extend has a compact default mode plus an optional `Advanced` toggle for manual seam/pyramid tuning.
 - Lightbox info panel at the bottom with toggle and full metadata.
 - Gallery flat-grid view with keyword search, filter chips (`All`/`HD`/`Favorites`), thumbnail-size slider, and infinite scroll.
 

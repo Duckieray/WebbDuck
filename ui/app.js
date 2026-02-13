@@ -614,7 +614,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -637,6 +637,16 @@ function setupFormHandlers() {
     listen(byId('height'), 'input', refreshSmartExtendSizeWarning);
     listen(byId('smart-extend-enabled'), 'change', refreshSmartExtendSizeWarning);
     refreshSmartExtendSizeWarning();
+
+    const updateSmartExtendAdvancedVisibility = () => {
+        const enabled = Boolean(byId('smart-extend-advanced-enabled')?.checked);
+        toggleClass(byId('smart-extend-advanced-panel'), 'hidden', !enabled);
+    };
+    listen(byId('smart-extend-advanced-enabled'), 'change', () => {
+        updateSmartExtendAdvancedVisibility();
+        syncFromDOM();
+    });
+    updateSmartExtendAdvancedVisibility();
 
     const promptEl = byId('prompt');
     if (promptEl) {
@@ -672,6 +682,35 @@ function setupFormHandlers() {
         byId('inpaint-replace')?.classList.remove('active');
     });
 
+}
+
+function readSmartExtendOptions() {
+    const advanced = Boolean(byId('smart-extend-advanced-enabled')?.checked);
+    if (!advanced) {
+        return {
+            advanced,
+            feather: SMART_EXTEND_FIXED.feather,
+            autoStep: SMART_EXTEND_FIXED.autoStep,
+            stepGrowth: SMART_EXTEND_FIXED.stepGrowth,
+            refine: SMART_EXTEND_FIXED.refine,
+            refineEachStep: SMART_EXTEND_FIXED.refineEachStep,
+            refineWidth: SMART_EXTEND_FIXED.refineWidth,
+            refineStrength: SMART_EXTEND_FIXED.refineStrength,
+            pyramidTriggerRatio: SMART_EXTEND_FIXED.pyramidTriggerRatio,
+        };
+    }
+    const state = getState();
+    return {
+        advanced,
+        feather: Number(byId('smart-extend-feather')?.value || state.smartExtendFeather || SMART_EXTEND_FIXED.feather),
+        autoStep: Boolean(byId('smart-extend-auto-step')?.checked),
+        stepGrowth: Number(byId('smart-extend-step-growth')?.value || state.smartExtendStepGrowth || SMART_EXTEND_FIXED.stepGrowth),
+        refine: Boolean(byId('smart-extend-refine')?.checked),
+        refineEachStep: Boolean(byId('smart-extend-refine-each-step')?.checked),
+        refineWidth: Number(byId('smart-extend-refine-width')?.value || state.smartExtendRefineWidth || SMART_EXTEND_FIXED.refineWidth),
+        refineStrength: Number(byId('smart-extend-refine-strength')?.value || state.smartExtendRefineStrength || SMART_EXTEND_FIXED.refineStrength),
+        pyramidTriggerRatio: Number(byId('smart-extend-pyramid-trigger-ratio')?.value || state.smartExtendPyramidTriggerRatio || SMART_EXTEND_FIXED.pyramidTriggerRatio),
+    };
 }
 
 async function updateTokenCounter(prompt) {
@@ -820,17 +859,19 @@ function collectFormData() {
         // Keep legacy key for compatibility with any older handlers.
         formData.append('denoising_strength', denoise);
         if (byId('smart-extend-enabled')?.checked) {
+            const smartExtendOpts = readSmartExtendOptions();
             formData.append('smart_extend', 'true');
             formData.append('smart_extend_anchor', 'center');
-            formData.append('smart_extend_feather', String(SMART_EXTEND_FIXED.feather));
-            formData.append('smart_extend_auto_step', SMART_EXTEND_FIXED.autoStep ? 'true' : 'false');
-            formData.append('smart_extend_step_growth', String(SMART_EXTEND_FIXED.stepGrowth));
-            formData.append('smart_extend_refine', SMART_EXTEND_FIXED.refine ? 'true' : 'false');
-            formData.append('smart_extend_refine_each_step', SMART_EXTEND_FIXED.refineEachStep ? 'true' : 'false');
-            formData.append('smart_extend_refine_width', String(SMART_EXTEND_FIXED.refineWidth));
-            formData.append('smart_extend_refine_strength', SMART_EXTEND_FIXED.refineStrength.toFixed(2));
+            formData.append('smart_extend_advanced', smartExtendOpts.advanced ? 'true' : 'false');
+            formData.append('smart_extend_feather', String(Math.round(smartExtendOpts.feather)));
+            formData.append('smart_extend_auto_step', smartExtendOpts.autoStep ? 'true' : 'false');
+            formData.append('smart_extend_step_growth', Number(smartExtendOpts.stepGrowth).toFixed(2));
+            formData.append('smart_extend_refine', smartExtendOpts.refine ? 'true' : 'false');
+            formData.append('smart_extend_refine_each_step', smartExtendOpts.refineEachStep ? 'true' : 'false');
+            formData.append('smart_extend_refine_width', String(Math.round(smartExtendOpts.refineWidth)));
+            formData.append('smart_extend_refine_strength', Number(smartExtendOpts.refineStrength).toFixed(2));
             formData.append('smart_extend_pyramid_enable', byId('smart-extend-pyramid-enable')?.checked ? 'true' : 'false');
-            formData.append('smart_extend_pyramid_trigger_ratio', SMART_EXTEND_FIXED.pyramidTriggerRatio.toFixed(1));
+            formData.append('smart_extend_pyramid_trigger_ratio', Number(smartExtendOpts.pyramidTriggerRatio).toFixed(2));
             const placement = window._smartExtendPlacement;
             if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.y)) {
                 formData.append('smart_extend_offset_x', String(Math.round(placement.x)));
@@ -1076,9 +1117,8 @@ function setupHelpModals() {
                   <li><strong>Mask:</strong> paint where edits are allowed.</li>
                   <li><strong>Inpaint Mode:</strong> Replace edits masked area; Keep protects masked area.</li>
                   <li><strong>Smart Extend:</strong> expands canvas and fills new space.</li>
-                  <li><strong>Feather:</strong> fixed at <code>12</code>.</li>
-                  <li><strong>Seam Refinement:</strong> always on with fixed settings for consistency (width <code>64</code>, strength <code>0.32</code>).</li>
-                  <li><strong>Pyramid Trigger Ratio:</strong> fixed at <code>2.4</code>.</li>
+                  <li><strong>Default mode:</strong> uses tuned defaults (Feather <code>12</code>, Seam Width <code>64</code>, Refine Strength <code>0.32</code>, Pyramid Ratio <code>2.4</code>).</li>
+                  <li><strong>Advanced mode:</strong> enable <em>Advanced Smart Extend Controls</em> to override those values manually.</li>
                 </ul>
             `
         },

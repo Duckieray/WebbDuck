@@ -133,14 +133,16 @@ pytest tests/test_modes.py -v
 
 Use the project conda environment if you run tests through WSL.
 
-## Cleanup Backlog
+## Cleanup Notes
 
-- Remove legacy UI entrypoints and modules that are no longer part of the active app flow:
+- Legacy UI entrypoints/modules from the pre-Nova path were removed:
   - `ui/app_old.js`
-  - legacy lowercase modules in `ui/modules/` (`gallery.js`, `generation.js`, `upload.js`, `preview.js`, `lora.js`, `mask-editor.js`, `state.js`, `utils.js`)
-- After removal, run a full import/reference sweep to ensure no active files reference deleted legacy modules.
-- Run a repo-wide pass for dead code:
-  - unused imports
-  - unused functions
-  - stale helpers left from pre-Nova UI rewrites
-- Enforce “no browser popup APIs” (`alert`, `confirm`) in active UI code; use modal components instead.
+  - `ui/index_old.html`
+  - lowercase legacy modules in `ui/modules/`
+  - legacy `ui/ws.js` and old monolithic CSS files
+- Active app flow is now centered on:
+  - `ui/app.js`
+  - `ui/core/*`
+  - `ui/modules/*` (PascalCase modules)
+  - `ui/styles/main.css` + Nova theme stack
+- For new cleanup passes, keep enforcing “no browser popup APIs” (`alert`, `confirm`) in active UI code; use modal components instead.

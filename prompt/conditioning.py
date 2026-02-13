@@ -132,3 +132,52 @@ def build_sdxl_conditioning(pipe, prompt, prompt_2, negative):
         negative_prompt_embeds,
         neg_pool,
     )
+
+
+def inject_prompt_conditioning_kwargs(
+    kwargs: dict,
+    *,
+    active_pipe,
+    use_experimental: bool,
+    builder,
+    cache: dict | None = None,
+) -> dict:
+    """Replace prompt strings in kwargs with explicit SDXL conditioning tensors."""
+    if active_pipe is None or "prompt_embeds" in kwargs:
+        return kwargs
+    if "prompt" not in kwargs and "negative_prompt" not in kwargs:
+        return kwargs
+
+    prompt = kwargs.pop("prompt", "") or ""
+    prompt_2 = kwargs.pop("prompt_2", None)
+    negative = kwargs.pop("negative_prompt", "") or ""
+    key = (id(active_pipe), prompt, prompt_2 or "", negative, bool(use_experimental))
+
+    if cache is not None and key in cache:
+        prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds = cache[key]
+    else:
+        (
+            prompt_embeds,
+            pooled_prompt_embeds,
+            negative_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = builder(
+            pipe=active_pipe,
+            prompt=prompt,
+            prompt_2=prompt_2,
+            negative=negative,
+            experimental=bool(use_experimental),
+        )
+        if cache is not None:
+            cache[key] = (
+                prompt_embeds,
+                pooled_prompt_embeds,
+                negative_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            )
+
+    kwargs["prompt_embeds"] = prompt_embeds
+    kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+    kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+    kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
+    return kwargs

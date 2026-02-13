@@ -559,6 +559,14 @@ body::before {
   font-size: 12px;
 }
 
+.smart-extend-advanced {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .form-hint {
   margin: 0;
   color: var(--text-muted);
