@@ -1,5 +1,8 @@
 # WebbDuck UI Rewrite - Implementation Plan
 
+> Archived planning artifact.
+> This document reflects an earlier UI rewrite proposal and is not the authoritative current-state spec.
+
 > **Branch**: `ui_rewrite_claude_opus4.5`  
 > **Goal**: Create a stunning, modern UI that makes the current design look outdated
 

@@ -24,6 +24,7 @@ This document tracks the current functional and technical requirements implement
 - All GPU actions enqueue through a single backend queue.
 - Queue payload includes status, queue position, and compact request metadata.
 - Queued jobs can be canceled before they start.
+- Running jobs support cancellation request (`running -> cancelling -> cancelled` when successful).
 - Queue updates are pushed over WebSocket to avoid constant frontend polling.
 
 ### 2.3 Model and LoRA Management
@@ -37,9 +38,11 @@ This document tracks the current functional and technical requirements implement
 ### 2.4 Gallery and Viewer
 
 - Gallery is paginated with `start` + `limit`.
-- Sessions are grouped by run and sorted newest first.
+- Images are rendered in a flat newest-first grid in the UI (backed by paginated API pages).
 - Search supports global keyword matching across gallery metadata.
+- Gallery supports filter chips (`All`, `HD`, `Favorites`), adjustable thumbnail size, and infinite scroll loading.
 - Lightbox metadata panel includes prompt, negative, model, seed, settings, LoRAs.
+- Lightbox metadata includes generation timing fields.
 - Lightbox includes regenerate, upscale, inpaint, download, compare, delete actions.
 
 ### 2.5 State Persistence

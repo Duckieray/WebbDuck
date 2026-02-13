@@ -27,7 +27,7 @@ The Studio view is where generation jobs are configured and submitted.
 ### Seed Behavior
 
 - Seed input can be blank for random seed.
-- Randomize button fills the seed input with a new generated seed value.
+- Randomize button sets seed mode to random by clearing the seed input.
 - Last used seed is shown in the Studio status bar after generation.
 
 ### LoRA Stack
@@ -48,7 +48,7 @@ The Studio view is where generation jobs are configured and submitted.
 
 - Placeholder appears until an image is generated.
 - Toolbar actions: zoom, upscale, send to inpaint, download.
-- Progress card appears during generation with cancel action.
+- Progress card appears in the bottom status area during generation with cancel action.
 
 ## Queue
 
@@ -61,14 +61,18 @@ Each queued/running job can show:
 - seed/negative/LoRA summary in expandable details,
 - img2img/inpaint input thumbnail when available.
 
-Queued jobs can be canceled from the modal (running jobs cannot).
+Queued jobs can be canceled from the modal.
+Running jobs can also be cancellation-requested from the modal or the progress card.
 
 ## Gallery
 
-- Sessions are listed newest-first.
+- Images are shown in a flat newest-first grid (not grouped into run rows).
 - Search matches prompt/metadata keywords globally using manifest-backed search.
   - All typed terms must be present, but can appear in any order.
 - Thumbnails are loaded through `/thumbs/...` for lighter browsing.
+- Filters include `All`, `HD`, and `Favorites`.
+- Thumbnail size can be adjusted with the gallery `Thumb` slider.
+- More images auto-load as you scroll (infinite scroll).
 
 ## Mobile Studio
 
@@ -79,9 +83,15 @@ Queued jobs can be canceled from the modal (running jobs cannot).
 ## Lightbox
 
 - Open any image to inspect at full size.
-- Bottom metadata/info panel includes prompt, negative, model, seed, settings, and LoRAs.
+- Bottom metadata/info panel includes prompt, negative, model, seed, settings, inpaint/outpaint settings, LoRAs, and timing info.
 - `Info` toggle shows/hides metadata panel.
 - Actions: regenerate, upscale, inpaint, download, compare (when variant exists), delete.
+
+## Settings Modal
+
+Open `Settings` from the top bar to configure:
+- `Coffee Warning (min)` threshold for long-run confirmation prompts.
+- `Enable CLIP_SKIP2` toggle (sends `clip_skip=2` to generation endpoints).
 
 ## State Persistence
 

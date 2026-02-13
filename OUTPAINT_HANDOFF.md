@@ -1,5 +1,8 @@
 # OUTPAINT HANDOFF
 
+> Historical handoff snapshot from the outpaint stabilization effort on 2026-02-10.
+> This file is intentionally preserved as a point-in-time record, not as a description of the full current app state.
+
 ## 1. Mission / Context
 
 Project: `webbduck`
@@ -18,15 +21,15 @@ This handoff captures all major paths attempted, code changes made, test coverag
 
 ## 2. Environment and Runtime
 
-- Repo root: `/mnt/c/Users/djray/scrape/img-gen/webbduck`
-- Runtime env: conda env `web_img`
-- App startup script (user-provided): `C:\Users\djray\scrape\img-gen\webbduck.sh`
-- Pytest location: available in `web_img`
+- Repo root: `<repo_root>/webbduck`
+- Runtime env: conda env `<env_name>`
+- App startup script (example): `<repo_root>/../webbduck.sh`
+- Pytest location: available in the active conda env
 
 Common validation commands used:
-- `conda run -n web_img pytest -q --capture=no tests/test_outpaint_pyramid_regression.py`
-- `conda run -n web_img pytest -q --capture=no tests/test_thumbnails.py tests/test_outpaint_pyramid_regression.py`
-- `conda run -n web_img python -m py_compile ...`
+- `conda run -n <env_name> pytest -q --capture=no tests/test_outpaint_pyramid_regression.py`
+- `conda run -n <env_name> pytest -q --capture=no tests/test_thumbnails.py tests/test_outpaint_pyramid_regression.py`
+- `conda run -n <env_name> python -m py_compile ...`
 
 ---
 
@@ -363,14 +366,14 @@ Minimum matrix should include:
 From repo root:
 
 ```bash
-cd /mnt/c/Users/djray/scrape/img-gen/webbduck
+cd <repo_root>/webbduck
 chmod +x tests/curl_test.sh
 ```
 
 Start app:
 
 ```bash
-/mnt/c/Users/djray/scrape/img-gen/webbduck.sh
+<repo_root>/../webbduck.sh
 ```
 
 Useful variant commands:

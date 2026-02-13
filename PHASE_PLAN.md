@@ -48,7 +48,7 @@ Completed:
 ### Phase D: Gallery Overhaul
 Includes: #7, #8, #9
 
-Status: `DONE` (working tree changes pending commit at time of writing)
+Status: `DONE` (commit: `86c54ea`)
 
 Completed in code:
 - #7 Replaced grouped session-row feel with flat, true gallery image grid.
@@ -67,7 +67,7 @@ Files:
 ## Remaining Work (In Branch Scope)
 
 ### Phase E: Remaining Functional UX Tasks
-Status: `DONE` (working tree changes pending commit at time of update)
+Status: `DONE` (commit: `f82230c`)
 
 Completed:
 - #11 Moved generation/progress panel from preview overlay to lower status area near seed.

@@ -95,7 +95,14 @@ Env var:
 
 - Queue list is updated from WebSocket `queue` events.
 - Users can expand job details and cancel queued jobs.
+- Running jobs can be cancellation-requested (status moves to `cancelling`).
 - Queue modal is separate from Studio controls.
+
+### Progress + settings surface
+
+- Main status indicator is always visible in top-right (`Ready`/stage + percentage).
+- Detailed generation progress card is docked in the Studio status bar.
+- Settings modal contains long-run warning threshold and CLIP_SKIP2 toggle.
 
 ### Mobile Studio pane mode
 
