@@ -645,9 +645,9 @@ function setupFormHandlers() {
 
     listen(byId('randomize-seed'), 'click', () => {
         const seed = byId('seed_input');
-        const nextSeed = generateRandomSeed();
-        if (seed) seed.value = String(nextSeed);
-        setSeed(nextSeed);
+        if (seed) seed.value = '';
+        setSeed(null);
+        toast('Seed set to Random mode', 'info');
     });
 
     listen(byId('base_model'), 'change', async () => {
@@ -672,16 +672,6 @@ function setupFormHandlers() {
         byId('inpaint-replace')?.classList.remove('active');
     });
 
-}
-
-function generateRandomSeed() {
-    const maxSeed = 2147483647;
-    if (window.crypto?.getRandomValues) {
-        const data = new Uint32Array(1);
-        window.crypto.getRandomValues(data);
-        return (data[0] % maxSeed) + 1;
-    }
-    return Math.floor(Math.random() * maxSeed) + 1;
 }
 
 async function updateTokenCounter(prompt) {
@@ -2232,6 +2222,9 @@ function setupQueuePanel() {
     listen(byId('open-queue-modal'), 'click', openQueueModal);
     listen(byId('close-queue-modal'), 'click', closeQueueModal);
     listen(byId('close-queue-modal-footer'), 'click', closeQueueModal);
+    listen(byId('open-settings-modal'), 'click', openSettingsModal);
+    listen(byId('close-settings-modal'), 'click', closeSettingsModal);
+    listen(byId('close-settings-modal-footer'), 'click', closeSettingsModal);
     listen(byId('unload-models-btn'), 'click', handleUnloadModelsClick);
     listen(byId('shutdown-app-btn'), 'click', handleShutdownAppClick);
     listen(byId('queue-modal'), 'click', (event) => {
@@ -2239,9 +2232,15 @@ function setupQueuePanel() {
             closeQueueModal();
         }
     });
+    listen(byId('settings-modal'), 'click', (event) => {
+        if (event.target?.id === 'settings-modal') {
+            closeSettingsModal();
+        }
+    });
     listen(document, 'keydown', (event) => {
         if (event.key === 'Escape') {
             closeQueueModal();
+            closeSettingsModal();
         }
     });
     refreshQueuePanel();
@@ -2430,6 +2429,22 @@ function openQueueModal() {
 
 function closeQueueModal() {
     const modal = byId('queue-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.remove('active');
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function openSettingsModal() {
+    const modal = byId('settings-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeSettingsModal() {
+    const modal = byId('settings-modal');
     if (!modal || modal.classList.contains('hidden')) return;
     modal.classList.remove('active');
     modal.classList.add('hidden');

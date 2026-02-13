@@ -151,6 +151,13 @@ body::before {
   font-size: 12px;
 }
 
+.status-percent {
+  padding-left: 8px;
+  border-left: 1px solid var(--nova-stroke-soft);
+  color: #cfe5ff;
+  font-weight: 700;
+}
+
 .nova-topbar-right {
   display: flex;
   align-items: center;
