@@ -40,6 +40,7 @@ const DEFAULT_STATE = {
     smartExtendRefineStrength: 0.32,
     smartExtendOffsetX: null,
     smartExtendOffsetY: null,
+    clipSkip2: false,
     selectedLoras: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
@@ -305,6 +306,7 @@ export function syncFromDOM() {
         smartExtendRefineStrength: 0.32,
         smartExtendOffsetX: state.smartExtendOffsetX ?? null,
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
+        clipSkip2: getChecked('clip-skip-2-enabled'),
     });
 }
 
@@ -330,6 +332,7 @@ export function syncToDOM() {
     setValue('scheduler', state.scheduler);
     setValue('batch', state.batch);
     setValue('long-run-warning-minutes', state.longRunWarningMinutes ?? 8);
+    setChecked('clip-skip-2-enabled', Boolean(state.clipSkip2));
     setValue('base_model', state.baseModel);
     setChecked('second_pass_enabled', state.secondPassEnabled);
     setValue('second_pass_model', state.secondPassModel);

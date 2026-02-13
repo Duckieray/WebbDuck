@@ -614,7 +614,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -793,6 +793,9 @@ function collectFormData() {
 
     const seedVal = byId('seed_input')?.value;
     if (seedVal) formData.append('seed', seedVal);
+    if (byId('clip-skip-2-enabled')?.checked) {
+        formData.append('clip_skip', '2');
+    }
 
     if (byId('second_pass_enabled')?.checked) {
         formData.append('second_pass_model', byId('second_pass_model')?.value || 'None');

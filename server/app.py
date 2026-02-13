@@ -543,6 +543,7 @@ async def test(
     smart_extend_offset_y: int = Form(None),
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
+    clip_skip: int = Form(None),
     experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
@@ -583,6 +584,7 @@ async def test(
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
+        "clip_skip": clip_skip,
         "experimental_compress": experimental_compress,
     }
 
@@ -673,6 +675,7 @@ async def generate(
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     smart_extend_pyramid_initializer: str = Form("edge_strips"),
+    clip_skip: int = Form(None),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
@@ -718,6 +721,7 @@ async def generate(
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "smart_extend_pyramid_initializer": smart_extend_pyramid_initializer,
+        "clip_skip": clip_skip,
     }
 
     if image:

@@ -67,11 +67,11 @@ Files:
 ## Remaining Work (In Branch Scope)
 
 ### Phase E: Remaining Functional UX Tasks
-Status: `TODO`
+Status: `DONE` (working tree changes pending commit at time of update)
 
-Pending items:
-- #11 Move generation/progress panel away from preview overlay to lower status area near seed.
-- #12 Add CLIP_SKIP2 toggle with tooltip explaining behavior.
+Completed:
+- #11 Moved generation/progress panel from preview overlay to lower status area near seed.
+- #12 Added CLIP_SKIP2 toggle in Settings with tooltip and wired it through frontend/backend generation settings.
 
 Open quality checks still recommended:
 - Re-verify #14 under repeated model-switch stress (3+ heavy model switches).

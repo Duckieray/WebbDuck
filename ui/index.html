@@ -349,6 +349,11 @@
                 </button>
               </div>
 
+            </div>
+
+            <div class="batch-strip hidden" id="batch-strip"></div>
+
+            <div class="status-bar">
               <div class="generation-progress hidden" id="generation-progress">
                 <div class="progress-ring-container">
                   <svg class="progress-ring" viewBox="0 0 88 88">
@@ -368,11 +373,6 @@
                 </div>
                 <button class="btn btn-ghost btn-sm" id="cancel-generation" type="button">Cancel</button>
               </div>
-            </div>
-
-            <div class="batch-strip hidden" id="batch-strip"></div>
-
-            <div class="status-bar">
               <div class="status-item"><span>Last seed:</span> <strong id="last-seed">-</strong></div>
             </div>
           </main>
@@ -455,6 +455,11 @@
           <input class="input" type="number" id="long-run-warning-minutes" min="1" max="180" step="1" value="8" />
           <span class="form-hint">Show long-run warning when estimated runtime exceeds this value.</span>
         </div>
+        <label class="toggle-row" for="clip-skip-2-enabled">
+          <input type="checkbox" id="clip-skip-2-enabled" />
+          <span>Enable CLIP_SKIP2</span>
+          <span class="section-help-trigger" title="CLIP_SKIP2 shifts prompt interpretation by skipping deeper text-encoder layers. It can change composition/style and works better on some checkpoints.">i</span>
+        </label>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="close-settings-modal-footer" type="button">Close</button>

@@ -393,6 +393,18 @@ def _composite_masked_update(base_image, updated_image, mask_image):
     )
 
 
+def _inject_clip_skip(kwargs: dict, settings: dict) -> dict:
+    """Inject clip_skip only when explicitly enabled (CLIP_SKIP2)."""
+    raw = settings.get("clip_skip")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return kwargs
+    if value >= 2:
+        kwargs["clip_skip"] = value
+    return kwargs
+
+
 def _build_stage_refine_mask(size, placement, seam_width):
     width, height = size
     ox = int(placement.get("ox", 0))
@@ -659,7 +671,7 @@ class InpaintMode(GenerationMode):
                             stage_kwargs["callback_on_step_end"] = cb
                             stage_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
-                        stage_raw = base_inpaint(**stage_kwargs).images[0].convert("RGB")
+                        stage_raw = base_inpaint(**_inject_clip_skip(stage_kwargs, settings)).images[0].convert("RGB")
                         stage_out = [stage_raw]
                         _debug_save_image(debug_session, f"{pass_dir}/02_stage_raw.png", stage_raw)
                         if callback and hasattr(callback, "finish_pass"):
@@ -727,7 +739,7 @@ class InpaintMode(GenerationMode):
                                 refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
                             baseline_stage = stage_out[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/04_refine_mask.png", seam_mask)
-                            stage_refined = base_inpaint(**refine_kwargs).images[0]
+                            stage_refined = base_inpaint(**_inject_clip_skip(refine_kwargs, settings)).images[0]
                             _debug_save_image(debug_session, f"{pass_dir}/05_refine_raw.png", stage_refined)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(stage_refine_steps)
@@ -1028,7 +1040,7 @@ class InpaintMode(GenerationMode):
                         if cb:
                             pass_kwargs["callback_on_step_end"] = cb
                             pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                        raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                        raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
                         _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(num_inference_steps)
@@ -1094,7 +1106,7 @@ class InpaintMode(GenerationMode):
                         if cb:
                             pass_kwargs["callback_on_step_end"] = cb
                             pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                        raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                        raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
                         _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(num_inference_steps)
@@ -1150,7 +1162,7 @@ class InpaintMode(GenerationMode):
                             if cb:
                                 pass_kwargs["callback_on_step_end"] = cb
                                 pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                            raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                            raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(num_inference_steps)
@@ -1223,7 +1235,7 @@ class InpaintMode(GenerationMode):
                                 pass_kwargs["callback_on_step_end"] = cb
                                 pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
-                            raw = base_inpaint(**pass_kwargs).images[0].convert("RGB")
+                            raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(num_inference_steps)
@@ -1295,7 +1307,7 @@ class InpaintMode(GenerationMode):
                 kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
             out = base_inpaint(
-                **kwargs,
+                **_inject_clip_skip(kwargs, settings),
             ).images
 
         # Smart extend should preserve source identity while avoiding hard box seams.
@@ -1371,7 +1383,7 @@ class InpaintMode(GenerationMode):
                         refine_kwargs["callback_on_step_end"] = cb
                         refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
                     baseline_img = img.convert("RGB")
-                    res = base_inpaint(**refine_kwargs).images[0]
+                    res = base_inpaint(**_inject_clip_skip(refine_kwargs, settings)).images[0]
                     _debug_save_image(debug_session, f"final_refine/img_{idx + 1:02d}_01_raw.png", res)
                     if callback and hasattr(callback, "finish_pass"):
                         callback.finish_pass(refine_steps)
