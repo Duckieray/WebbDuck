@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageStat
 import torch
+from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +155,49 @@ def _ensure_min_steps_for_strength(num_steps, strength):
     # Keep at least one effective denoise step after strength scaling.
     needed = int(math.ceil(1.0 / s))
     return max(steps, needed)
+
+
+def _inject_prompt_conditioning(kwargs: dict, active_pipe, settings: dict, cache: dict | None = None) -> dict:
+    """Replace prompt strings with explicit SDXL embeddings, including long-prompt chunking."""
+    if active_pipe is None or "prompt_embeds" in kwargs:
+        return kwargs
+    if "prompt" not in kwargs and "negative_prompt" not in kwargs:
+        return kwargs
+
+    prompt = kwargs.pop("prompt", "") or ""
+    prompt_2 = kwargs.pop("prompt_2", None)
+    negative = kwargs.pop("negative_prompt", "") or ""
+    use_experimental = bool(settings.get("experimental_compress", False))
+
+    key = (id(active_pipe), prompt, prompt_2 or "", negative, use_experimental)
+    if cache is not None and key in cache:
+        prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds = cache[key]
+    else:
+        (
+            prompt_embeds,
+            pooled_prompt_embeds,
+            negative_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = build_sdxl_conditioning_dispatch(
+            pipe=active_pipe,
+            prompt=prompt,
+            prompt_2=prompt_2,
+            negative=negative,
+            experimental=use_experimental,
+        )
+        if cache is not None:
+            cache[key] = (
+                prompt_embeds,
+                pooled_prompt_embeds,
+                negative_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            )
+
+    kwargs["prompt_embeds"] = prompt_embeds
+    kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+    kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+    kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
+    return kwargs
 
 
 def _build_stage_seam_mask(size, source_box, seam_width):
@@ -440,6 +484,7 @@ def run_pyramid_outpaint(
     cb = callback.get_callback() if callback else None
     current_image = source_image.convert("RGB")
     seed = generator.initial_seed()
+    conditioning_cache = {}
 
     if "downscale" in pyramid["stages"]:
         if update_stage_fn:
@@ -527,7 +572,9 @@ def run_pyramid_outpaint(
         if cb:
             outpaint_kwargs["callback_on_step_end"] = cb
             outpaint_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-        outpainted = base_inpaint(**outpaint_kwargs).images[0].convert("RGB")
+        outpainted = base_inpaint(
+            **_inject_prompt_conditioning(outpaint_kwargs, base_inpaint, settings, conditioning_cache)
+        ).images[0].convert("RGB")
         _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_12_stage_raw.png", outpainted)
         _save_debug_image(debug_dir, "pyramid/12_stage_raw.png", outpainted)
         if callback and hasattr(callback, "finish_pass"):
@@ -577,7 +624,9 @@ def run_pyramid_outpaint(
             if cb:
                 seam_kwargs["callback_on_step_end"] = cb
                 seam_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-            seam_raw = base_inpaint(**seam_kwargs).images[0].convert("RGB")
+            seam_raw = base_inpaint(
+                **_inject_prompt_conditioning(seam_kwargs, base_inpaint, settings, conditioning_cache)
+            ).images[0].convert("RGB")
             _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_15_seam_raw.png", seam_raw)
             composed = Image.composite(seam_raw, composed, seam_mask)
             if callback and hasattr(callback, "finish_pass"):
@@ -686,7 +735,9 @@ def run_pyramid_outpaint(
         if cb:
             refine_kwargs["callback_on_step_end"] = cb
             refine_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-        refined = base_inpaint(**refine_kwargs).images[0].convert("RGB")
+        refined = base_inpaint(
+            **_inject_prompt_conditioning(refine_kwargs, base_inpaint, settings, conditioning_cache)
+        ).images[0].convert("RGB")
         _save_debug_image(debug_dir, "pyramid/31_refine_raw.png", refined)
         if callback and hasattr(callback, "finish_pass"):
             callback.finish_pass(refine_steps)

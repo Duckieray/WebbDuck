@@ -694,7 +694,7 @@ async function updateTokenCounter(prompt) {
         const count = result.tokens || 0;
         const overLimit = count > 77;
         const nearLimit = count > 60 && !overLimit;
-        const tooltipText = 'Prompt exceeds the CLIP token window. Only the first 77 tokens are guaranteed to be parsed.';
+        const tooltipText = 'Prompt exceeds one CLIP window (77 tokens). WebbDuck now chunks long prompts, but very long prompts use more VRAM and can slow generation.';
 
         counter.textContent = `${count} tokens`;
         toggleClass(counter, 'warning', nearLimit);

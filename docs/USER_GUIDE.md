@@ -18,6 +18,7 @@ The Studio view is where generation jobs are configured and submitted.
 
 - Prompt token count updates from the backend tokenizer.
 - Over 77 tokens triggers warning/danger styling and a tooltip warning.
+- Prompts longer than 77 tokens are chunk-encoded for SDXL instead of being hard-truncated.
 
 ### Resolution Presets
 

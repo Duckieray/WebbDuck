@@ -3,7 +3,7 @@
 import torch
 import logging
 from webbduck.prompt.management import truncate_to_tokens
-from webbduck.prompt.conditioning import build_sdxl_conditioning
+from webbduck.prompt.conditioning import build_sdxl_conditioning, encode_long_prompt
 
 log = logging.getLogger(__name__)
 
@@ -224,71 +224,44 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
 
 
 def build_sdxl_refiner_conditioning(pipe, prompt, prompt_2, negative):
-    """Build conditioning for true SDXL refiners (CLIP-G only)."""
+    """Build conditioning for true SDXL refiners (CLIP-G only), with long-prompt chunking."""
     device = pipe.device
+    pos_text = prompt_2 or prompt or ""
+    neg_text = negative or ""
 
-    # Positive
-    text = truncate_to_tokens(
+    prompt_embeds, pooled_prompt_embeds = encode_long_prompt(
         pipe.tokenizer_2,
-        prompt_2 or prompt,
-        max_tokens=77,
+        pipe.text_encoder_2,
+        pos_text,
+        device,
     )
-
-    with torch.no_grad():
-        prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).last_hidden_state
-
-        pooled_prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).text_embeds
-
-    # Negative
-    neg_text = truncate_to_tokens(
+    negative_prompt_embeds, negative_pooled_prompt_embeds = encode_long_prompt(
         pipe.tokenizer_2,
-        negative,
-        max_tokens=77,
+        pipe.text_encoder_2,
+        neg_text,
+        device,
     )
 
-    with torch.no_grad():
-        negative_prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                neg_text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).last_hidden_state
+    if negative_prompt_embeds.shape[1] < prompt_embeds.shape[1]:
+        pad = torch.zeros(
+            negative_prompt_embeds.shape[0],
+            prompt_embeds.shape[1] - negative_prompt_embeds.shape[1],
+            negative_prompt_embeds.shape[2],
+            device=negative_prompt_embeds.device,
+            dtype=negative_prompt_embeds.dtype,
+        )
+        negative_prompt_embeds = torch.cat([negative_prompt_embeds, pad], dim=1)
+    elif prompt_embeds.shape[1] < negative_prompt_embeds.shape[1]:
+        pad = torch.zeros(
+            prompt_embeds.shape[0],
+            negative_prompt_embeds.shape[1] - prompt_embeds.shape[1],
+            prompt_embeds.shape[2],
+            device=prompt_embeds.device,
+            dtype=prompt_embeds.dtype,
+        )
+        prompt_embeds = torch.cat([prompt_embeds, pad], dim=1)
 
-        negative_pooled_prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                neg_text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).text_embeds
-
-    return (
-        prompt_embeds,
-        pooled_prompt_embeds,
-        negative_prompt_embeds,
-        negative_pooled_prompt_embeds,
-    )
+    return prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds
 
 
 def build_sdxl_conditioning_dispatch(*, pipe, prompt, prompt_2, negative, experimental: bool = False):
