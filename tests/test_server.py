@@ -6,7 +6,6 @@ from pathlib import Path
 
 
 
-
 class TestHealthEndpoint:
     """Test health check endpoint."""
 

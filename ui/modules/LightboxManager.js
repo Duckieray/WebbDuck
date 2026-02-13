@@ -13,7 +13,9 @@ export class LightboxManager {
             onUpscale: callbacks.onUpscale || (() => { }),
             onInpaint: callbacks.onInpaint || (() => { }),
             onRegenerate: callbacks.onRegenerate || (() => { }),
-            onDelete: callbacks.onDelete || (() => { })
+            onStageSettings: callbacks.onStageSettings || (() => { }),
+            onDelete: callbacks.onDelete || (() => { }),
+            onFavorite: callbacks.onFavorite || (async () => false),
         };
 
         this.currentPswpInstance = null;
@@ -40,6 +42,12 @@ export class LightboxManager {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
             this.callbacks.onRegenerate(curr);
+        });
+
+        listen(byId('lightbox-stage'), 'click', () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            this.callbacks.onStageSettings(curr);
         });
 
         listen(byId('lightbox-upscale'), 'click', () => {
@@ -74,6 +82,15 @@ export class LightboxManager {
             document.body.appendChild(anchor);
             anchor.click();
             document.body.removeChild(anchor);
+        });
+
+        listen(byId('lightbox-favorite'), 'click', async () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            const ok = await this.callbacks.onFavorite(curr.src, Boolean(curr.isFavorite));
+            if (!ok) return;
+            curr.isFavorite = !Boolean(curr.isFavorite);
+            this.updateButtons(curr);
         });
 
         listen(byId('lightbox-view-hd'), 'click', () => {
@@ -188,7 +205,8 @@ export class LightboxManager {
                     meta: sessionMeta,
                     originalSrc: src,
                     variant: variantUrl,
-                    isShowingVariant: false
+                    isShowingVariant: false,
+                    isFavorite: item?.dataset.favorite === '1'
                 };
             });
         } else {
@@ -334,13 +352,72 @@ export class LightboxManager {
             }).join(' | ')
             : 'None';
         setText('lightbox-loras', loraText);
+
+        const inout = meta.inoutpaint || {};
+        const parts = [];
+        const mode = meta.mode || (inout.has_mask ? 'inpaint' : (inout.has_input_image ? 'img2img' : 'txt2img'));
+        parts.push(`mode=${mode}`);
+
+        if (inout.has_input_image) parts.push('input=yes');
+        if (inout.has_mask) parts.push('mask=yes');
+
+        if (inout.strength !== undefined && inout.strength !== null) {
+            parts.push(`strength=${Number(inout.strength).toFixed(2)}`);
+        }
+        if (inout.inpainting_fill) parts.push(`fill=${inout.inpainting_fill}`);
+        if (inout.mask_blur !== undefined && inout.mask_blur !== null) parts.push(`mask_blur=${inout.mask_blur}`);
+
+        if (Array.isArray(inout.input_image_size) && inout.input_image_size.length === 2) {
+            parts.push(`input=${inout.input_image_size[0]}x${inout.input_image_size[1]}`);
+        }
+
+        if (inout.smart_extend) {
+            parts.push('smart_extend=on');
+            if (inout.smart_extend_feather !== undefined && inout.smart_extend_feather !== null) {
+                parts.push(`feather=${inout.smart_extend_feather}`);
+            }
+            if (inout.smart_extend_auto_step !== undefined && inout.smart_extend_auto_step !== null) {
+                parts.push(`auto_step=${inout.smart_extend_auto_step ? 'on' : 'off'}`);
+            }
+            if (inout.smart_extend_step_growth !== undefined && inout.smart_extend_step_growth !== null) {
+                parts.push(`step_growth=${Number(inout.smart_extend_step_growth).toFixed(2)}`);
+            }
+            if (inout.smart_extend_offset_x !== undefined && inout.smart_extend_offset_x !== null
+                && inout.smart_extend_offset_y !== undefined && inout.smart_extend_offset_y !== null) {
+                parts.push(`offset=(${inout.smart_extend_offset_x},${inout.smart_extend_offset_y})`);
+            }
+            if (inout.smart_extend_refine !== undefined && inout.smart_extend_refine !== null) {
+                parts.push(`refine=${inout.smart_extend_refine ? 'on' : 'off'}`);
+            }
+            if (inout.smart_extend_refine_each_step !== undefined && inout.smart_extend_refine_each_step !== null) {
+                parts.push(`refine_each=${inout.smart_extend_refine_each_step ? 'on' : 'off'}`);
+            }
+            if (inout.smart_extend_refine_width !== undefined && inout.smart_extend_refine_width !== null) {
+                parts.push(`refine_w=${inout.smart_extend_refine_width}`);
+            }
+            if (inout.smart_extend_refine_strength !== undefined && inout.smart_extend_refine_strength !== null) {
+                parts.push(`refine_s=${Number(inout.smart_extend_refine_strength).toFixed(2)}`);
+            }
+        }
+
+        setText('lightbox-inoutpaint', parts.length ? parts.join(' | ') : 'None');
     }
 
     updateButtons(curr) {
         const viewHdBtn = byId('lightbox-view-hd');
         const compareBtn = byId('lightbox-compare');
+        const favoriteBtn = byId('lightbox-favorite');
         if (viewHdBtn) viewHdBtn.style.display = curr.variant ? 'inline-flex' : 'none';
         if (compareBtn) compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
+        if (favoriteBtn) {
+            const canFavorite = typeof curr?.src === 'string' && curr.src.includes('/outputs/');
+            favoriteBtn.style.display = canFavorite ? 'inline-flex' : 'none';
+            if (!canFavorite) return;
+            const isFav = Boolean(curr?.isFavorite);
+            favoriteBtn.textContent = isFav ? 'Unfavorite' : 'Favorite';
+            favoriteBtn.classList.toggle('btn-primary', isFav);
+            favoriteBtn.classList.toggle('btn-secondary', !isFav);
+        }
     }
 
     async toggleHD(curr) {

@@ -4,6 +4,10 @@
  */
 
 const STORAGE_KEY = 'webbduck_state_v2';
+const DENOISE_DETAIL_MIN = 0.75;
+const DENOISE_PRESERVE_MIN = 0.30;
+const DENOISE_PRESERVE_MAX = 0.50;
+const DENOISE_ACTUAL_MAX = 1.00;
 
 // Default state values
 const DEFAULT_STATE = {
@@ -16,12 +20,26 @@ const DEFAULT_STATE = {
     seed: null,
     scheduler: '',
     batch: 1,
+    longRunWarningMinutes: 8,
     baseModel: '',
     secondPassEnabled: false,
     secondPassModel: 'None',
     secondPassSteps: 20,
     secondPassBlend: 0.8,
-    denoisingStrength: 0.75,
+    denoisingStrength: 0.85,
+    denoisingMode: 'details', // 'details' | 'preserve'
+    denoisingScaleVersion: 5,
+    smartExtendEnabled: false,
+    smartExtendAnchor: 'center',
+    smartExtendFeather: 12,
+    smartExtendAutoStep: false,
+    smartExtendStepGrowth: 1.25,
+    smartExtendRefine: true,
+    smartExtendRefineEachStep: true,
+    smartExtendRefineWidth: 64,
+    smartExtendRefineStrength: 0.32,
+    smartExtendOffsetX: null,
+    smartExtendOffsetY: null,
     selectedLoras: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
@@ -29,6 +47,33 @@ const DEFAULT_STATE = {
 
 // Current state
 let state = { ...DEFAULT_STATE };
+
+function normalizeDenoisingMode(rawMode) {
+    return rawMode === 'preserve' ? 'preserve' : 'details';
+}
+
+function denoiseRangeForMode(mode) {
+    if (normalizeDenoisingMode(mode) === 'preserve') {
+        return { min: DENOISE_PRESERVE_MIN, max: DENOISE_PRESERVE_MAX };
+    }
+    return { min: DENOISE_DETAIL_MIN, max: DENOISE_ACTUAL_MAX };
+}
+
+function normalizeDenoisingStrength(rawValue, opts = {}) {
+    const mode = normalizeDenoisingMode(opts.mode);
+    const scaleVersion = Number(opts.scaleVersion ?? DEFAULT_STATE.denoisingScaleVersion);
+    const raw = Number(rawValue);
+    if (!Number.isFinite(raw)) return DEFAULT_STATE.denoisingStrength;
+
+    // Legacy state versions stored denoise as normalized 0..1.
+    if (scaleVersion < 3 && raw >= 0 && raw <= 1) {
+        const migrated = DENOISE_DETAIL_MIN + (DENOISE_ACTUAL_MAX - DENOISE_DETAIL_MIN) * raw;
+        const range = denoiseRangeForMode(mode);
+        return Math.max(range.min, Math.min(range.max, migrated));
+    }
+    const range = denoiseRangeForMode(mode);
+    return Math.max(range.min, Math.min(range.max, raw));
+}
 
 // Subscribers for state changes
 const subscribers = new Map();
@@ -42,6 +87,27 @@ export function initState() {
         if (saved) {
             const parsed = JSON.parse(saved);
             state = { ...DEFAULT_STATE, ...parsed };
+            // Smart-extend seam settings are fixed in current UI and should not be overridden by old saved state.
+            state.smartExtendAutoStep = false;
+            state.smartExtendFeather = 12;
+            state.smartExtendStepGrowth = 1.25;
+            state.smartExtendRefine = true;
+            state.smartExtendRefineEachStep = true;
+            state.smartExtendRefineWidth = 64;
+            state.smartExtendRefineStrength = 0.32;
+            const inferredMode = parsed.denoisingMode
+                ?? ((Boolean(parsed.denoisingFullControl) && Number(parsed.denoisingStrength) <= DENOISE_PRESERVE_MAX)
+                    ? 'preserve'
+                    : 'details');
+            state.denoisingMode = normalizeDenoisingMode(inferredMode);
+            state.denoisingStrength = normalizeDenoisingStrength(parsed.denoisingStrength, {
+                mode: state.denoisingMode,
+                scaleVersion: parsed.denoisingScaleVersion,
+            });
+            if ((parsed.denoisingScaleVersion ?? 1) < 5) {
+                state.denoisingScaleVersion = 5;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            }
         }
     } catch (error) {
         console.warn('Failed to load state from localStorage:', error);
@@ -195,6 +261,12 @@ export function clearLoras() {
 export function syncFromDOM() {
     const getValue = (id) => document.getElementById(id)?.value ?? '';
     const getChecked = (id) => document.getElementById(id)?.checked ?? false;
+    const denoisingMode = normalizeDenoisingMode(getValue('denoise-mode'));
+    const denoiseRaw = parseFloat(getValue('denoising_strength'));
+    const denoisingStrength = normalizeDenoisingStrength(denoiseRaw, {
+        mode: denoisingMode,
+        scaleVersion: state.denoisingScaleVersion,
+    });
 
     setState({
         prompt: getValue('prompt'),
@@ -205,12 +277,25 @@ export function syncFromDOM() {
         cfg: parseFloat(getValue('cfg')) || 7.5,
         scheduler: getValue('scheduler'),
         batch: parseInt(getValue('batch')) || 1,
+        longRunWarningMinutes: parseInt(getValue('long-run-warning-minutes')) || 8,
         baseModel: getValue('base_model'),
         secondPassEnabled: getChecked('second_pass_enabled'),
         secondPassModel: getValue('second_pass_model'),
         secondPassSteps: parseInt(getValue('second_pass_steps')) || 20,
         secondPassBlend: parseFloat(getValue('second_pass_blend')) || 0.8,
-        denoisingStrength: parseFloat(getValue('denoising_strength')) || 0.75,
+        denoisingMode,
+        denoisingStrength,
+        smartExtendEnabled: getChecked('smart-extend-enabled'),
+        smartExtendAnchor: getValue('smart-extend-anchor') || 'center',
+        smartExtendFeather: 12,
+        smartExtendAutoStep: false,
+        smartExtendStepGrowth: 1.25,
+        smartExtendRefine: true,
+        smartExtendRefineEachStep: true,
+        smartExtendRefineWidth: 64,
+        smartExtendRefineStrength: 0.32,
+        smartExtendOffsetX: state.smartExtendOffsetX ?? null,
+        smartExtendOffsetY: state.smartExtendOffsetY ?? null,
     });
 }
 
@@ -235,12 +320,30 @@ export function syncToDOM() {
     setValue('cfg', state.cfg);
     setValue('scheduler', state.scheduler);
     setValue('batch', state.batch);
+    setValue('long-run-warning-minutes', state.longRunWarningMinutes ?? 8);
     setValue('base_model', state.baseModel);
     setChecked('second_pass_enabled', state.secondPassEnabled);
     setValue('second_pass_model', state.secondPassModel);
     setValue('second_pass_steps', state.secondPassSteps);
     setValue('second_pass_blend', state.secondPassBlend);
-    setValue('denoising_strength', state.denoisingStrength);
+    const denoiseMode = normalizeDenoisingMode(state.denoisingMode);
+    setValue('denoise-mode', denoiseMode);
+    const preserveBtn = document.getElementById('denoise-mode-preserve');
+    const detailsBtn = document.getElementById('denoise-mode-details');
+    preserveBtn?.classList.toggle('active', denoiseMode === 'preserve');
+    detailsBtn?.classList.toggle('active', denoiseMode !== 'preserve');
+    const denoiseInput = document.getElementById('denoising_strength');
+    if (denoiseInput) {
+        const range = denoiseRangeForMode(denoiseMode);
+        denoiseInput.min = String(range.min);
+        denoiseInput.max = String(range.max);
+    }
+    setValue('denoising_strength', normalizeDenoisingStrength(state.denoisingStrength, {
+        mode: denoiseMode,
+        scaleVersion: state.denoisingScaleVersion,
+    }));
+    setChecked('smart-extend-enabled', state.smartExtendEnabled);
+    setValue('smart-extend-anchor', state.smartExtendAnchor || 'center');
 
     // Sync Inpaint Mode Buttons
     const replaceBtn = document.getElementById('inpaint-replace');
@@ -276,7 +379,16 @@ function updateValueDisplays() {
         const input = document.getElementById(inputId);
         const display = document.getElementById(displayId);
         if (input && display) {
-            display.textContent = input.value;
+            if (inputId === 'denoising_strength') {
+                const modeInput = document.getElementById('denoise-mode');
+                const denoiseValue = normalizeDenoisingStrength(input.value, {
+                    mode: normalizeDenoisingMode(modeInput?.value),
+                    scaleVersion: state.denoisingScaleVersion,
+                });
+                display.textContent = denoiseValue.toFixed(2);
+            } else {
+                display.textContent = input.value;
+            }
         }
     }
 }

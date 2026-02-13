@@ -347,7 +347,8 @@
   border: 1px solid var(--glass-border);
   background: rgba(5, 8, 14, 0.86);
   backdrop-filter: blur(10px);
-  z-index: 2;
+  /* Must stay above preview edit canvas in smart-extend/mask modes. */
+  z-index: 6;
 }
 
 .progress-ring {

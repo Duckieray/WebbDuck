@@ -9,11 +9,15 @@ import { byId, listen, show, hide, toast } from '../core/utils.js';
 export class GalleryManager {
     constructor() {
         this.data = [];
+        this.fullData = [];
         this.page = 0;
         this.SESSIONS_PER_PAGE = 30;
         this.currentSearchTerm = '';
         this.searchData = null;
         this.searchRequestId = 0;
+        this.activeFilter = 'all';
+        this.filterData = null;
+        this.filterCache = new Map();
 
         // Bind methods
         this.load = this.load.bind(this);
@@ -21,11 +25,13 @@ export class GalleryManager {
         this.render = this.render.bind(this);
         this.loadMore = this.loadMore.bind(this);
         this.handleDelete = this.handleDelete.bind(this);
+        this.handleFavoriteToggle = this.handleFavoriteToggle.bind(this);
     }
 
     init() {
         this.setupSearch();
         this.setupRefresh();
+        this.setupFilters();
     }
 
     setupRefresh() {
@@ -67,6 +73,21 @@ export class GalleryManager {
         });
     }
 
+    setupFilters() {
+        const chips = document.querySelectorAll('.gallery-filter-chip');
+        chips.forEach((chip) => {
+            listen(chip, 'click', async () => {
+                const next = chip.dataset.filter || 'all';
+                if (this.activeFilter === next) return;
+                this.activeFilter = next;
+                chips.forEach((c) => c.classList.toggle('active', c === chip));
+                await this.ensureFilterData(next);
+                const term = byId('gallery-search')?.value || '';
+                this.render(term);
+            });
+        });
+    }
+
     async load() {
         const btn = byId('refresh-gallery');
         if (btn) {
@@ -77,10 +98,14 @@ export class GalleryManager {
         try {
             this.page = 0;
             this.data = []; // Clear existing
+            this.fullData = [];
             this.hasMore = true;
             this.searchData = null;
+            this.filterData = null;
+            this.filterCache.clear();
 
             await this.fetchPage();
+            await this.ensureFilterData(this.activeFilter);
 
             toast('Gallery refreshed', 'success');
         } catch (error) {
@@ -100,9 +125,12 @@ export class GalleryManager {
             const items = Array.isArray(data) ? data : (data.sessions || []);
 
             this.data = items;
+            this.fullData = items;
             this.page = 0;
             this.hasMore = items.length >= this.SESSIONS_PER_PAGE;
             this.searchData = null;
+            this.filterData = null;
+            this.filterCache.clear();
 
             const searchTerm = byId('gallery-search')?.value || '';
             this.render(searchTerm, searchTerm.trim() ? (this.searchData || this.data) : this.data);
@@ -123,10 +151,14 @@ export class GalleryManager {
 
             if (this.page === 0) {
                 this.data = items;
+                this.fullData = items;
             } else {
                 this.data = [...this.data, ...items];
+                this.fullData = [...this.data];
             }
             this.searchData = null;
+            this.filterData = null;
+            this.filterCache.clear();
 
             const searchTerm = byId('gallery-search')?.value || '';
             this.render(searchTerm, searchTerm.trim() ? (this.searchData || this.data) : this.data);
@@ -202,7 +234,11 @@ export class GalleryManager {
         const emptyState = byId('gallery-empty');
         const countEl = byId('gallery-count');
 
-        let filteredData = sourceData || this.data;
+        let baseData = sourceData || this.getActiveFilterData();
+        if (sourceData && this.activeFilter !== 'all') {
+            baseData = this.applyImageFilter(sourceData, this.activeFilter);
+        }
+        let filteredData = baseData;
         const shouldClientFilter = this.currentSearchTerm && sourceData == null;
         if (shouldClientFilter) {
             filteredData = filteredData.filter(session => this.matchesSearch(session, this.currentSearchTerm));
@@ -235,7 +271,7 @@ export class GalleryManager {
         container.innerHTML = filteredData.map(session => this.renderSession(session)).join('');
 
         // Add "Load More" button if needed
-        if (!this.currentSearchTerm && this.hasMore) {
+        if (!this.currentSearchTerm && this.hasMore && this.activeFilter === 'all') {
             const loadMoreDiv = document.createElement('div');
             loadMoreDiv.className = 'gallery-load-more';
             loadMoreDiv.innerHTML = `
@@ -260,11 +296,16 @@ export class GalleryManager {
 
         this.page++;
         await this.fetchPage();
+        if (this.activeFilter !== 'all') {
+            await this.ensureFilterData(this.activeFilter);
+            this.render(byId('gallery-search')?.value || '');
+        }
     }
 
     renderSession(session) {
         const images = session.images || [];
         const variants = session.variants || {};
+        const favorites = session.favorites || {};
         const meta = session.meta || {};
         const prompt = meta.prompt || session.prompt || 'No prompt';
         const model = meta.base_model || session.model || 'Unknown';
@@ -315,9 +356,11 @@ export class GalleryManager {
             const height = meta.height || 1024;
 
             return `
-                <div class="image-item" data-src="${url}" data-index="${i}" data-width="${width}" data-height="${height}" ${variantUrl ? `data-variant="${variantUrl}"` : ''}>
+                <div class="image-item" data-src="${url}" data-index="${i}" data-width="${width}" data-height="${height}" data-favorite="${favorites[filename] ? '1' : '0'}" ${variantUrl ? `data-variant="${variantUrl}"` : ''}>
                   <img src="${thumbUrl}" alt="Generated image" loading="lazy" />
                   ${variantUrl ? '<span class="hd-badge">HD</span>' : ''}
+                  ${favorites[filename] ? '<span class="favorite-badge">♥</span>' : ''}
+                  <button class="image-favorite-btn ${favorites[filename] ? 'is-favorite' : ''}" type="button" title="${favorites[filename] ? 'Unfavorite' : 'Favorite'}" aria-label="${favorites[filename] ? 'Unfavorite image' : 'Favorite image'}">♥</button>
                 </div>
               `;
         }).join('')}
@@ -362,6 +405,129 @@ export class GalleryManager {
                 }
             });
         });
+
+        container.querySelectorAll('.image-favorite-btn').forEach((btn) => {
+            listen(btn, 'click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const item = btn.closest('.image-item');
+                if (!item) return;
+                const src = item.dataset.src;
+                if (!src) return;
+                await this.handleFavoriteToggle(src, item.dataset.favorite === '1');
+            });
+        });
+    }
+
+    getActiveFilterData() {
+        if (this.activeFilter === 'all') return this.data;
+        return this.filterData || [];
+    }
+
+    async ensureFilterData(filter) {
+        if (filter === 'all') {
+            this.filterData = null;
+            return;
+        }
+        if (this.filterCache.has(filter)) {
+            this.filterData = this.filterCache.get(filter) || [];
+            return;
+        }
+        const data = await api.filterGallery(filter, 0, 5000);
+        const sessions = Array.isArray(data) ? data : (data.sessions || []);
+        this.filterData = sessions;
+        this.filterCache.set(filter, sessions);
+    }
+
+    async loadAllSessions() {
+        const pageSize = Math.max(80, this.SESSIONS_PER_PAGE);
+        const maxPages = 160;
+        const all = [];
+        for (let page = 0; page < maxPages; page++) {
+            const start = page * pageSize;
+            let chunk = [];
+            try {
+                const data = await api.getGallery(start, pageSize);
+                chunk = Array.isArray(data) ? data : (data.sessions || []);
+            } catch (_) {
+                break;
+            }
+            if (!chunk.length) break;
+            all.push(...chunk);
+            if (chunk.length < pageSize) break;
+        }
+        this.fullData = all;
+        return all;
+    }
+
+    applyImageFilter(sessions, filter) {
+        const out = [];
+        for (const session of (sessions || [])) {
+            const images = session.images || [];
+            const variants = session.variants || {};
+            const favorites = session.favorites || {};
+            const kept = [];
+            for (const imgPath of images) {
+                const filename = (imgPath || '').split('/').pop();
+                if (!filename) continue;
+                const hasHd = Boolean(variants[filename]);
+                const isFav = Boolean(favorites[filename]);
+                if (filter === 'hd' && !hasHd) continue;
+                if (filter === 'favorites' && !isFav) continue;
+                kept.push(imgPath);
+            }
+            if (!kept.length) continue;
+            const nextSession = {
+                ...session,
+                images: kept,
+                variants: Object.fromEntries(
+                    Object.entries(variants).filter(([name]) => kept.some((p) => p.endsWith(`/${name}`)))
+                ),
+                favorites: Object.fromEntries(
+                    Object.entries(favorites).filter(([name, v]) => v && kept.some((p) => p.endsWith(`/${name}`)))
+                ),
+            };
+            out.push(nextSession);
+        }
+        return out;
+    }
+
+    async handleFavoriteToggle(src, currentlyFavorite) {
+        try {
+            const next = !currentlyFavorite;
+            await api.setFavorite(src, next);
+            this.updateFavoriteInMemory(src, next);
+            this.filterCache.delete('favorites');
+            this.render(byId('gallery-search')?.value || '');
+            toast(next ? 'Added to favorites' : 'Removed from favorites', 'success');
+            return true;
+        } catch (e) {
+            console.error('Favorite toggle error:', e);
+            toast('Failed to update favorite', 'error');
+            return false;
+        }
+    }
+
+    updateFavoriteInMemory(src, favorite) {
+        const mark = (sessions) => {
+            (sessions || []).forEach((session) => {
+                const images = session.images || [];
+                const idx = images.findIndex((p) => src.includes(p));
+                if (idx < 0) return;
+                const file = images[idx].split('/').pop();
+                if (!file) return;
+                session.favorites = session.favorites || {};
+                if (favorite) {
+                    session.favorites[file] = true;
+                } else {
+                    delete session.favorites[file];
+                }
+            });
+        };
+        mark(this.data);
+        mark(this.searchData);
+        mark(this.fullData);
+        mark(this.filterData);
     }
 
     /**
@@ -370,6 +536,7 @@ export class GalleryManager {
      */
     async handleDelete(src, type) {
         try {
+            this.removeImageInMemory(src, type);
             // Optimistic UI: Remove from grid instantly
             if (type === 'image') {
                 const items = document.querySelectorAll('.image-item');
@@ -428,6 +595,44 @@ export class GalleryManager {
             console.error('Delete error:', e);
             return false;
         }
+    }
+
+    removeImageInMemory(src, type) {
+        const prune = (sessions) => {
+            if (!Array.isArray(sessions)) return sessions;
+            const next = [];
+            for (const s of sessions) {
+                const allImages = Array.isArray(s.images) ? s.images : [];
+                let kept = [];
+                if (type === 'run') {
+                    const runPrefixA = `outputs/${s.run}/`;
+                    const runPrefixB = `/outputs/${s.run}/`;
+                    if (src.includes(runPrefixA) || src.includes(runPrefixB)) {
+                        continue;
+                    }
+                    kept = [...allImages];
+                } else {
+                    kept = allImages.filter((p) => !src.includes(p));
+                }
+                if (!kept.length) continue;
+
+                const variants = { ...(s.variants || {}) };
+                const favorites = { ...(s.favorites || {}) };
+                Object.keys(variants).forEach((name) => {
+                    if (!kept.some((p) => p.endsWith(`/${name}`))) delete variants[name];
+                });
+                Object.keys(favorites).forEach((name) => {
+                    if (!kept.some((p) => p.endsWith(`/${name}`))) delete favorites[name];
+                });
+                next.push({ ...s, images: kept, variants, favorites });
+            }
+            return next;
+        };
+        this.data = prune(this.data);
+        this.searchData = prune(this.searchData);
+        this.fullData = prune(this.fullData);
+        this.filterData = prune(this.filterData);
+        this.filterCache.clear();
     }
 
     escapeHtml(text) {
