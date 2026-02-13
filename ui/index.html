@@ -395,6 +395,11 @@
               <div class="gallery-search">
                 <input type="text" class="input" id="gallery-search" placeholder="Search prompts..." />
               </div>
+              <div class="gallery-thumb-control">
+                <label for="gallery-thumb-size">Thumb</label>
+                <input type="range" class="slider" id="gallery-thumb-size" min="140" max="420" step="10" value="240" />
+                <span id="gallery-thumb-size-value">240px</span>
+              </div>
               <button class="btn btn-secondary btn-sm" id="refresh-gallery" type="button">Refresh</button>
             </div>
           </header>
@@ -403,8 +408,8 @@
             <div class="gallery-sessions" id="gallery-sessions"></div>
             <div class="gallery-empty hidden" id="gallery-empty">
               <div class="gallery-empty-content">
-                <h3>No images yet</h3>
-                <p>Generate images in Studio and they will appear here.</p>
+                <h3 id="gallery-empty-title">No images yet</h3>
+                <p id="gallery-empty-text">Generate images in Studio and they will appear here.</p>
               </div>
             </div>
           </div>

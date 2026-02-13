@@ -187,7 +187,17 @@ export class LightboxManager {
             items = Array.from(dataSource).map(img => {
                 const item = img.closest('.image-item');
                 const sessionGroup = img.closest('.session-group');
-                const sessionMeta = sessionGroup ? this.extractSessionMeta(sessionGroup) : {};
+                let sessionMeta = sessionGroup ? this.extractSessionMeta(sessionGroup) : {};
+                if (!sessionMeta || Object.keys(sessionMeta).length === 0) {
+                    const rawMeta = item?.dataset?.meta;
+                    if (rawMeta) {
+                        try {
+                            sessionMeta = JSON.parse(decodeURIComponent(rawMeta));
+                        } catch (_) {
+                            sessionMeta = {};
+                        }
+                    }
+                }
                 const variantUrl = item?.dataset.variant || null;
 
                 const datasetSrc = item?.dataset.src;
@@ -309,6 +319,19 @@ export class LightboxManager {
     }
 
     extractSessionMeta(sessionGroup) {
+        if (!sessionGroup) {
+            const active = this.currentPswpInstance?.pswp?.currSlide?.data?.element?.closest?.('.image-item');
+            const itemMetaRaw = active?.dataset?.meta;
+            if (itemMetaRaw) {
+                try {
+                    return JSON.parse(decodeURIComponent(itemMetaRaw));
+                } catch (_) {
+                    return {};
+                }
+            }
+            return {};
+        }
+
         const json = sessionGroup.dataset.json;
         if (!json) return {};
 
