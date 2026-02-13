@@ -9,10 +9,11 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 - Modern zero-build web UI (`ui/`) with Studio + Gallery views.
 - Mobile Studio pane toggle (`Preview` / `Settings`) for practical small-screen workflow.
 - Queue-based backend execution with real-time WebSocket updates.
+- Queue modal supports canceling queued jobs and requesting cancellation for active running jobs.
 - Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
 - LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
 - Token counter with warning when prompt exceeds the 77-token CLIP window.
-- Gallery sessions with lazy thumbnails, global keyword search, lightbox metadata, and action toolbar.
+- Flat gallery grid with thumbnail-size slider, infinite scroll, global keyword search, and lightbox action toolbar.
 - Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
 - Optional captioner plugin system (JoyCaption supported).
 

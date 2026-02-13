@@ -33,12 +33,14 @@ ui/
 - Studio + Gallery tabbed layout (desktop and mobile).
 - Mobile Studio pane toggle (`Preview` / `Settings`) for full-height usability.
 - Large Studio preview with action toolbar (zoom/upscale/inpaint/download).
+- Docked generation progress panel in the Studio status bar with cancel control.
 - Prompt token counter with over-limit warning styling.
 - Resolution preset chips with active `Custom` state.
-- Seed randomize icon button and persisted seed handling.
-- Dedicated Queue modal with job metadata, cancel action, and img2img thumbnail previews.
+- Seed randomize icon sets true random mode (clears seed input) with persisted seed handling.
+- Dedicated Queue modal with job metadata, cancel action for queued/running jobs, and img2img thumbnail previews.
+- Settings modal for long-run warning threshold and CLIP_SKIP2 toggle.
 - Lightbox info panel at the bottom with toggle and full metadata.
-- Gallery search with keyword matching (all typed terms, any order) and lazy thumbnail loading.
+- Gallery flat-grid view with keyword search, filter chips (`All`/`HD`/`Favorites`), thumbnail-size slider, and infinite scroll.
 
 ## Event Flow
 

@@ -52,8 +52,10 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 - Bootstraps Studio, Gallery, queue modal, and lightbox actions.
 - Builds `FormData` requests for generation endpoints.
 - Renders queue modal rows and cancel/detail actions.
+- Supports cancellation requests for running jobs and cancel for queued jobs.
 - Syncs resolution preset chips and custom state.
 - Token counter and over-limit warning tooltip.
+- Settings modal wiring for long-run warning threshold and CLIP_SKIP2.
 
 ### `ui/modules/LoraManager.js`
 
@@ -68,7 +70,14 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 - WebSocket bridge emitting:
   - `status:update` for runtime/progress,
   - `queue:update` for queue/job metadata,
-  - `catalog:update` for model/LoRA catalog changes.
+- `catalog:update` for model/LoRA catalog changes.
+
+### `ui/modules/GalleryManager.js`
+
+- Renders a flat image grid (newest-first).
+- Applies filter chips (`all`, `hd`, `favorites`) and keyword search.
+- Supports infinite scroll via sentinel/IntersectionObserver.
+- Supports runtime thumbnail size changes via slider state.
 
 ## Runtime Data Paths
 

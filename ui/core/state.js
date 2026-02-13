@@ -40,6 +40,7 @@ const DEFAULT_STATE = {
     smartExtendRefineStrength: 0.32,
     smartExtendOffsetX: null,
     smartExtendOffsetY: null,
+    clipSkip2: false,
     selectedLoras: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
@@ -47,6 +48,12 @@ const DEFAULT_STATE = {
 
 // Current state
 let state = { ...DEFAULT_STATE };
+
+function normalizeDimensionToMultipleOf8(rawValue, fallback = 1024) {
+    const raw = Number(rawValue);
+    const safe = Number.isFinite(raw) ? raw : Number(fallback);
+    return Math.max(8, Math.round(safe / 8) * 8);
+}
 
 function normalizeDenoisingMode(rawMode) {
     return rawMode === 'preserve' ? 'preserve' : 'details';
@@ -268,11 +275,14 @@ export function syncFromDOM() {
         scaleVersion: state.denoisingScaleVersion,
     });
 
+    const width = normalizeDimensionToMultipleOf8(parseInt(getValue('width'), 10), 1024);
+    const height = normalizeDimensionToMultipleOf8(parseInt(getValue('height'), 10), 1024);
+
     setState({
         prompt: getValue('prompt'),
         negative: getValue('negative'),
-        width: parseInt(getValue('width')) || 1024,
-        height: parseInt(getValue('height')) || 1024,
+        width,
+        height,
         steps: parseInt(getValue('steps')) || 30,
         cfg: parseFloat(getValue('cfg')) || 7.5,
         scheduler: getValue('scheduler'),
@@ -296,6 +306,7 @@ export function syncFromDOM() {
         smartExtendRefineStrength: 0.32,
         smartExtendOffsetX: state.smartExtendOffsetX ?? null,
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
+        clipSkip2: getChecked('clip-skip-2-enabled'),
     });
 }
 
@@ -321,6 +332,7 @@ export function syncToDOM() {
     setValue('scheduler', state.scheduler);
     setValue('batch', state.batch);
     setValue('long-run-warning-minutes', state.longRunWarningMinutes ?? 8);
+    setChecked('clip-skip-2-enabled', Boolean(state.clipSkip2));
     setValue('base_model', state.baseModel);
     setChecked('second_pass_enabled', state.secondPassEnabled);
     setValue('second_pass_model', state.secondPassModel);

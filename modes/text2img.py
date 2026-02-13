@@ -19,6 +19,7 @@ class Text2ImgMode(GenerationMode):
         negative = settings["negative_prompt"]
 
         cb = callback.get_callback() if callback else None
+        clip_skip = settings.get("clip_skip")
 
         (
             prompt_embeds,
@@ -50,6 +51,7 @@ class Text2ImgMode(GenerationMode):
             generator=generator,
             callback_on_step_end=cb,
             callback_on_step_end_tensor_inputs=['latents'],
+            clip_skip=clip_skip,
         ).images
 
         return images, generator.initial_seed()

@@ -107,6 +107,34 @@ function roundTo8(value) {
     return Math.max(8, Math.round(Number(value || 0) / 8) * 8);
 }
 
+function normalizeDimensionToMultipleOf8(rawValue, fallback = 1024) {
+    const n = Number(rawValue);
+    const safe = Number.isFinite(n) ? n : Number(fallback);
+    return Math.max(8, Math.round(safe / 8) * 8);
+}
+
+function normalizeResolutionInputs({ syncState = false } = {}) {
+    const widthInput = byId('width');
+    const heightInput = byId('height');
+    if (!widthInput || !heightInput) return false;
+
+    const prevW = Number(widthInput.value);
+    const prevH = Number(heightInput.value);
+    const nextW = normalizeDimensionToMultipleOf8(prevW, 1024);
+    const nextH = normalizeDimensionToMultipleOf8(prevH, 1024);
+
+    const changed = nextW !== prevW || nextH !== prevH;
+    if (changed) {
+        widthInput.value = String(nextW);
+        heightInput.value = String(nextH);
+    }
+
+    if (syncState) {
+        setState({ width: nextW, height: nextH });
+    }
+    return changed;
+}
+
 function buildSmartExtendFractions(srcW, srcH, dstW, dstH, growth) {
     if (dstW <= srcW && dstH <= srcH) return [1.0];
     const g = Math.max(1.05, Math.min(3.00, Number(growth || 1.25)));
@@ -586,12 +614,21 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
         listen(el, 'change', saveState);
     });
+
+    const normalizeDimsAndPersist = () => {
+        normalizeResolutionInputs({ syncState: true });
+        syncFromDOM();
+    };
+    listen(byId('width'), 'change', normalizeDimsAndPersist);
+    listen(byId('height'), 'change', normalizeDimsAndPersist);
+    listen(byId('width'), 'blur', normalizeDimsAndPersist);
+    listen(byId('height'), 'blur', normalizeDimsAndPersist);
 
     const refreshSmartExtendSizeWarning = () => {
         updateSmartExtendSizeWarning(Number(byId('width')?.value || 0), Number(byId('height')?.value || 0));
@@ -608,9 +645,9 @@ function setupFormHandlers() {
 
     listen(byId('randomize-seed'), 'click', () => {
         const seed = byId('seed_input');
-        const nextSeed = generateRandomSeed();
-        if (seed) seed.value = String(nextSeed);
-        setSeed(nextSeed);
+        if (seed) seed.value = '';
+        setSeed(null);
+        toast('Seed set to Random mode', 'info');
     });
 
     listen(byId('base_model'), 'change', async () => {
@@ -635,16 +672,6 @@ function setupFormHandlers() {
         byId('inpaint-replace')?.classList.remove('active');
     });
 
-}
-
-function generateRandomSeed() {
-    const maxSeed = 2147483647;
-    if (window.crypto?.getRandomValues) {
-        const data = new Uint32Array(1);
-        window.crypto.getRandomValues(data);
-        return (data[0] % maxSeed) + 1;
-    }
-    return Math.floor(Math.random() * maxSeed) + 1;
 }
 
 async function updateTokenCounter(prompt) {
@@ -699,6 +726,7 @@ function setupGenerationButtons() {
 
 async function startGeneration(mode) {
     try {
+        normalizeResolutionInputs({ syncState: true });
         syncFromDOM();
         if (!await maybeShowLargeResolutionWarning()) {
             toast('Run cancelled by user', 'info');
@@ -742,14 +770,21 @@ async function startGeneration(mode) {
 function collectFormData() {
     const formData = new FormData();
     const state = getState();
+    const width = normalizeDimensionToMultipleOf8(state.width || byId('width')?.value || 1024, 1024);
+    const height = normalizeDimensionToMultipleOf8(state.height || byId('height')?.value || 1024, 1024);
+    const widthInput = byId('width');
+    const heightInput = byId('height');
+    if (widthInput) widthInput.value = String(width);
+    if (heightInput) heightInput.value = String(height);
+    setState({ width, height });
 
     formData.append('prompt', byId('prompt')?.value || '');
     const negative = byId('negative')?.value || '';
     formData.append('negative_prompt', negative);
     // Keep legacy key for compatibility with any older handlers.
     formData.append('negative', negative);
-    formData.append('width', state.width || byId('width')?.value || 1024);
-    formData.append('height', state.height || byId('height')?.value || 1024);
+    formData.append('width', width);
+    formData.append('height', height);
     formData.append('steps', byId('steps')?.value || 30);
     formData.append('cfg', byId('cfg')?.value || 7.5);
     formData.append('scheduler', byId('scheduler')?.value || '');
@@ -758,6 +793,9 @@ function collectFormData() {
 
     const seedVal = byId('seed_input')?.value;
     if (seedVal) formData.append('seed', seedVal);
+    if (byId('clip-skip-2-enabled')?.checked) {
+        formData.append('clip_skip', '2');
+    }
 
     if (byId('second_pass_enabled')?.checked) {
         formData.append('second_pass_model', byId('second_pass_model')?.value || 'None');
@@ -871,11 +909,27 @@ function updateBatchStrip(images) {
     });
 }
 
-function cancelGeneration() {
+async function cancelGeneration() {
     isGenerating = false;
-    window.progressManager?.hideProgress();
-    toast('Generation cancelled', 'warning');
-    emit(Events.GENERATION_CANCEL);
+    const activeJobId = latestQueuePayload?.active_job_id;
+    if (!activeJobId) {
+        window.progressManager?.hideProgress();
+        toast('No running job to cancel', 'info');
+        emit(Events.GENERATION_CANCEL);
+        return;
+    }
+
+    try {
+        const res = await api.cancelQueue(activeJobId);
+        if (res?.status === 'cancelling') {
+            toast('Cancellation requested', 'warning');
+        } else {
+            toast('Generation cancelled', 'warning');
+        }
+        emit(Events.GENERATION_CANCEL);
+    } catch (error) {
+        toast(error?.message || 'Cancel failed', 'error');
+    }
 }
 
 function setupUploadHandling() {
@@ -2171,14 +2225,25 @@ function setupQueuePanel() {
     listen(byId('open-queue-modal'), 'click', openQueueModal);
     listen(byId('close-queue-modal'), 'click', closeQueueModal);
     listen(byId('close-queue-modal-footer'), 'click', closeQueueModal);
+    listen(byId('open-settings-modal'), 'click', openSettingsModal);
+    listen(byId('close-settings-modal'), 'click', closeSettingsModal);
+    listen(byId('close-settings-modal-footer'), 'click', closeSettingsModal);
+    listen(byId('unload-models-btn'), 'click', handleUnloadModelsClick);
+    listen(byId('shutdown-app-btn'), 'click', handleShutdownAppClick);
     listen(byId('queue-modal'), 'click', (event) => {
         if (event.target?.id === 'queue-modal') {
             closeQueueModal();
         }
     });
+    listen(byId('settings-modal'), 'click', (event) => {
+        if (event.target?.id === 'settings-modal') {
+            closeSettingsModal();
+        }
+    });
     listen(document, 'keydown', (event) => {
         if (event.key === 'Escape') {
             closeQueueModal();
+            closeSettingsModal();
         }
     });
     refreshQueuePanel();
@@ -2265,8 +2330,14 @@ function renderQueuePanel(data) {
         const thumbHtml = inputThumb
             ? `<img class="queue-item-thumb" src="${escapeHtml(inputThumb)}" alt="Queue input preview" loading="lazy" />`
             : '';
-        const canCancel = status === 'queued';
-        const statusText = status === 'running' ? 'Running' : status === 'queued' ? 'Queued' : status;
+        const canCancel = status === 'queued' || status === 'running' || status === 'cancelling';
+        const statusText = status === 'running'
+            ? 'Running'
+            : status === 'queued'
+                ? 'Queued'
+                : status === 'cancelling'
+                    ? 'Cancelling'
+                    : status;
         const isExpanded = expandedQueueJobs.has(job.job_id);
         const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0 || modeDetails.length > 0;
         const detailsHtml = hasExtraDetails
@@ -2295,7 +2366,7 @@ function renderQueuePanel(data) {
                 </div>
                 <div class="queue-item-actions">
                   ${hasExtraDetails ? `<button class="btn btn-ghost btn-sm queue-expand" data-job-id="${job.job_id}" type="button">${isExpanded ? 'Less' : 'More'}</button>` : ''}
-                  ${canCancel ? `<button class="btn btn-ghost btn-sm queue-cancel" data-job-id="${job.job_id}" type="button">Cancel</button>` : ''}
+                  ${canCancel ? `<button class="btn btn-ghost btn-sm queue-cancel" data-job-id="${job.job_id}" type="button">${status === 'cancelling' ? 'Cancelling...' : 'Cancel'}</button>` : ''}
                 </div>
               </div>
             `;
@@ -2318,12 +2389,19 @@ function renderQueuePanel(data) {
         listen(btn, 'click', async () => {
             const jobId = btn.dataset.jobId;
             if (!jobId) return;
+            btn.disabled = true;
             try {
-                await api.cancelQueue(jobId);
-                toast('Queued job cancelled', 'info');
+                const res = await api.cancelQueue(jobId);
+                if (res?.status === 'cancelling') {
+                    toast('Cancellation requested for running job', 'info');
+                } else {
+                    toast('Queued job cancelled', 'info');
+                }
                 // Backend pushes fresh queue state via WebSocket.
             } catch (err) {
                 toast(err.message || 'Cancel failed', 'error');
+            } finally {
+                btn.disabled = false;
             }
         });
     });
@@ -2358,6 +2436,61 @@ function closeQueueModal() {
     modal.classList.remove('active');
     modal.classList.add('hidden');
     modal.setAttribute('aria-hidden', 'true');
+}
+
+function openSettingsModal() {
+    const modal = byId('settings-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeSettingsModal() {
+    const modal = byId('settings-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.remove('active');
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+async function handleUnloadModelsClick() {
+    if (!await showAppConfirmModal({
+        title: 'Unload Models',
+        message: 'Unload all generation models from VRAM now?\n\nThis frees GPU memory and the next run will reload the selected model.',
+        okText: 'Unload',
+        cancelText: 'Cancel',
+        showCancel: true,
+    })) {
+        return;
+    }
+
+    try {
+        await api.unloadAllModels();
+        toast('Models unloaded from memory', 'success');
+    } catch (err) {
+        toast(err?.message || 'Unload failed', 'error');
+    }
+}
+
+async function handleShutdownAppClick() {
+    if (!await showAppConfirmModal({
+        title: 'Shut Down App',
+        message: 'Shut down WebbDuck now?\n\nThis stops the server process.',
+        okText: 'Shut Down',
+        cancelText: 'Cancel',
+        showCancel: true,
+        danger: true,
+    })) {
+        return;
+    }
+
+    try {
+        await api.shutdownApp();
+        toast('Shutting down server...', 'warning', 6000);
+    } catch (err) {
+        toast(err?.message || 'Shutdown failed', 'error');
+    }
 }
 
 function applyCompletedQueueResults(jobs) {

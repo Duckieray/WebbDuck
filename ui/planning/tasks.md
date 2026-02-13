@@ -1,5 +1,8 @@
 # WebbDuck UI Rewrite - Task Tracker
 
+> Archived planning artifact.
+> Task checklist below reflects an earlier rewrite track and is not a live status board for the current app.
+
 ## Phase 1: Foundation ✅ In Progress
 
 ### CSS Architecture

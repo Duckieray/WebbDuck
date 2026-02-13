@@ -1,7 +1,7 @@
 """Tests for the FastAPI server endpoints."""
 
 import pytest
-from pathlib import Path
+import threading
 
 
 
@@ -77,6 +77,44 @@ class TestGalleryEndpoint:
         
         gallery = response.json()
         assert isinstance(gallery, list)
+
+
+class TestQueueControls:
+    """Tests for queue cancellation behavior."""
+
+    def test_cancel_running_job_requests_cancellation(self, client):
+        from webbduck.server import app as appmod
+
+        job_id = "test-running-job"
+        cancel_event = threading.Event()
+        appmod.job_registry[job_id] = {"job_id": job_id, "status": "running"}
+        appmod.active_job_id = job_id
+        appmod.active_job = {"job_id": job_id, "cancel_event": cancel_event}
+
+        try:
+            response = client.post("/queue/cancel", data={"job_id": job_id})
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["status"] == "cancelling"
+            assert payload["job_id"] == job_id
+            assert cancel_event.is_set()
+            assert appmod.job_registry[job_id]["status"] == "cancelling"
+        finally:
+            appmod.job_registry.pop(job_id, None)
+            appmod.active_job_id = None
+            appmod.active_job = None
+
+
+class TestResolutionNormalization:
+    """Tests for width/height normalization helpers."""
+
+    def test_normalize_dimensions_rounds_to_multiple_of_8(self):
+        from webbduck.server.app import normalize_dimensions
+
+        width, height = normalize_dimensions(724, 1060)
+        assert width % 8 == 0
+        assert height % 8 == 0
+        assert (width, height) == (720, 1056)
 
 
 @pytest.mark.slow

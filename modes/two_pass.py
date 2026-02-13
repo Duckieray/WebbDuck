@@ -82,6 +82,7 @@ class TwoPassMode(GenerationMode):
         height = settings["height"]
         width = settings["width"]
         experimental = settings.get("experimental_compress", False)
+        clip_skip = settings.get("clip_skip")
 
         # Pass 1: Base composition
         if experimental:
@@ -134,6 +135,7 @@ class TwoPassMode(GenerationMode):
                 output_type="latent",
                 callback_on_step_end=cb,
                 callback_on_step_end_tensor_inputs=['latents'],
+                clip_skip=clip_skip,
             ).images
 
         # Pass 1 complete
@@ -204,6 +206,7 @@ class TwoPassMode(GenerationMode):
                     generator=generator,
                     callback_on_step_end=cb,
                     callback_on_step_end_tensor_inputs=['latents'],
+                    clip_skip=clip_skip,
                     **extra_args,
                 ).images
 
@@ -248,6 +251,7 @@ class TwoPassMode(GenerationMode):
                     target_size=(height, width),
                     callback_on_step_end=cb,
                     callback_on_step_end_tensor_inputs=['latents'],
+                    clip_skip=clip_skip,
                 ).images
 
             pipeline_manager.set_active_unet("base")

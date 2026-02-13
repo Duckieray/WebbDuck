@@ -26,6 +26,7 @@ class Img2ImgMode(GenerationMode):
         is_latent = isinstance(image, torch.Tensor)
 
         cb = callback.get_callback() if callback else None
+        clip_skip = settings.get("clip_skip")
 
         kwargs = {
             "prompt": prompt,
@@ -38,6 +39,7 @@ class Img2ImgMode(GenerationMode):
             "num_images_per_prompt": settings["num_images"], # Default strength
             "callback_on_step_end": cb,
             "callback_on_step_end_tensor_inputs": ['latents'],
+            "clip_skip": clip_skip,
         }
 
         if is_latent:

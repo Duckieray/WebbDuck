@@ -11,6 +11,12 @@ pytest -v -m "not slow"               # non-GPU tests
 pytest -v                              # full suite
 ```
 
+If you run WebbDuck in WSL with conda, use:
+
+```bash
+conda run -n <env_name> pytest -v -m "not slow"
+```
+
 ## Test Modules
 
 - `tests/test_modes.py`: mode selection and signatures.

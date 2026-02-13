@@ -44,9 +44,6 @@ export class LoraManager {
             // Clear cache
             this.availableLorasMap.clear();
 
-            // Reset select
-            this.select.innerHTML = '<option value="">➕ Add LoRA...</option>';
-
             loras.forEach(lora => {
                 const name = typeof lora === 'string' ? lora : lora.name;
 
@@ -56,14 +53,10 @@ export class LoraManager {
                 } else {
                     this.availableLorasMap.set(name, lora);
                 }
-
-                const opt = document.createElement('option');
-                opt.value = name;
-                opt.textContent = name;
-                this.select.appendChild(opt);
             });
 
             this.restoreFromState();
+            this.refreshSelectOptions();
 
             // Re-validate selected LoRAs? 
             // If model changed, maybe clear selected LoRAs?
@@ -77,6 +70,25 @@ export class LoraManager {
         } catch (error) {
             console.error('Failed to load LoRAs:', error);
             toast('Failed to load LoRAs', 'error');
+        }
+    }
+
+    refreshSelectOptions() {
+        if (!this.select) return;
+        const currentValue = this.select.value;
+        this.select.innerHTML = '<option value="">➕ Add LoRA...</option>';
+
+        const names = Array.from(this.availableLorasMap.keys()).sort((a, b) => a.localeCompare(b));
+        names.forEach((name) => {
+            if (this.selectedLoras.has(name)) return;
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            this.select.appendChild(opt);
+        });
+
+        if (currentValue && !this.selectedLoras.has(currentValue) && this.availableLorasMap.has(currentValue)) {
+            this.select.value = currentValue;
         }
     }
 
@@ -103,6 +115,7 @@ export class LoraManager {
 
         this.selectedLoras.set(name, weight);
         this.renderCard(name, weight);
+        this.refreshSelectOptions();
         if (persist) {
             this.persistSelection();
         }
@@ -116,6 +129,7 @@ export class LoraManager {
         this.selectedLoras.delete(name);
         const card = this.container.querySelector(`.lora-card[data-lora="${CSS.escape(name)}"]`);
         if (card) card.remove();
+        this.refreshSelectOptions();
         this.persistSelection();
     }
 
@@ -172,6 +186,7 @@ export class LoraManager {
     clear() {
         this.selectedLoras.clear();
         if (this.container) this.container.innerHTML = '';
+        this.refreshSelectOptions();
         this.persistSelection();
     }
 

@@ -27,6 +27,7 @@ from transformers import (
 
 from safetensors.torch import load_file
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
+from webbduck.core.exceptions import GenerationCancelledError
 
 from webbduck.core.schedulers import create_scheduler
 
@@ -429,8 +430,9 @@ def destroy_pipeline(pipe, img2img):
     del img2img
 
     gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
 
 class PipelineManager:
@@ -441,6 +443,7 @@ class PipelineManager:
         self.img2img = None
         self.base_img2img = None
         self.base_inpaint = None
+        self.shared = {}
         self.trigger_phrase = ""
         self.key = None
         self.scheduler_name = None
@@ -450,6 +453,68 @@ class PipelineManager:
 
         self.current_second_pass_model = None
         self.current_loras = {}
+
+    def _ensure_not_cancelled(self, cancel_event):
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelledError("Generation cancelled while loading model components")
+
+    def _offload_pipeline(self, pipe_obj):
+        if pipe_obj is None:
+            return
+        try:
+            pipe_obj.to("cpu")
+        except Exception:
+            pass
+        for attr in ("unet", "vae", "text_encoder", "text_encoder_2"):
+            comp = getattr(pipe_obj, attr, None)
+            if comp is not None and hasattr(comp, "to"):
+                try:
+                    comp.to("cpu")
+                except Exception:
+                    pass
+
+    def _clear_component_caches(self):
+        caches = (
+            _UNET_CACHE,
+            _REFINER_UNET_CACHE,
+            _TEXT_COMPONENT_CACHE,
+            _VAE_CACHE,
+            _SCHEDULER_CACHE,
+            _TOKENIZER_CACHE,
+        )
+        for cache in caches:
+            for v in list(cache.values()):
+                _release_cached_obj(v)
+            cache.clear()
+
+    def _unload_all_locked(self):
+        self._offload_pipeline(self.img2img)
+        self._offload_pipeline(self.base_img2img)
+        self._offload_pipeline(self.base_inpaint)
+        self._offload_pipeline(self.pipe)
+
+        self.pipe = None
+        self.img2img = None
+        self.base_img2img = None
+        self.base_inpaint = None
+        self.shared = {}
+        self.trigger_phrase = ""
+        self.key = None
+        self.scheduler_name = None
+        self.base_scheduler_config = None
+        self.current_second_pass_model = None
+        self.current_loras = {}
+
+        self._clear_component_caches()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
+    def unload_all(self):
+        """Unload all loaded model resources and clear caches."""
+        with self.lock:
+            self._unload_all_locked()
 
     def attach_second_pass_model(self, model_name):
         """Attach or update second pass model (refiner or img2img)."""
@@ -548,7 +613,7 @@ class PipelineManager:
             self.img2img.unet.to("cuda")
             self.img2img.vae.to("cuda")
 
-    def get(self, base_model, second_pass_model=None, loras=None, scheduler_name="UniPC"):
+    def get(self, base_model, second_pass_model=None, loras=None, scheduler_name="UniPC", cancel_event=None):
         """Get or create pipeline with specified configuration."""
         with self.lock:
             if self.key != base_model:
@@ -556,35 +621,15 @@ class PipelineManager:
                 load_total_steps = 7
 
                 def mark_load(stage: str, step: int):
-                    # Reserve the first 30% of overall progress for loading.
-                    progress = 0.02 + (min(step, load_total_steps) / load_total_steps) * 0.30
+                    self._ensure_not_cancelled(cancel_event)
+                    # Loading should stay below the denoising band so runtime percentages feel linear.
+                    progress = 0.04 + (min(step, load_total_steps) / load_total_steps) * 0.34
                     update_stage(f"Loading pipeline components... ({step}/{load_total_steps}) - {stage}")
                     update_progress(progress, step=step, total_steps=load_total_steps)
 
                 mark_load("Preparing", 0)
-
-                if self.pipe:
-                    # Move to CPU first to help allocator
-                    try:
-                        self.pipe.to("cpu")
-                        if self.base_img2img:
-                            self.base_img2img.to("cpu")
-                    except Exception:
-                        pass
-                        
-                    destroy_pipeline(self.pipe, self.img2img)
-                    self.base_img2img = None
-                    self.pipe = None
-                    self.img2img = None
-
-                    # Force clearing of global caches for heavy components to ensure clean switch
-                    global _UNET_CACHE, _REFINER_UNET_CACHE, _TEXT_COMPONENT_CACHE
-                    _UNET_CACHE.clear()
-                    _REFINER_UNET_CACHE.clear()
-                    _TEXT_COMPONENT_CACHE.clear()
-                    
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                self._unload_all_locked()
+                self._ensure_not_cancelled(cancel_event)
 
                 self.pipe, _, _ = build_pipeline(
                     base_model_name=base_model,
@@ -592,16 +637,19 @@ class PipelineManager:
                     lora_names=None,
                     load_progress_callback=mark_load,
                 )
+                self._ensure_not_cancelled(cancel_event)
                 
                 mark_load("Building img2img helper", 6)
                 self.base_img2img = StableDiffusionXLImg2ImgPipeline(
                     **self.pipe.components
                 )
+                self._ensure_not_cancelled(cancel_event)
 
                 mark_load("Building inpaint helper", 7)
                 self.base_inpaint = StableDiffusionXLInpaintPipeline(
                     **self.pipe.components
                 )
+                self._ensure_not_cancelled(cancel_event)
 
                 self.shared = {
                     "vae": self.pipe.vae,
@@ -621,6 +669,7 @@ class PipelineManager:
             
             # Switch scheduler if needed
             if scheduler_name and scheduler_name != self.scheduler_name:
+                self._ensure_not_cancelled(cancel_event)
                 from webbduck.server.state import update_stage # Redundant if already imported but safe
                 update_stage(f"Switching scheduler to {scheduler_name}")
                 
@@ -638,19 +687,23 @@ class PipelineManager:
             from webbduck.server.state import update_stage, update_progress
             update_stage("Attaching second pass model")
             update_progress(0.15)
+            self._ensure_not_cancelled(cancel_event)
             self.attach_second_pass_model(second_pass_model)
 
             update_stage("Loading LoRAs")
             update_progress(0.25)
+            self._ensure_not_cancelled(cancel_event)
             self.apply_loras(loras or [])
 
             update_stage("Generating")
             update_progress(0.35)
 
             # Ensure we start with base model on GPU
+            self._ensure_not_cancelled(cancel_event)
             self.set_active_unet("base")
 
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             self.last_used = time.time()
 
             return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase

@@ -71,14 +71,16 @@ If you upload an image:
 
 - If you click `Generate` many times, jobs go to queue.
 - Open `Queue` in the top bar to see pending/running jobs.
-- You can cancel queued jobs.
+- You can cancel queued jobs and request cancellation of the currently running job.
 
 ## 8. Gallery (Find Old Images)
 
-- Open `Gallery` to see saved runs.
+- Open `Gallery` to see saved images in a flat grid.
 - Use search to find old images by keywords.
 - Search uses keyword matching.
   Example: `blonde glasses` finds images that contain both words.
+- Use `All / HD / Favorites` filters and the `Thumb` slider to control gallery view size.
+- Gallery auto-loads more images when you scroll down.
 
 ## 9. Lightbox (Image Viewer)
 

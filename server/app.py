@@ -6,6 +6,7 @@ import uuid
 import time
 import os
 import random
+import threading
 from pathlib import Path
 import shutil
 from fastapi import FastAPI, Form, WebSocket, UploadFile, File
@@ -59,6 +60,7 @@ thumb_semaphore = asyncio.Semaphore(THUMB_CONCURRENCY)
 generation_queue = asyncio.Queue(maxsize=32)
 job_registry = {}
 active_job_id = None
+active_job = None
 CATALOG_POLL_SECONDS = max(1.0, float(os.getenv("WEBBDUCK_CATALOG_POLL_SECONDS", "3.0")))
 SMART_EXTEND_FEATHER_DEFAULT = 12
 SMART_EXTEND_STEP_GROWTH_DEFAULT = 1.25
@@ -68,6 +70,20 @@ SMART_EXTEND_REFINE_EACH_STEP_DEFAULT = True
 SMART_EXTEND_REFINE_WIDTH_DEFAULT = 64
 SMART_EXTEND_REFINE_STRENGTH_DEFAULT = 0.32
 SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT = 2.4
+
+
+def _round_to_8(value, fallback=1024) -> int:
+    """Normalize dimensions to nearest multiple of 8."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(fallback)
+    return max(8, int(round(float(n) / 8.0) * 8))
+
+
+def normalize_dimensions(width, height) -> tuple[int, int]:
+    """Return width/height normalized to multiples of 8."""
+    return _round_to_8(width, fallback=1024), _round_to_8(height, fallback=1024)
 
 
 def summarize_loras(loras) -> list[str]:
@@ -266,11 +282,12 @@ def schedule_queue_update():
 
 
 def _mark_job_start(job):
-    global active_job_id
+    global active_job_id, active_job
     job_id = job.get("job_id")
     if not job_id:
         return
     active_job_id = job_id
+    active_job = job
     meta = job_registry.get(job_id)
     if meta:
         meta["status"] = "running"
@@ -279,15 +296,18 @@ def _mark_job_start(job):
 
 
 def _mark_job_finish(job, success: bool, error: str | None):
-    global active_job_id
+    global active_job_id, active_job
     job_id = job.get("job_id")
     if not job_id:
         return
     meta = job_registry.get(job_id)
     if meta:
-        meta["status"] = "completed" if success else "failed"
+        if error == "__cancelled__":
+            meta["status"] = "cancelled"
+        else:
+            meta["status"] = "completed" if success else "failed"
         meta["finished_at"] = time.time()
-        if error:
+        if error and error != "__cancelled__":
             meta["error"] = error
         if success:
             fut = job.get("future")
@@ -308,6 +328,7 @@ def _mark_job_finish(job, success: bool, error: str | None):
                     pass
     if active_job_id == job_id:
         active_job_id = None
+        active_job = None
 
     # Prevent unbounded growth.
     if len(job_registry) > 300:
@@ -329,6 +350,8 @@ def queue_position_for(job_id: str) -> int | None:
 
 async def enqueue(job, wait_for_result: bool = True):
     """Enqueue job. Optionally wait for result."""
+    if "cancel_event" not in job or job.get("cancel_event") is None:
+        job["cancel_event"] = threading.Event()
     await generation_queue.put(job)
     job_id = job["job_id"]
     meta = job_registry[job_id]
@@ -520,10 +543,12 @@ async def test(
     smart_extend_offset_y: int = Form(None),
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
+    clip_skip: int = Form(None),
     experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
     """Generate single test image."""
+    width, height = normalize_dimensions(width, height)
     lora_list = json.loads(loras)
     loop = asyncio.get_event_loop()
     future = loop.create_future()
@@ -559,6 +584,7 @@ async def test(
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
+        "clip_skip": clip_skip,
         "experimental_compress": experimental_compress,
     }
 
@@ -585,6 +611,7 @@ async def test(
         "type": "test",
         "settings": settings,
         "future": future,
+        "cancel_event": threading.Event(),
         "on_start": _mark_job_start,
         "on_finish": _mark_job_finish,
     }
@@ -648,9 +675,11 @@ async def generate(
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     smart_extend_pyramid_initializer: str = Form("edge_strips"),
+    clip_skip: int = Form(None),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
+    width, height = normalize_dimensions(width, height)
     lora_list = json.loads(loras)
     loop = asyncio.get_event_loop()
     future = loop.create_future()
@@ -692,6 +721,7 @@ async def generate(
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "smart_extend_pyramid_trigger_ratio": SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT,
         "smart_extend_pyramid_initializer": smart_extend_pyramid_initializer,
+        "clip_skip": clip_skip,
     }
 
     if image:
@@ -719,6 +749,7 @@ async def generate(
         "type": "batch",
         "settings": settings,
         "future": future,
+        "cancel_event": threading.Event(),
         "on_start": _mark_job_start,
         "on_finish": _mark_job_finish,
     }
@@ -993,6 +1024,7 @@ async def upscale(
         "image": str(resolve_web_path(image)),
         "scale": scale,
         "future": future,
+        "cancel_event": threading.Event(),
         "on_start": _mark_job_start,
         "on_finish": _mark_job_finish,
     }
@@ -1015,21 +1047,29 @@ def get_queue():
 
 @app.post("/queue/cancel")
 async def cancel_queue_job(job_id: str = Form(...)):
-    """Cancel a queued (not yet running) job."""
+    """Cancel a queued or running job."""
     meta = job_registry.get(job_id)
     if not meta:
         return JSONResponse(status_code=404, content={"error": "Job not found"})
 
-    if meta.get("status") == "running":
-        return JSONResponse(
-            status_code=409,
-            content={"error": "Job already running; queued cancellation only"}
-        )
+    status = meta.get("status")
+
+    if status in {"running", "cancelling"} and active_job_id == job_id and active_job:
+        cancel_event = active_job.get("cancel_event")
+        if cancel_event is not None:
+            cancel_event.set()
+        meta["status"] = "cancelling"
+        meta["cancel_requested_at"] = time.time()
+        await broadcast_queue_update()
+        return {"status": "cancelling", "job_id": job_id}
 
     for queued_job in list(generation_queue._queue):
         if queued_job.get("job_id") != job_id:
             continue
 
+        cancel_event = queued_job.get("cancel_event")
+        if cancel_event is not None:
+            cancel_event.set()
         generation_queue._queue.remove(queued_job)
         generation_queue.task_done()
 
@@ -1042,7 +1082,54 @@ async def cancel_queue_job(job_id: str = Form(...)):
         await broadcast_queue_update()
         return {"status": "cancelled", "job_id": job_id}
 
-    return JSONResponse(status_code=409, content={"error": "Job is not queued"})
+    if status in {"completed", "failed", "cancelled"}:
+        return JSONResponse(status_code=409, content={"error": f"Job already {status}"})
+    return JSONResponse(status_code=409, content={"error": "Job is no longer cancellable"})
+
+
+@app.post("/models/unload_all")
+async def unload_all_models():
+    """Unload all loaded generation and captioning models from memory."""
+    if active_job_id is not None:
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Cannot unload while a job is running"},
+        )
+
+    from webbduck.core.pipeline import pipeline_manager
+    from webbduck.core.captioner import unload_captioners
+
+    update_stage("Unloading models")
+    update_progress(0.05)
+    await broadcast_state(snapshot())
+
+    try:
+        pipeline_manager.unload_all()
+        unload_captioners()
+    except Exception as exc:
+        update_stage("Error")
+        await broadcast_state(snapshot())
+        return JSONResponse(status_code=500, content={"error": f"Unload failed: {exc}"})
+
+    update_progress(1.0)
+    update_stage("Idle")
+    await broadcast_state(snapshot())
+    return {"status": "unloaded"}
+
+
+async def _delayed_process_exit(delay_seconds: float = 0.35):
+    await asyncio.sleep(max(0.0, float(delay_seconds)))
+    os._exit(0)
+
+
+@app.post("/app/shutdown")
+async def shutdown_app():
+    """Terminate the WebbDuck process."""
+    update_stage("Shutting down")
+    update_progress(0.0)
+    await broadcast_state(snapshot())
+    asyncio.create_task(_delayed_process_exit())
+    return {"status": "shutting_down"}
 
 
 @app.get("/health")

@@ -15,6 +15,7 @@ export class ProgressManager {
         this.messageEl = byId('progress-message');
         this.statusBar = byId('status-indicator');
         this.statusText = byId('status-text');
+        this.statusPercent = byId('status-percent');
 
         // SVG Circle properties
         this.radius = 40;
@@ -54,7 +55,7 @@ export class ProgressManager {
         }
 
         // Update status bar (always visible)
-        this.updateStatusBar(stage, vram);
+        this.updateStatusBar(stage, progress, vram);
     }
 
     showProgress(stage, progress, step, totalSteps) {
@@ -122,7 +123,11 @@ export class ProgressManager {
         }
     }
 
-    updateStatusBar(stage, vram) {
+    updateStatusBar(stage, progress, vram) {
+        const pct = Math.round(Math.min(Math.max(progress || 0, 0), 1) * 100);
+        if (this.statusPercent) {
+            this.statusPercent.textContent = stage === 'Idle' ? '0%' : `${pct}%`;
+        }
         if (this.statusText) {
             this.statusText.textContent = stage === 'Idle' ? 'Ready' : stage;
         }
