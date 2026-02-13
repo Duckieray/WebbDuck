@@ -48,6 +48,12 @@ const DEFAULT_STATE = {
 // Current state
 let state = { ...DEFAULT_STATE };
 
+function normalizeDimensionToMultipleOf8(rawValue, fallback = 1024) {
+    const raw = Number(rawValue);
+    const safe = Number.isFinite(raw) ? raw : Number(fallback);
+    return Math.max(8, Math.round(safe / 8) * 8);
+}
+
 function normalizeDenoisingMode(rawMode) {
     return rawMode === 'preserve' ? 'preserve' : 'details';
 }
@@ -268,11 +274,14 @@ export function syncFromDOM() {
         scaleVersion: state.denoisingScaleVersion,
     });
 
+    const width = normalizeDimensionToMultipleOf8(parseInt(getValue('width'), 10), 1024);
+    const height = normalizeDimensionToMultipleOf8(parseInt(getValue('height'), 10), 1024);
+
     setState({
         prompt: getValue('prompt'),
         negative: getValue('negative'),
-        width: parseInt(getValue('width')) || 1024,
-        height: parseInt(getValue('height')) || 1024,
+        width,
+        height,
         steps: parseInt(getValue('steps')) || 30,
         cfg: parseFloat(getValue('cfg')) || 7.5,
         scheduler: getValue('scheduler'),

@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 from webbduck.core.generation import run_generation
+from webbduck.core.exceptions import GenerationCancelledError
 from webbduck.server.storage import save_images, append_session_entry
 from webbduck.server.events import broadcast_state
 from webbduck.server.state import update_stage, update_progress, snapshot
@@ -50,8 +51,10 @@ def _build_oom_message(exc: Exception) -> str:
     return f"{base} Original error: {exc}"
 
 
-async def run_upscale(job):
+async def run_upscale(job, cancel_event=None):
     """Execute upscale task."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise GenerationCancelledError("Upscale cancelled before start")
     update_stage("Upscaling")
     update_progress(0.0)
     await broadcast_state(snapshot())
@@ -69,6 +72,8 @@ async def run_upscale(job):
     img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
     with torch.inference_mode():
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelledError("Upscale cancelled")
         upscaled_bgr, _ = upsampler.enhance(img_bgr, outscale=scale)
 
     update_progress(0.9)
@@ -95,6 +100,7 @@ async def gpu_worker(queue):
         job = await queue.get()
         on_start = job.get("on_start")
         on_finish = job.get("on_finish")
+        cancel_event = job.get("cancel_event")
 
         if callable(on_start):
             try:
@@ -104,7 +110,7 @@ async def gpu_worker(queue):
         
         if job["type"] == "upscale":
             try:
-                result = await run_upscale(job)
+                result = await run_upscale(job, cancel_event=cancel_event)
                 job["future"].set_result({"image": result})
                 if callable(on_finish):
                     try:
@@ -113,6 +119,19 @@ async def gpu_worker(queue):
                         pass
             except Exception as e:
                 _cleanup_memory()
+                if isinstance(e, GenerationCancelledError):
+                    update_stage("Cancelled")
+                    update_progress(0.0)
+                    await broadcast_state(snapshot())
+                    if not job["future"].done():
+                        job["future"].set_result({"status": "cancelled", "job_id": job.get("job_id")})
+                    if callable(on_finish):
+                        try:
+                            on_finish(job, False, "__cancelled__")
+                        except Exception:
+                            pass
+                    continue
+
                 update_stage("Error")
                 await broadcast_state(snapshot())
                 if _is_oom_error(e):
@@ -137,11 +156,13 @@ async def gpu_worker(queue):
             update_stage("Generating")
             update_progress(0.4)
             await broadcast_state(snapshot())
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelledError("Generation cancelled before denoising")
 
             gen_started_monotonic = time.perf_counter()
             gen_started_utc = datetime.utcnow().isoformat() + "Z"
             images, seed = await loop.run_in_executor(
-                None, run_generation, job["settings"]
+                None, run_generation, job["settings"], cancel_event
             )
             gen_finished_monotonic = time.perf_counter()
             gen_finished_utc = datetime.utcnow().isoformat() + "Z"
@@ -196,6 +217,19 @@ async def gpu_worker(queue):
 
         except Exception as e:
             _cleanup_memory()
+            if isinstance(e, GenerationCancelledError):
+                update_stage("Cancelled")
+                update_progress(0.0)
+                await broadcast_state(snapshot())
+                if not job["future"].done():
+                    job["future"].set_result({"status": "cancelled", "job_id": job.get("job_id")})
+                if callable(on_finish):
+                    try:
+                        on_finish(job, False, "__cancelled__")
+                    except Exception:
+                        pass
+                continue
+
             update_stage("Error")
             await broadcast_state(snapshot())
             if _is_oom_error(e):

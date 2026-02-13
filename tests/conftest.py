@@ -103,4 +103,5 @@ def client():
     """Create test client for FastAPI app (shared fixture)."""
     from fastapi.testclient import TestClient
     from webbduck.server.app import app
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client

@@ -8,6 +8,7 @@ from PIL import Image, ImageOps, ImageStat, ImageFilter
 
 from webbduck.core.pipeline import pipeline_manager
 from webbduck.core.captioner import unload_captioners
+from webbduck.core.exceptions import GenerationCancelledError
 from webbduck.modes import select_mode
 from webbduck.modes.inpaint import _build_step_fractions, _auto_repeat_passes
 from webbduck.server.state import update_progress
@@ -18,14 +19,17 @@ log = logging.getLogger(__name__)
 class GlobalProgress:
     """Tracks progress across multiple generation passes."""
     
-    def __init__(self, total_estimated_steps):
+    def __init__(self, total_estimated_steps, cancel_event=None):
         self.total_estimated_steps = total_estimated_steps
         self.current_global_step = 0
         self.pass_start_step = 0
+        self.cancel_event = cancel_event
         
     def get_callback(self):
         """Returns a diffusers-compatible callback."""
         def callback(pipe, step_index, timestep, callback_kwargs):
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                raise GenerationCancelledError("Generation cancelled by user")
             # Calculate actual global step
             # step_index is 0-based index of Current Pass
             
@@ -189,6 +193,14 @@ def inject_lora_trigger(prompt_text, trigger_phrase):
     return f"{prompt}, {triggers}"
 
 
+def _normalize_dim8(value, fallback=1024) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(fallback)
+    return max(8, int(round(float(n) / 8.0) * 8))
+
+
 def _anchor_offset(anchor: str, src_w: int, src_h: int, dst_w: int, dst_h: int) -> tuple[int, int]:
     dx = max(0, dst_w - src_w)
     dy = max(0, dst_h - src_h)
@@ -287,8 +299,14 @@ def _build_smart_extend_inputs(
     return expanded, smart_mask, {"x": x, "y": y, "w": src_w, "h": src_h}
 
 
-def run_generation(settings):
+def run_generation(settings, cancel_event=None):
     """Execute image generation based on settings."""
+    settings["width"] = _normalize_dim8(settings.get("width", 1024), fallback=1024)
+    settings["height"] = _normalize_dim8(settings.get("height", 1024), fallback=1024)
+
+    if cancel_event is not None and cancel_event.is_set():
+        raise GenerationCancelledError("Generation cancelled before start")
+
     second_pass_model = settings.get("second_pass_model")
     if second_pass_model == "None":
         second_pass_model = None
@@ -301,6 +319,7 @@ def run_generation(settings):
         second_pass_model=second_pass_model,
         loras=settings.get("loras", []),
         scheduler_name=settings.get("scheduler"),
+        cancel_event=cancel_event,
     )
 
     # Always inject LoRA trigger phrases into active prompts.
@@ -399,7 +418,7 @@ def run_generation(settings):
 
     # Setup progress tracking
     total_steps = estimate_total_steps(settings)
-    progress_tracker = GlobalProgress(total_steps)
+    progress_tracker = GlobalProgress(total_steps, cancel_event=cancel_event)
     
     images, out_seed = mode.run(
         settings=settings,

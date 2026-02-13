@@ -181,6 +181,22 @@ export async function cancelQueue(jobId) {
 }
 
 /**
+ * Unload all loaded generation models from memory.
+ */
+export async function unloadAllModels() {
+    const formData = new FormData();
+    return postForm('/models/unload_all', formData);
+}
+
+/**
+ * Shut down the WebbDuck server process.
+ */
+export async function shutdownApp() {
+    const formData = new FormData();
+    return postForm('/app/shutdown', formData);
+}
+
+/**
  * Favorite/unfavorite an image.
  */
 export async function setFavorite(imagePath, favorite = true) {
