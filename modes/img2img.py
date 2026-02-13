@@ -3,6 +3,7 @@
 import torch
 from webbduck.modes.base import GenerationMode
 from webbduck.core.pipeline import pipeline_manager
+from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
 
 
 class Img2ImgMode(GenerationMode):
@@ -28,10 +29,24 @@ class Img2ImgMode(GenerationMode):
         cb = callback.get_callback() if callback else None
         clip_skip = settings.get("clip_skip")
 
+        (
+            prompt_embeds,
+            pooled_prompt_embeds,
+            negative_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = build_sdxl_conditioning_dispatch(
+            pipe=active_pipe,
+            prompt=prompt,
+            prompt_2=prompt_2,
+            negative=negative,
+            experimental=settings.get("experimental_compress", False),
+        )
+
         kwargs = {
-            "prompt": prompt,
-            "prompt_2": prompt_2,
-            "negative_prompt": negative,
+            "prompt_embeds": prompt_embeds,
+            "pooled_prompt_embeds": pooled_prompt_embeds,
+            "negative_prompt_embeds": negative_prompt_embeds,
+            "negative_pooled_prompt_embeds": negative_pooled_prompt_embeds,
             "num_inference_steps": settings["steps"],
             "guidance_scale": settings["cfg"],
             "generator": generator,

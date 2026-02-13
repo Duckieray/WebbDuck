@@ -7,7 +7,6 @@ from webbduck.prompt.experimental import (
     build_sdxl_conditioning_dispatch,
     build_sdxl_refiner_conditioning,
 )
-from webbduck.prompt.management import truncate_to_tokens
 from webbduck.core.pipeline import pipeline_manager
 from webbduck.modes.base import GenerationMode
 
@@ -97,9 +96,6 @@ class TwoPassMode(GenerationMode):
             base_prompt_2 = prompt_2 or prompt
             late_prompt = None
             late_prompt_2 = None
-
-        base_prompt = truncate_to_tokens(pipe.tokenizer, base_prompt, max_tokens=75)
-        base_prompt_2 = truncate_to_tokens(pipe.tokenizer_2, base_prompt_2, max_tokens=75)
 
         log.debug(f"Pass 1 tokens: {len(pipe.tokenizer(base_prompt)['input_ids'])}")
         

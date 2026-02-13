@@ -11,6 +11,7 @@ from PIL import Image, ImageOps, ImageFilter
 import torch
 from .base import GenerationMode
 from . import outpaint as pyramid_outpaint
+from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
 from webbduck.server.state import update_stage
 
 log = logging.getLogger(__name__)
@@ -405,6 +406,59 @@ def _inject_clip_skip(kwargs: dict, settings: dict) -> dict:
     return kwargs
 
 
+def _inject_prompt_conditioning(
+    kwargs: dict,
+    active_pipe,
+    settings: dict,
+    cache: dict | None = None,
+) -> dict:
+    """Replace prompt strings with explicit SDXL embeddings, including long-prompt chunking."""
+    if active_pipe is None or "prompt_embeds" in kwargs:
+        return kwargs
+    if "prompt" not in kwargs and "negative_prompt" not in kwargs:
+        return kwargs
+
+    prompt = kwargs.pop("prompt", "") or ""
+    prompt_2 = kwargs.pop("prompt_2", None)
+    negative = kwargs.pop("negative_prompt", "") or ""
+    use_experimental = bool(settings.get("experimental_compress", False))
+    key = (
+        id(active_pipe),
+        prompt,
+        prompt_2 or "",
+        negative,
+        use_experimental,
+    )
+    if cache is not None and key in cache:
+        prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds = cache[key]
+    else:
+        (
+            prompt_embeds,
+            pooled_prompt_embeds,
+            negative_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = build_sdxl_conditioning_dispatch(
+            pipe=active_pipe,
+            prompt=prompt,
+            prompt_2=prompt_2,
+            negative=negative,
+            experimental=use_experimental,
+        )
+        if cache is not None:
+            cache[key] = (
+                prompt_embeds,
+                pooled_prompt_embeds,
+                negative_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            )
+
+    kwargs["prompt_embeds"] = prompt_embeds
+    kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+    kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+    kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
+    return kwargs
+
+
 def _build_stage_refine_mask(size, placement, seam_width):
     width, height = size
     ox = int(placement.get("ox", 0))
@@ -502,6 +556,7 @@ class InpaintMode(GenerationMode):
         guidance_scale = float(settings.get("cfg", 7.5))
         num_inference_steps = int(settings.get("steps", 30))
         num_images_per_prompt = int(settings.get("num_images", 1))
+        conditioning_cache = {}
         
         image = settings["input_image"]
         mask_image = settings["mask_image"]
@@ -671,7 +726,10 @@ class InpaintMode(GenerationMode):
                             stage_kwargs["callback_on_step_end"] = cb
                             stage_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
-                        stage_raw = base_inpaint(**_inject_clip_skip(stage_kwargs, settings)).images[0].convert("RGB")
+                        stage_raw = base_inpaint(**_inject_clip_skip(
+                            _inject_prompt_conditioning(stage_kwargs, base_inpaint, settings, conditioning_cache),
+                            settings,
+                        )).images[0].convert("RGB")
                         stage_out = [stage_raw]
                         _debug_save_image(debug_session, f"{pass_dir}/02_stage_raw.png", stage_raw)
                         if callback and hasattr(callback, "finish_pass"):
@@ -739,7 +797,10 @@ class InpaintMode(GenerationMode):
                                 refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
                             baseline_stage = stage_out[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/04_refine_mask.png", seam_mask)
-                            stage_refined = base_inpaint(**_inject_clip_skip(refine_kwargs, settings)).images[0]
+                            stage_refined = base_inpaint(**_inject_clip_skip(
+                                _inject_prompt_conditioning(refine_kwargs, base_inpaint, settings, conditioning_cache),
+                                settings,
+                            )).images[0]
                             _debug_save_image(debug_session, f"{pass_dir}/05_refine_raw.png", stage_refined)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(stage_refine_steps)
@@ -1040,7 +1101,10 @@ class InpaintMode(GenerationMode):
                         if cb:
                             pass_kwargs["callback_on_step_end"] = cb
                             pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                        raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
+                        raw = base_inpaint(**_inject_clip_skip(
+                            _inject_prompt_conditioning(pass_kwargs, base_inpaint, settings, conditioning_cache),
+                            settings,
+                        )).images[0].convert("RGB")
                         _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(num_inference_steps)
@@ -1106,7 +1170,10 @@ class InpaintMode(GenerationMode):
                         if cb:
                             pass_kwargs["callback_on_step_end"] = cb
                             pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                        raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
+                        raw = base_inpaint(**_inject_clip_skip(
+                            _inject_prompt_conditioning(pass_kwargs, base_inpaint, settings, conditioning_cache),
+                            settings,
+                        )).images[0].convert("RGB")
                         _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                         if callback and hasattr(callback, "finish_pass"):
                             callback.finish_pass(num_inference_steps)
@@ -1162,7 +1229,10 @@ class InpaintMode(GenerationMode):
                             if cb:
                                 pass_kwargs["callback_on_step_end"] = cb
                                 pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
-                            raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
+                            raw = base_inpaint(**_inject_clip_skip(
+                                _inject_prompt_conditioning(pass_kwargs, base_inpaint, settings, conditioning_cache),
+                                settings,
+                            )).images[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(num_inference_steps)
@@ -1235,7 +1305,10 @@ class InpaintMode(GenerationMode):
                                 pass_kwargs["callback_on_step_end"] = cb
                                 pass_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
-                            raw = base_inpaint(**_inject_clip_skip(pass_kwargs, settings)).images[0].convert("RGB")
+                            raw = base_inpaint(**_inject_clip_skip(
+                                _inject_prompt_conditioning(pass_kwargs, base_inpaint, settings, conditioning_cache),
+                                settings,
+                            )).images[0].convert("RGB")
                             _debug_save_image(debug_session, f"{pass_dir}/02_raw.png", raw)
                             if callback and hasattr(callback, "finish_pass"):
                                 callback.finish_pass(num_inference_steps)
@@ -1383,7 +1456,10 @@ class InpaintMode(GenerationMode):
                         refine_kwargs["callback_on_step_end"] = cb
                         refine_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
                     baseline_img = img.convert("RGB")
-                    res = base_inpaint(**_inject_clip_skip(refine_kwargs, settings)).images[0]
+                    res = base_inpaint(**_inject_clip_skip(
+                        _inject_prompt_conditioning(refine_kwargs, base_inpaint, settings, conditioning_cache),
+                        settings,
+                    )).images[0]
                     _debug_save_image(debug_session, f"final_refine/img_{idx + 1:02d}_01_raw.png", res)
                     if callback and hasattr(callback, "finish_pass"):
                         callback.finish_pass(refine_steps)

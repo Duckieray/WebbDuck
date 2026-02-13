@@ -13,6 +13,7 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 - Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
 - LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
 - Token counter with warning when prompt exceeds the 77-token CLIP window.
+- Long-prompt chunking for SDXL conditioning (prompts beyond 77 tokens are chunk-encoded instead of hard-truncated).
 - Flat gallery grid with thumbnail-size slider, infinite scroll, global keyword search, and lightbox action toolbar.
 - Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
 - Optional captioner plugin system (JoyCaption supported).

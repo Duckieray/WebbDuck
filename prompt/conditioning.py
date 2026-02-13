@@ -1,176 +1,134 @@
-"""Standard SDXL prompt conditioning."""
+"""Standard SDXL prompt conditioning with long-prompt chunk concatenation."""
 
 import torch
-from webbduck.prompt.management import chunk_prompt, truncate_to_tokens
-
-MAX_TOKENS = 77
 
 
-def encode_chunks_text_encoder(tokenizer, text_encoder, chunks, device):
-    """Returns CLIP-L token embeddings: [B, 77, 768]"""
-    embeds = []
+def _tokenize_without_special(tokenizer, text: str) -> list[int]:
+    raw = tokenizer(
+        text or "",
+        truncation=False,
+        add_special_tokens=False,
+    )["input_ids"]
+    if not raw:
+        return []
+    if isinstance(raw[0], list):
+        return [int(x) for x in raw[0]]
+    return [int(x) for x in raw]
 
+
+def _chunk_token_ids(tokenizer, token_ids: list[int]) -> torch.Tensor:
+    max_length = int(getattr(tokenizer, "model_max_length", 77) or 77)
+    max_length = max(3, max_length)
+    payload = max_length - 2
+
+    bos = getattr(tokenizer, "bos_token_id", None)
+    eos = getattr(tokenizer, "eos_token_id", None)
+    pad = getattr(tokenizer, "pad_token_id", None)
+    if bos is None:
+        bos = eos if eos is not None else 0
+    if eos is None:
+        eos = bos if bos is not None else 0
+    if pad is None:
+        pad = eos
+
+    chunks = []
+    if token_ids:
+        for i in range(0, len(token_ids), payload):
+            chunks.append(token_ids[i:i + payload])
+    else:
+        chunks.append([])
+
+    padded = []
     for chunk in chunks:
-        tokens = tokenizer(
-            chunk,
-            padding="max_length",
-            max_length=77,
-            truncation=True,
-            return_tensors="pt",
-        ).to(device)
+        seq = [int(bos)] + [int(t) for t in chunk] + [int(eos)]
+        if len(seq) < max_length:
+            seq.extend([int(pad)] * (max_length - len(seq)))
+        else:
+            seq = seq[:max_length]
+        padded.append(seq)
 
-        with torch.no_grad():
+    return torch.tensor(padded, dtype=torch.long)
+
+
+def _extract_seq(out) -> torch.Tensor:
+    hidden_states = getattr(out, "hidden_states", None)
+    if hidden_states is not None and len(hidden_states) >= 2:
+        return hidden_states[-2]
+    return out.last_hidden_state
+
+
+def _extract_pooled(out, seq: torch.Tensor) -> torch.Tensor:
+    text_embeds = getattr(out, "text_embeds", None)
+    if text_embeds is not None:
+        return text_embeds
+    pooler = getattr(out, "pooler_output", None)
+    if pooler is not None:
+        return pooler
+    return seq[:, 0, :]
+
+
+def _pad_seq_to_length(seq: torch.Tensor, target_length: int) -> torch.Tensor:
+    current = int(seq.shape[1])
+    if current >= target_length:
+        return seq
+    pad = torch.zeros(
+        seq.shape[0],
+        target_length - current,
+        seq.shape[2],
+        dtype=seq.dtype,
+        device=seq.device,
+    )
+    return torch.cat([seq, pad], dim=1)
+
+
+def encode_long_prompt(tokenizer, text_encoder, text: str, device):
+    """Encode arbitrarily long text by chunking CLIP token windows and concatenating seq embeddings."""
+    token_ids = _tokenize_without_special(tokenizer, text)
+    chunks = _chunk_token_ids(tokenizer, token_ids).to(device)
+
+    seq_parts = []
+    pooled_last = None
+    with torch.no_grad():
+        for i in range(chunks.shape[0]):
             out = text_encoder(
-                tokens.input_ids,
+                chunks[i:i + 1],
                 return_dict=True,
                 output_hidden_states=True,
             )
+            seq = _extract_seq(out)
+            seq_parts.append(seq)
+            pooled_last = _extract_pooled(out, seq)
 
-        embeds.append(out.hidden_states[-2])
-
-    tokens = torch.cat(embeds, dim=1)
-
-    if tokens.shape[1] < 77:
-        pad = torch.zeros(
-            tokens.shape[0],
-            77 - tokens.shape[1],
-            tokens.shape[2],
-            device=tokens.device,
-            dtype=tokens.dtype,
-        )
-        tokens = torch.cat([tokens, pad], dim=1)
-
-    return tokens[:, :77, :]
-
-
-def encode_chunks_text_encoder_2(tokenizer, text_encoder_2, chunks, device):
-    """Returns CLIP-G token embeddings: [B, 77, 1280]"""
-    embeds = []
-
-    for chunk in chunks:
-        tokens = tokenizer(
-            chunk,
-            padding="max_length",
-            max_length=77,
-            truncation=True,
-            return_tensors="pt",
-        ).to(device)
-
-        with torch.no_grad():
-            out = text_encoder_2(
-                tokens.input_ids,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-
-        embeds.append(out.hidden_states[-2])
-
-    tokens = torch.cat(embeds, dim=1)
-
-    if tokens.shape[1] < 77:
-        pad = torch.zeros(
-            tokens.shape[0],
-            77 - tokens.shape[1],
-            tokens.shape[2],
-            device=tokens.device,
-            dtype=tokens.dtype,
-        )
-        tokens = torch.cat([tokens, pad], dim=1)
-
-    return tokens[:, :77, :]
+    seq_concat = torch.cat(seq_parts, dim=1)
+    return seq_concat, pooled_last
 
 
 def build_sdxl_conditioning(pipe, prompt, prompt_2, negative):
-    """Build standard SDXL conditioning embeddings."""
+    """Build SDXL conditioning embeddings with long-prompt chunking for both encoders."""
     device = pipe.device
+    pos_text_2 = prompt_2 or prompt
 
-    # Positive prompt
-    chunks = chunk_prompt(pipe.tokenizer, prompt)
-    chunks_2 = chunk_prompt(pipe.tokenizer, prompt_2 or prompt)
+    pos_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, prompt or "", device)
+    pos_seq_2, pos_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, pos_text_2 or "", device)
 
-    token_embeds = encode_chunks_text_encoder(
-        pipe.tokenizer,
-        pipe.text_encoder,
-        chunks,
-        device,
-    )
+    neg_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, negative or "", device)
+    neg_seq_2, neg_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, negative or "", device)
 
-    token_embeds_2 = encode_chunks_text_encoder_2(
-        pipe.tokenizer_2,
-        pipe.text_encoder_2,
-        chunks_2,
-        device,
-    )
+    pos_pair_len = max(int(pos_seq_1.shape[1]), int(pos_seq_2.shape[1]))
+    neg_pair_len = max(int(neg_seq_1.shape[1]), int(neg_seq_2.shape[1]))
+    common_len = max(pos_pair_len, neg_pair_len)
 
-    prompt_embeds = torch.cat([token_embeds, token_embeds_2], dim=-1)
+    pos_seq_1 = _pad_seq_to_length(pos_seq_1, common_len)
+    pos_seq_2 = _pad_seq_to_length(pos_seq_2, common_len)
+    neg_seq_1 = _pad_seq_to_length(neg_seq_1, common_len)
+    neg_seq_2 = _pad_seq_to_length(neg_seq_2, common_len)
 
-    pooled_text = truncate_to_tokens(
-        pipe.tokenizer_2,
-        prompt_2 or prompt,
-        max_tokens=77,
-    )
-
-    with torch.no_grad():
-        pooled_prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                pooled_text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).text_embeds
-
-    pooled_prompt_embeds = pooled_prompt_embeds.repeat(
-        prompt_embeds.shape[0], 1
-    )
-
-    # Negative prompt
-    neg_chunks = chunk_prompt(pipe.tokenizer, negative)
-
-    neg_token_embeds = encode_chunks_text_encoder(
-        pipe.tokenizer,
-        pipe.text_encoder,
-        neg_chunks,
-        device,
-    )
-
-    neg_token_embeds_2 = encode_chunks_text_encoder_2(
-        pipe.tokenizer_2,
-        pipe.text_encoder_2,
-        neg_chunks,
-        device,
-    )
-
-    negative_prompt_embeds = torch.cat(
-        [neg_token_embeds, neg_token_embeds_2],
-        dim=-1,
-    )
-
-    neg_pooled_text = truncate_to_tokens(
-        pipe.tokenizer_2,
-        negative,
-        max_tokens=77,
-    )
-
-    with torch.no_grad():
-        negative_pooled_prompt_embeds = pipe.text_encoder_2(
-            pipe.tokenizer_2(
-                neg_pooled_text,
-                padding="max_length",
-                truncation=True,
-                max_length=77,
-                return_tensors="pt",
-            ).input_ids.to(device)
-        ).text_embeds
-
-    negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(
-        negative_prompt_embeds.shape[0], 1
-    )
+    prompt_embeds = torch.cat([pos_seq_1, pos_seq_2], dim=-1)
+    negative_prompt_embeds = torch.cat([neg_seq_1, neg_seq_2], dim=-1)
 
     return (
         prompt_embeds,
-        pooled_prompt_embeds,
+        pos_pool,
         negative_prompt_embeds,
-        negative_pooled_prompt_embeds,
+        neg_pool,
     )
