@@ -24,6 +24,7 @@ from transformers import (
     CLIPTextModel,
     CLIPTextModelWithProjection,
 )
+from huggingface_hub import snapshot_download
 
 from safetensors.torch import load_file
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
@@ -48,8 +49,62 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cuda.enable_cudnn_sdp(False)
 torch.set_float32_matmul_precision("high")
 
-DEVICE = "cuda"
-DTYPE = torch.bfloat16
+def _resolve_runtime_device_and_dtype() -> tuple[str, torch.dtype]:
+    """Pick a safe default device and dtype for current hardware.
+
+    Defaults:
+    - CUDA + SM >= 8.0: bfloat16
+    - CUDA + older SM: float16
+    - CPU: float32
+
+    Overrides:
+    - WEBBDUCK_DEVICE in {"cpu", "cuda"}
+    - WEBBDUCK_DTYPE in {"float32", "float16", "bfloat16", "fp32", "fp16", "bf16"}
+    """
+    forced_device = (os.getenv("WEBBDUCK_DEVICE", "") or "").strip().lower()
+    forced_dtype = (os.getenv("WEBBDUCK_DTYPE", "") or "").strip().lower()
+
+    if forced_device in {"cpu", "cuda"}:
+        device = forced_device
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    dtype_map = {
+        "float32": torch.float32,
+        "fp32": torch.float32,
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+    }
+
+    if forced_dtype in dtype_map:
+        dtype = dtype_map[forced_dtype]
+    elif device == "cuda":
+        try:
+            major, minor = torch.cuda.get_device_capability(0)
+            dtype = torch.bfloat16 if major >= 8 else torch.float16
+            log.info(
+                "CUDA device detected: %s (cc=%s.%s), using dtype=%s",
+                torch.cuda.get_device_name(0),
+                major,
+                minor,
+                str(dtype).replace("torch.", ""),
+            )
+        except Exception:
+            dtype = torch.float16
+            log.warning("Could not read CUDA capability; falling back to float16")
+    else:
+        dtype = torch.float32
+
+    if device == "cpu" and dtype != torch.float32:
+        log.warning("CPU mode does not support %s efficiently; using float32", dtype)
+        dtype = torch.float32
+
+    return device, dtype
+
+
+DEVICE, DTYPE = _resolve_runtime_device_and_dtype()
 
 # Component caches
 _UNET_CACHE = {}
@@ -60,6 +115,46 @@ _SCHEDULER_CACHE = {}
 _REFINER_UNET_CACHE = {}
 
 MAX_CACHE_SIZE = 1
+_SINGLE_FILE_CONFIG_CACHE = {}
+
+
+def _get_single_file_config_path(repo_id: str) -> str | None:
+    """Prepare a local Diffusers config snapshot for single-file checkpoints.
+
+    This avoids Windows symlink privilege errors from HF cache operations.
+    """
+    cached = _SINGLE_FILE_CONFIG_CACHE.get(repo_id)
+    if cached:
+        return cached
+
+    local_root = Path(
+        os.getenv(
+            "WEBBDUCK_HF_CONFIG_DIR",
+            str(Path.home() / ".cache" / "webbduck" / "hf-configs"),
+        )
+    )
+    local_dir = local_root / repo_id.replace("/", "--")
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    # Only fetch small config/tokenizer files. This avoids large weight downloads.
+    allow_patterns = [
+        "*.json",
+        "**/*.json",
+        "*.txt",
+        "**/*.txt",
+        "*.model",
+        "**/*.model",
+    ]
+
+    snapshot_download(
+        repo_id=repo_id,
+        allow_patterns=allow_patterns,
+        local_dir=str(local_dir),
+    )
+
+    config_path = str(local_dir)
+    _SINGLE_FILE_CONFIG_CACHE[repo_id] = config_path
+    return config_path
 
 def _release_cached_obj(obj):
     """Best-effort release of cached torch modules before eviction."""
@@ -343,13 +438,35 @@ def build_pipeline(
 
     # Single-file checkpoint
     if base_entry["type"] == "single":
+        config_repo = base_entry.get("config_repo", "stabilityai/stable-diffusion-xl-base-1.0")
+        single_file_kwargs = {
+            "torch_dtype": DTYPE,
+            "use_safetensors": True,
+        }
+
+        try:
+            config_path = _get_single_file_config_path(config_repo)
+            if config_path:
+                single_file_kwargs["config"] = config_path
+                single_file_kwargs["local_files_only"] = True
+        except Exception as exc:
+            log.warning("Could not prepare local single-file config (%s): %s", config_repo, exc)
+
         if callable(load_progress_callback):
             load_progress_callback("Loading checkpoint", 2)
-        pipe = StableDiffusionXLPipeline.from_single_file(
-            base_entry["path"],
-            torch_dtype=DTYPE,
-            use_safetensors=True,
-        ).to(DEVICE)
+        try:
+            pipe = StableDiffusionXLPipeline.from_single_file(
+                base_entry["path"],
+                **single_file_kwargs,
+            ).to(DEVICE)
+        except OSError as exc:
+            # Windows symlink privilege issue from HF cache internals.
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                raise RuntimeError(
+                    "Hugging Face cache symlink permission error on Windows. "
+                    "Enable Windows Developer Mode or run once as Administrator."
+                ) from exc
+            raise
 
         if callable(load_progress_callback):
             load_progress_callback("Attaching VAE", 3)
@@ -600,18 +717,18 @@ class PipelineManager:
             if self.img2img:
                 self.img2img.unet.to("cpu")
                 self.img2img.vae.to("cpu")
-            self.pipe.unet.to("cuda")
-            self.pipe.vae.to("cuda")
+            self.pipe.unet.to(DEVICE)
+            self.pipe.vae.to(DEVICE)
 
         else:
             assert self.img2img is not None, "Second pass model not loaded"
             self.pipe.unet.to("cpu")
             self.pipe.vae.to("cpu")
-            self.img2img.unet.to("cuda")
-            self.img2img.vae.to("cuda")
+            self.img2img.unet.to(DEVICE)
+            self.img2img.vae.to(DEVICE)
 
-            self.img2img.unet.to("cuda")
-            self.img2img.vae.to("cuda")
+            self.img2img.unet.to(DEVICE)
+            self.img2img.vae.to(DEVICE)
 
     def get(self, base_model, second_pass_model=None, loras=None, scheduler_name="UniPC", cancel_event=None):
         """Get or create pipeline with specified configuration."""

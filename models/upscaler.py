@@ -1,17 +1,56 @@
 """Real-ESRGAN upscaling integration."""
 
+import sys
+import types
 import torch
 from pathlib import Path
-from basicsr.archs.rrdbnet_arch import RRDBNet
-from realesrgan import RealESRGANer
 
 _UPSAMPLERS = {}
+
+
+def _ensure_torchvision_compat() -> None:
+    """Provide backwards-compatible alias expected by older BasicSR releases.
+
+    Some BasicSR versions import `torchvision.transforms.functional_tensor`,
+    which was removed in newer torchvision builds. Create a minimal module
+    alias so importing BasicSR does not fail.
+    """
+    if "torchvision.transforms.functional_tensor" in sys.modules:
+        return
+
+    try:
+        from torchvision.transforms import functional as functional_mod
+    except Exception:
+        return
+
+    alias = types.ModuleType("torchvision.transforms.functional_tensor")
+    for name in ("rgb_to_grayscale",):
+        func = getattr(functional_mod, name, None)
+        if callable(func):
+            setattr(alias, name, func)
+
+    sys.modules["torchvision.transforms.functional_tensor"] = alias
+
+
+def _import_upscaler_components():
+    _ensure_torchvision_compat()
+    try:
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from realesrgan import RealESRGANer
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Real-ESRGAN dependencies are unavailable. Ensure `basicsr`, "
+            "`realesrgan`, and a compatible `torchvision` are installed."
+        ) from exc
+    return RRDBNet, RealESRGANer
 
 
 def get_upsampler(scale: int = 2):
     """Load Real-ESRGAN once per scale and reuse it."""
     if scale in _UPSAMPLERS:
         return _UPSAMPLERS[scale]
+
+    RRDBNet, RealESRGANer = _import_upscaler_components()
 
     model_path = Path(f"weights/RealESRGAN_x{scale}plus.pth")
     if not model_path.exists():

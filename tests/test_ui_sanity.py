@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -5,12 +7,13 @@ from playwright.sync_api import Page, expect
 def test_ui_loads_components(page: Page):
     """
     Verify that key UI components load correctly.
-    This assumes the server is already running at localhost:8000.
+    This assumes the server is already running locally.
     """
+    base_url = os.getenv("WEBBDUCK_TEST_BASE_URL", "http://127.0.0.1:8010")
     page.on("console", lambda msg: print(f"BROWSER CONSOLE: {msg.text}"))
     page.on("pageerror", lambda exc: print(f"BROWSER ERROR: {exc}"))
     page.on("response", lambda response: print(f"NETWORK: {response.status} {response.url}"))
-    page.goto("http://127.0.0.1:8000")
+    page.goto(base_url)
     
     # 1. Verify Title
     expect(page).to_have_title("WebbDuck - AI Image Studio")
