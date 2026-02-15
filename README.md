@@ -69,12 +69,12 @@ mkdir -p checkpoint/sdxl lora outputs weights
 python run.py
 ```
 
-Open `http://localhost:8000`.
+Open `http://localhost:8010`.
 
 Custom port example:
 
 ```bash
-python run.py --port 8010
+python run.py --port 8020
 ```
 
 ## Runtime Notes

@@ -56,7 +56,7 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 python run.py
 ```
 
-Open `http://localhost:8000`.
+Open `http://localhost:8010`.
 
 ## 4. Smoke Tests
 

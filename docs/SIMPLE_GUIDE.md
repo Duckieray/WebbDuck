@@ -20,7 +20,7 @@ python run.py
 
 Then open:
 
-`http://localhost:8000`
+`http://localhost:8010`
 
 ## 3. First Image (Quick Start)
 
