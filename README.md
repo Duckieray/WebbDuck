@@ -37,8 +37,22 @@ Windows:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
+pip install -r requirements.windows.txt
 mkdir checkpoint\sdxl, lora, outputs, weights
+```
+
+PyTorch GPU compatibility note (important):
+- The correct torch build depends on your GPU generation, driver, Python version, and available PyTorch wheels.
+- Some newer GPUs may require nightly torch builds before stable wheels support their SM architecture.
+- If `torch.cuda.is_available()` is `False`, or you see CUDA kernel errors (for example `no kernel image is available`), switch to a different PyTorch wheel channel.
+- Example alternatives:
+  - Stable: `https://download.pytorch.org/whl/cu124`
+  - Nightly: `https://download.pytorch.org/whl/nightly/cu128` (or `cu126` if needed)
+- Verify after install:
+
+```powershell
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu')"
 ```
 
 Linux:
@@ -57,6 +71,12 @@ python run.py
 
 Open `http://localhost:8000`.
 
+Custom port example:
+
+```bash
+python run.py --port 8010
+```
+
 ## Runtime Notes
 
 - `run.py` starts FastAPI with reload and safe environment defaults.
@@ -74,6 +94,7 @@ Open `http://localhost:8000`.
 - `docs/DEVELOPMENT.md`
 - `docs/architecture.md`
 - `docs/REQUIREMENTS.md`
+- `docs/WINDOWS_TESTING.md`
 - `docs/PLUGINS.md`
 - `ui/README.md`
 

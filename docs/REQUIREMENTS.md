@@ -9,6 +9,10 @@ This document tracks the current functional and technical requirements implement
 - Backend: FastAPI.
 - Runtime messaging: REST for actions + WebSocket push for live state.
 
+Platform install notes:
+- Linux/WSL: `requirements.txt`
+- Windows: `requirements.windows.txt` (install PyTorch separately first using the official PyTorch wheel index for your CUDA/CPU target; newer GPUs may require nightly PyTorch wheels until stable kernels are available)
+
 ## 2. Functional Requirements
 
 ### 2.1 Generation

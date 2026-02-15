@@ -32,6 +32,15 @@ def _is_oom_error(exc: Exception) -> bool:
     return any(m in text for m in markers)
 
 
+def _is_kernel_compat_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "no kernel image is available for execution on the device",
+        "device kernel image is invalid",
+    )
+    return any(m in text for m in markers)
+
+
 def _cleanup_memory():
     gc.collect()
     if torch.cuda.is_available():
@@ -47,6 +56,17 @@ def _build_oom_message(exc: Exception) -> str:
         "Generation failed due to memory exhaustion. "
         "Try reducing batch size/resolution, closing other GPU or RAM-heavy apps, "
         "or waiting for queued work to finish before retrying."
+    )
+    return f"{base} Original error: {exc}"
+
+
+def _build_kernel_compat_message(exc: Exception) -> str:
+    base = (
+        "Generation failed due to GPU kernel compatibility. "
+        "This usually means the installed PyTorch/CUDA build or selected dtype "
+        "is incompatible with your GPU architecture. "
+        "Try setting WEBBDUCK_DTYPE=float16 and using a stable CUDA wheel pair "
+        "(for example torch/torchvision from cu124)."
     )
     return f"{base} Original error: {exc}"
 
@@ -134,7 +154,14 @@ async def gpu_worker(queue):
 
                 update_stage("Error")
                 await broadcast_state(snapshot())
-                if _is_oom_error(e):
+                if _is_kernel_compat_error(e):
+                    msg = _build_kernel_compat_message(e)
+                    update_stage("GPU Compatibility Error")
+                    update_progress(0.0)
+                    await broadcast_state(snapshot())
+                    log.exception("GPU compatibility error during upscale job %s", job.get("job_id"))
+                    job["future"].set_exception(RuntimeError(msg))
+                elif _is_oom_error(e):
                     msg = _build_oom_message(e)
                     update_stage("OOM (Memory)")
                     update_progress(0.0)
@@ -232,7 +259,14 @@ async def gpu_worker(queue):
 
             update_stage("Error")
             await broadcast_state(snapshot())
-            if _is_oom_error(e):
+            if _is_kernel_compat_error(e):
+                msg = _build_kernel_compat_message(e)
+                update_stage("GPU Compatibility Error")
+                update_progress(0.0)
+                await broadcast_state(snapshot())
+                log.exception("GPU compatibility error during generation job %s", job.get("job_id"))
+                job["future"].set_exception(RuntimeError(msg))
+            elif _is_oom_error(e):
                 msg = _build_oom_message(e)
                 update_stage("OOM (Memory)")
                 update_progress(0.0)
