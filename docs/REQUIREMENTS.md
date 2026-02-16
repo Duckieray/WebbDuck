@@ -12,6 +12,7 @@ This document tracks the current functional and technical requirements implement
 Platform install notes:
 - Linux/WSL: `requirements.txt`
 - Windows: `requirements.windows.txt` (install PyTorch separately first using the official PyTorch wheel index for your CUDA/CPU target; newer GPUs may require nightly PyTorch wheels until stable kernels are available)
+- Runtime defaults auto-select GPU precision and may fall back to CPU when the installed CUDA wheel cannot execute kernels on the detected GPU architecture.
 
 ## 2. Functional Requirements
 

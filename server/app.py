@@ -48,6 +48,11 @@ from webbduck.core.captioner import (
     is_captioning_available,
     generate_caption,
 )
+from webbduck.core.web_plugins import (
+    discover_web_plugins,
+    include_web_plugin_routers,
+    mount_web_plugin_assets,
+)
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -55,6 +60,10 @@ INPUTS_DIR.mkdir(exist_ok=True)
 app = FastAPI()
 THUMB_CONCURRENCY = max(1, int(os.getenv("WEBBDUCK_THUMB_CONCURRENCY", "2")))
 thumb_semaphore = asyncio.Semaphore(THUMB_CONCURRENCY)
+
+WEB_PLUGINS = discover_web_plugins()
+mount_web_plugin_assets(app, WEB_PLUGINS)
+include_web_plugin_routers(app, WEB_PLUGINS)
 
 # Queue for GPU jobs
 generation_queue = asyncio.Queue(maxsize=32)
@@ -526,6 +535,14 @@ def simple_guide():
     if not guide_path.exists():
         return {"markdown": ""}
     return {"markdown": guide_path.read_text(encoding="utf-8")}
+
+
+@app.get("/plugins/web")
+def list_web_plugins():
+    """List discovered web plugins for dynamic UI tab injection."""
+    return {
+        "plugins": [plugin.to_public() for plugin in WEB_PLUGINS],
+    }
 
 
 app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
@@ -1152,7 +1169,7 @@ async def unload_all_models():
             content={"error": "Cannot unload while a job is running"},
         )
 
-    from webbduck.core.pipeline import pipeline_manager
+    from webbduck.core.pipeline import pipeline_manager, get_runtime_profile_dict
     from webbduck.core.captioner import unload_captioners
 
     update_stage("Unloading models")
@@ -1209,6 +1226,7 @@ def health():
     return {
         "status": "ok",
         "cuda_available": cuda_ok,
+        "runtime": get_runtime_profile_dict(),
         "vram": vram,
         "models": {
             "count": len(MODEL_REGISTRY),

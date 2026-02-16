@@ -17,6 +17,7 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 - Flat gallery grid with thumbnail-size slider, infinite scroll, global keyword search, and lightbox action toolbar.
 - Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
 - Optional captioner plugin system (JoyCaption supported).
+- Generic web-app plugin host (`plugins/webapps`) so plugins can render their own UI page in WebbDuck.
 
 ## Requirements
 
@@ -86,6 +87,10 @@ python run.py --port 8020
   - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
 - Thumbnail serving concurrency can be tuned:
   - `WEBBDUCK_THUMB_CONCURRENCY` (default `2`)
+- Runtime device/dtype can be overridden:
+  - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
+  - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)
+  - `WEBBDUCK_STRICT_DEVICE=1` to fail fast instead of auto-fallback when CUDA is requested but unusable
 
 ## Documentation
 

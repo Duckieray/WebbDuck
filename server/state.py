@@ -34,11 +34,15 @@ def update_vram():
     """Update VRAM usage stats."""
     if not torch.cuda.is_available():
         return
-    state["vram"] = {
-        "used": torch.cuda.memory_allocated() / 1024**3,
-        "total": torch.cuda.get_device_properties(0).total_memory / 1024**3,
-    }
-    state["last_update"] = time.time()
+    try:
+        state["vram"] = {
+            "used": torch.cuda.memory_allocated() / 1024**3,
+            "total": torch.cuda.get_device_properties(0).total_memory / 1024**3,
+        }
+        state["last_update"] = time.time()
+    except Exception:
+        # Keep the server responsive even if the CUDA runtime is partially unusable.
+        pass
 
 
 def snapshot():

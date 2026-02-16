@@ -13,6 +13,7 @@ from datetime import datetime
 
 from webbduck.core.generation import run_generation
 from webbduck.core.exceptions import GenerationCancelledError
+from webbduck.core.runtime import runtime_error_hint
 from webbduck.server.storage import save_images, append_session_entry
 from webbduck.server.events import broadcast_state
 from webbduck.server.state import update_stage, update_progress, snapshot
@@ -33,12 +34,7 @@ def _is_oom_error(exc: Exception) -> bool:
 
 
 def _is_kernel_compat_error(exc: Exception) -> bool:
-    text = str(exc).lower()
-    markers = (
-        "no kernel image is available for execution on the device",
-        "device kernel image is invalid",
-    )
-    return any(m in text for m in markers)
+    return runtime_error_hint(exc) is not None
 
 
 def _cleanup_memory():
@@ -65,9 +61,12 @@ def _build_kernel_compat_message(exc: Exception) -> str:
         "Generation failed due to GPU kernel compatibility. "
         "This usually means the installed PyTorch/CUDA build or selected dtype "
         "is incompatible with your GPU architecture. "
-        "Try setting WEBBDUCK_DTYPE=float16 and using a stable CUDA wheel pair "
-        "(for example torch/torchvision from cu124)."
+        "Try setting WEBBDUCK_DTYPE=float16 and installing a PyTorch wheel channel "
+        "compatible with your GPU generation (for example stable cu124 or nightly cu126/cu128)."
     )
+    hint = runtime_error_hint(exc)
+    if hint:
+        base = f"{base} {hint}"
     return f"{base} Original error: {exc}"
 
 

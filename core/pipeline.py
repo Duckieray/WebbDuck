@@ -29,6 +29,7 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
 from webbduck.core.exceptions import GenerationCancelledError
+from webbduck.core.runtime import resolve_runtime_profile
 
 from webbduck.core.schedulers import create_scheduler
 
@@ -49,62 +50,9 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cuda.enable_cudnn_sdp(False)
 torch.set_float32_matmul_precision("high")
 
-def _resolve_runtime_device_and_dtype() -> tuple[str, torch.dtype]:
-    """Pick a safe default device and dtype for current hardware.
-
-    Defaults:
-    - CUDA + SM >= 8.0: bfloat16
-    - CUDA + older SM: float16
-    - CPU: float32
-
-    Overrides:
-    - WEBBDUCK_DEVICE in {"cpu", "cuda"}
-    - WEBBDUCK_DTYPE in {"float32", "float16", "bfloat16", "fp32", "fp16", "bf16"}
-    """
-    forced_device = (os.getenv("WEBBDUCK_DEVICE", "") or "").strip().lower()
-    forced_dtype = (os.getenv("WEBBDUCK_DTYPE", "") or "").strip().lower()
-
-    if forced_device in {"cpu", "cuda"}:
-        device = forced_device
-    else:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    dtype_map = {
-        "float32": torch.float32,
-        "fp32": torch.float32,
-        "float16": torch.float16,
-        "fp16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "bf16": torch.bfloat16,
-    }
-
-    if forced_dtype in dtype_map:
-        dtype = dtype_map[forced_dtype]
-    elif device == "cuda":
-        try:
-            major, minor = torch.cuda.get_device_capability(0)
-            dtype = torch.bfloat16 if major >= 8 else torch.float16
-            log.info(
-                "CUDA device detected: %s (cc=%s.%s), using dtype=%s",
-                torch.cuda.get_device_name(0),
-                major,
-                minor,
-                str(dtype).replace("torch.", ""),
-            )
-        except Exception:
-            dtype = torch.float16
-            log.warning("Could not read CUDA capability; falling back to float16")
-    else:
-        dtype = torch.float32
-
-    if device == "cpu" and dtype != torch.float32:
-        log.warning("CPU mode does not support %s efficiently; using float32", dtype)
-        dtype = torch.float32
-
-    return device, dtype
-
-
-DEVICE, DTYPE = _resolve_runtime_device_and_dtype()
+RUNTIME_PROFILE = resolve_runtime_profile(logger=log)
+DEVICE = RUNTIME_PROFILE.device
+DTYPE = RUNTIME_PROFILE.dtype
 
 # Component caches
 _UNET_CACHE = {}
@@ -193,7 +141,7 @@ def manage_cache(cache, key):
         _release_cached_obj(cache.get(oldest_key))
         del cache[oldest_key]
         gc.collect()
-        if torch.cuda.is_available():
+        if DEVICE == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 
@@ -275,8 +223,6 @@ def configure_sdxl_additions(pipe):
 
 def build_second_pass_pipeline(model_path: Path, shared):
     """Build a second-pass pipeline (refiner or img2img)."""
-    key = str(model_path.resolve())
-
     key = str(model_path.resolve())
     manage_cache(_REFINER_UNET_CACHE, key)
 
@@ -412,8 +358,6 @@ def get_scheduler(base_path: Path):
 def get_cached_unet(base_path: Path) -> UNet2DConditionModel:
     """Load and cache UNet."""
     key = str(base_path.resolve())
-
-    key = str(base_path.resolve())
     manage_cache(_UNET_CACHE, key)
 
     if key not in _UNET_CACHE:
@@ -547,7 +491,7 @@ def destroy_pipeline(pipe, img2img):
     del img2img
 
     gc.collect()
-    if torch.cuda.is_available():
+    if DEVICE == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
 
@@ -624,7 +568,7 @@ class PipelineManager:
 
         self._clear_component_caches()
         gc.collect()
-        if torch.cuda.is_available():
+        if DEVICE == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
@@ -640,7 +584,8 @@ class PipelineManager:
 
         if self.img2img:
             del self.img2img
-            torch.cuda.empty_cache()
+            if DEVICE == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         self.img2img = None
         self.current_second_pass_model = None
@@ -652,7 +597,8 @@ class PipelineManager:
         if self.pipe:
             self.pipe.unet.to("cpu")
             self.pipe.vae.to("cpu")
-            torch.cuda.empty_cache()
+            if DEVICE == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         model_entry = MODEL_REGISTRY[model_name]
         model_path = model_entry["path"]
@@ -724,9 +670,6 @@ class PipelineManager:
             assert self.img2img is not None, "Second pass model not loaded"
             self.pipe.unet.to("cpu")
             self.pipe.vae.to("cpu")
-            self.img2img.unet.to(DEVICE)
-            self.img2img.vae.to(DEVICE)
-
             self.img2img.unet.to(DEVICE)
             self.img2img.vae.to(DEVICE)
 
@@ -819,7 +762,7 @@ class PipelineManager:
             self._ensure_not_cancelled(cancel_event)
             self.set_active_unet("base")
 
-            if torch.cuda.is_available():
+            if DEVICE == "cuda" and torch.cuda.is_available():
                 torch.cuda.synchronize()
             self.last_used = time.time()
 
@@ -827,3 +770,8 @@ class PipelineManager:
 
 
 pipeline_manager = PipelineManager()
+
+
+def get_runtime_profile_dict() -> dict:
+    """Expose selected runtime profile for diagnostics/health endpoints."""
+    return RUNTIME_PROFILE.to_dict()
