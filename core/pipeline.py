@@ -205,6 +205,56 @@ def apply_loras(pipe, loras: list[dict]) -> str:
     return ", ".join(trigger_phrases)
 
 
+def _load_sdxl_dual_clip_embedding(pipe, embedding_path: Path, token: str) -> bool:
+    """Load SDXL textual inversion exported with `clip_l`/`clip_g` tensors.
+
+    Returns True when this format was detected and loaded, otherwise False.
+    """
+    if embedding_path.suffix.lower() != ".safetensors":
+        return False
+
+    try:
+        state = load_file(str(embedding_path), device="cpu")
+    except Exception:
+        return False
+
+    if not isinstance(state, dict) or "clip_l" not in state or "clip_g" not in state:
+        return False
+
+    clip_l = state.get("clip_l")
+    clip_g = state.get("clip_g")
+    if not isinstance(clip_l, torch.Tensor) or not isinstance(clip_g, torch.Tensor):
+        raise ValueError("Embedding file has non-tensor `clip_l`/`clip_g` entries")
+
+    if clip_l.ndim == 1:
+        clip_l = clip_l.unsqueeze(0)
+    if clip_g.ndim == 1:
+        clip_g = clip_g.unsqueeze(0)
+    if clip_l.ndim != 2 or clip_g.ndim != 2:
+        raise ValueError("Expected 2D tensors for `clip_l` and `clip_g`")
+    if clip_l.shape[0] != clip_g.shape[0]:
+        raise ValueError(
+            f"Mismatched SDXL embedding vectors: clip_l={tuple(clip_l.shape)}, clip_g={tuple(clip_g.shape)}"
+        )
+
+    if not hasattr(pipe, "tokenizer_2") or not hasattr(pipe, "text_encoder_2"):
+        raise ValueError("SDXL dual-clip embedding requires tokenizer_2/text_encoder_2")
+
+    pipe.load_textual_inversion(
+        {token: clip_l},
+        token=token,
+        tokenizer=pipe.tokenizer,
+        text_encoder=pipe.text_encoder,
+    )
+    pipe.load_textual_inversion(
+        {token: clip_g},
+        token=token,
+        tokenizer=pipe.tokenizer_2,
+        text_encoder=pipe.text_encoder_2,
+    )
+    return True
+
+
 def set_inference_mode(pipe):
     """Set all pipeline components to eval mode."""
     pipe.unet.eval()
@@ -619,9 +669,34 @@ class PipelineManager:
 
     def clear_embeddings(self):
         """Remove all loaded textual-inversion embeddings."""
+        tokens = []
+        for value in self.current_embeddings.values():
+            tok = str(value or "").strip()
+            if tok and tok not in tokens:
+                tokens.append(tok)
+
         try:
             if self.pipe is not None and hasattr(self.pipe, "unload_textual_inversion"):
-                self.pipe.unload_textual_inversion()
+                self.pipe.unload_textual_inversion(
+                    tokens=tokens or None,
+                    tokenizer=getattr(self.pipe, "tokenizer", None),
+                    text_encoder=getattr(self.pipe, "text_encoder", None),
+                )
+        except Exception:
+            pass
+
+        try:
+            if (
+                self.pipe is not None
+                and hasattr(self.pipe, "unload_textual_inversion")
+                and hasattr(self.pipe, "tokenizer_2")
+                and hasattr(self.pipe, "text_encoder_2")
+            ):
+                self.pipe.unload_textual_inversion(
+                    tokens=tokens or None,
+                    tokenizer=getattr(self.pipe, "tokenizer_2", None),
+                    text_encoder=getattr(self.pipe, "text_encoder_2", None),
+                )
         except Exception:
             pass
         self.current_embeddings = {}
@@ -699,11 +774,17 @@ class PipelineManager:
 
         for name, token in desired.items():
             reg = EMBEDDING_REGISTRY[name]
-            load_kwargs = {"token": token} if token else {}
-            self.pipe.load_textual_inversion(
-                str(reg["path"]),
-                **load_kwargs,
-            )
+            path = Path(reg["path"])
+            try:
+                loaded_dual = _load_sdxl_dual_clip_embedding(self.pipe, path, token)
+                if not loaded_dual:
+                    load_kwargs = {"token": token} if token else {}
+                    self.pipe.load_textual_inversion(
+                        str(path),
+                        **load_kwargs,
+                    )
+            except Exception as exc:
+                raise ValueError(f"Failed to load embedding '{name}' from {path}: {exc}") from exc
 
         self.current_embeddings = desired
 
