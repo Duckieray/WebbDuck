@@ -15,6 +15,7 @@ ui/
 |  |- utils.js
 |- modules/
 |  |- LightboxManager.js
+|  |- EmbeddingManager.js
 |  |- LoraManager.js
 |  |- MaskEditor.js
 |  |- ProgressManager.js
@@ -58,6 +59,12 @@ This avoids frontend polling loops for queue/catalog freshness.
 - Slider range is `0.00` to `2.00` in `0.05` increments.
 - Default slider value uses backend `weight` from `loras.json`.
 - Selected LoRAs are persisted in local state and restored when compatible.
+
+## Embedding UX Notes
+
+- Embedding selector options are loaded from `/models/{base_model:path}/embeddings`.
+- Selected embeddings are persisted in local state and restored when compatible.
+- Each selected embedding card exposes editable token text used during pipeline loading.
 
 ## Editing Guidance
 

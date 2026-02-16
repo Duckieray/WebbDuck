@@ -36,9 +36,12 @@ from webbduck.core.worker import gpu_worker
 from webbduck.models.registry import (
     MODEL_REGISTRY,
     LORA_REGISTRY,
+    EMBEDDING_REGISTRY,
     CHECKPOINT_ROOT,
     LORA_ROOT,
     LORA_FILE,
+    EMBEDDING_ROOT,
+    EMBEDDING_FILE,
     MODELS_FILE,
     refresh_registries,
 )
@@ -182,6 +185,39 @@ def summarize_loras(loras) -> list[str]:
     return labels[:8]
 
 
+def summarize_embeddings(embeddings) -> list[str]:
+    """Create compact embedding labels for queue metadata."""
+    if not isinstance(embeddings, list):
+        return []
+
+    labels = []
+    for item in embeddings:
+        if isinstance(item, str):
+            labels.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+
+        name = item.get("name") or item.get("model")
+        if not name:
+            continue
+        token = item.get("token")
+        labels.append(f"{name} [{token}]" if token else str(name))
+    return labels[:8]
+
+
+def _parse_json_list(raw: str, field_name: str) -> list:
+    """Parse list-like JSON form values safely."""
+    try:
+        value = json.loads(raw or "[]")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON for '{field_name}'") from exc
+
+    if not isinstance(value, list):
+        raise HTTPException(status_code=422, detail=f"'{field_name}' must be a JSON array")
+    return value
+
+
 def summarize_settings(settings: dict) -> dict:
     """Build a compact metadata summary for queue UI."""
     prompt = settings.get("prompt", "") or ""
@@ -281,6 +317,7 @@ def summarize_settings(settings: dict) -> dict:
         "seed": settings.get("seed"),
         "negative_prompt": negative[:220],
         "loras": summarize_loras(settings.get("loras", [])),
+        "embeddings": summarize_embeddings(settings.get("embeddings", [])),
         "mode": mode,
         "has_input_image": bool(settings.get("image") or settings.get("input_image")),
         "has_mask": bool(settings.get("mask_image")),
@@ -466,6 +503,8 @@ def compute_catalog_signature():
         _path_stamp(CHECKPOINT_ROOT),
         _path_stamp(LORA_ROOT),
         _path_stamp(LORA_FILE),
+        _path_stamp(EMBEDDING_ROOT),
+        _path_stamp(EMBEDDING_FILE),
         _path_stamp(MODELS_FILE),
     )
 
@@ -489,6 +528,7 @@ async def catalog_watcher():
                 "payload": {
                     "models": len(MODEL_REGISTRY),
                     "loras": len(LORA_REGISTRY),
+                    "embeddings": len(EMBEDDING_REGISTRY),
                 },
             })
         except Exception as exc:
@@ -629,6 +669,7 @@ async def test(
     second_pass_model: str = Form("None"),
     second_pass_mode: str = Form("auto"),
     loras: str = Form("[]"),
+    embeddings: str = Form("[]"),
     strength: float = Form(0.75),
     image: UploadFile = File(None),
     mask: UploadFile = File(None),
@@ -654,7 +695,8 @@ async def test(
 ):
     """Generate single test image."""
     width, height = normalize_dimensions(width, height)
-    lora_list = json.loads(loras)
+    lora_list = _parse_json_list(loras, "loras")
+    embedding_list = _parse_json_list(embeddings, "embeddings")
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
@@ -673,6 +715,7 @@ async def test(
         "seed": resolve_seed(seed),
         "scheduler": scheduler,
         "loras": lora_list,
+        "embeddings": embedding_list,
         "strength": strength,
         "inpainting_fill": inpainting_fill,
         "mask_blur": mask_blur,
@@ -759,6 +802,7 @@ async def generate(
     second_pass_model: str = Form("None"),
     second_pass_mode: str = Form("auto"),
     loras: str = Form("[]"),
+    embeddings: str = Form("[]"),
 
     experimental_compress: bool = Form(False),
     scheduler: str = Form("UniPC"),
@@ -791,7 +835,8 @@ async def generate(
 ):
     """Generate batch of images."""
     width, height = normalize_dimensions(width, height)
-    lora_list = json.loads(loras)
+    lora_list = _parse_json_list(loras, "loras")
+    embedding_list = _parse_json_list(embeddings, "embeddings")
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
@@ -809,6 +854,7 @@ async def generate(
         "num_images": num_images,
         "seed": resolve_seed(seed),
         "loras": lora_list,
+        "embeddings": embedding_list,
         "experimental_compress": experimental_compress,
         "scheduler": scheduler,
         "strength": strength,
@@ -1199,6 +1245,24 @@ def list_model_loras(base_model: str):
         if cfg["arch"] == model_arch
     ]
 
+
+@app.get("/models/{base_model:path}/embeddings")
+def list_model_embeddings(base_model: str):
+    if base_model not in MODEL_REGISTRY:
+        return []
+
+    model_arch = MODEL_REGISTRY[base_model]["arch"]
+    return [
+        {
+            "name": name,
+            "description": cfg.get("description", ""),
+            "token": cfg.get("token", name),
+        }
+        for name, cfg in EMBEDDING_REGISTRY.items()
+        if cfg.get("arch") == model_arch
+    ]
+
+
 @app.post("/upscale")
 async def upscale(
     image: str = Form(...),
@@ -1355,6 +1419,10 @@ def health():
             "count": len(LORA_REGISTRY),
             "names": list(LORA_REGISTRY.keys()),
         },
+        "embeddings": {
+            "count": len(EMBEDDING_REGISTRY),
+            "names": list(EMBEDDING_REGISTRY.keys()),
+        },
         "queue": {
             "size": generation_queue.qsize(),
             "maxsize": generation_queue.maxsize,
@@ -1366,6 +1434,7 @@ def health():
             "base_model": pipeline_manager.key,
             "second_pass_model": pipeline_manager.current_second_pass_model,
             "loras": list(pipeline_manager.current_loras.keys()),
+            "embeddings": list(pipeline_manager.current_embeddings.keys()),
         },
         "runtime_state": snapshot(),
     }

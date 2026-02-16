@@ -82,6 +82,13 @@ export async function getLoras(modelName) {
 }
 
 /**
+ * Fetch embeddings for a specific model
+ */
+export async function getEmbeddings(modelName) {
+    return get(`/models/${encodeURIComponent(modelName)}/embeddings`);
+}
+
+/**
  * Fetch second pass / refiner models
  */
 export async function getSecondPassModels() {

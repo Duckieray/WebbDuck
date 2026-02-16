@@ -5,6 +5,7 @@ import { $$, byId, listen, show, hide, toggleClass, populateSelect, toast, debou
 import { ProgressManager } from './modules/ProgressManager.js';
 import { MaskEditor } from './modules/MaskEditor.js';
 import { LoraManager } from './modules/LoraManager.js';
+import { EmbeddingManager } from './modules/EmbeddingManager.js';
 import { LightboxManager } from './modules/LightboxManager.js';
 import { GalleryManager } from './modules/GalleryManager.js';
 
@@ -604,6 +605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.progressManager = new ProgressManager();
         window.maskEditor = new MaskEditor();
         window.loraManager = new LoraManager();
+        window.embeddingManager = new EmbeddingManager();
         window.galleryManager = new GalleryManager();
         window.lightboxManager = new LightboxManager({
             onUpscale: (src, cb) => startUpscale(src, cb),
@@ -885,6 +887,7 @@ function setupFormHandlers() {
 
         setState({ baseModel: modelName });
         await window.loraManager.loadForModel(modelName);
+        await window.embeddingManager.loadForModel(modelName);
         emit(Events.MODEL_CHANGE, modelName);
         updateTokenCounter(byId('prompt')?.value || '');
     });
@@ -1068,6 +1071,10 @@ function collectFormData() {
             formData.append(`lora_model_${i + 1}`, lora.name);
             formData.append(`lora_weight_${i + 1}`, lora.weight);
         });
+    }
+    const embeddings = window.embeddingManager?.getSelected() || [];
+    if (embeddings.length > 0) {
+        formData.append('embeddings', JSON.stringify(embeddings));
     }
 
     if (window._uploadedImage) {
@@ -1323,6 +1330,19 @@ function setupHelpModals() {
                   <li>Use the weight slider to control strength. <strong>Best:</strong> <code>0.5-1.0</code> each.</li>
                   <li>Too many strong LoRAs can fight each other and reduce quality.</li>
                   <li><strong>Best count:</strong> <code>1-3</code> LoRAs at once.</li>
+                </ul>
+            `
+        },
+        embedding: {
+            title: 'Embedding Stack Help',
+            html: `
+                <h4>Embedding Stack</h4>
+                <p>Embeddings (textual inversion) add learned concepts through trigger tokens.</p>
+                <ul>
+                  <li>Add one or more embeddings from the list.</li>
+                  <li>Each card shows the active token used in your prompt.</li>
+                  <li>Most embeddings work best when the token appears once in prompt text.</li>
+                  <li>Use embeddings and LoRAs together carefully to avoid style conflicts.</li>
                 </ul>
             `
         },
@@ -2391,6 +2411,7 @@ async function applyLightboxSettingsToStudio(curr, options = {}) {
     if (baseModel && window.loraManager) {
         try {
             await window.loraManager.loadForModel(baseModel);
+            await window.embeddingManager?.loadForModel(baseModel);
         } catch (_) {
             // Ignore and continue with best-effort restoration.
         }
@@ -2411,6 +2432,21 @@ async function applyLightboxSettingsToStudio(curr, options = {}) {
             const parsedWeight = Number(weightRaw);
             const weight = Number.isFinite(parsedWeight) ? parsedWeight : 1.0;
             window.loraManager.addLora(name, weight);
+        });
+    }
+
+    if (window.embeddingManager) {
+        window.embeddingManager.clear();
+        const embeddings = Array.isArray(meta.embeddings) ? meta.embeddings : [];
+        embeddings.forEach((embedding) => {
+            if (typeof embedding === 'string') {
+                window.embeddingManager.addEmbedding(embedding, embedding);
+                return;
+            }
+            const name = embedding?.name || embedding?.model;
+            if (!name) return;
+            const token = String(embedding?.token || name);
+            window.embeddingManager.addEmbedding(name, token);
         });
     }
 
@@ -2448,6 +2484,7 @@ async function loadModels() {
 
         if (initialModel) {
             await window.loraManager.loadForModel(initialModel);
+            await window.embeddingManager.loadForModel(initialModel);
         }
     } catch (error) {
         console.warn('Failed to load models:', error);
@@ -2586,6 +2623,7 @@ function renderQueuePanel(data) {
         const seed = job.settings?.seed ?? null;
         const negative = (job.settings?.negative_prompt || '').trim();
         const loras = Array.isArray(job.settings?.loras) ? job.settings.loras : [];
+        const embeddings = Array.isArray(job.settings?.embeddings) ? job.settings.embeddings : [];
         const modeDetails = Array.isArray(job.settings?.mode_details) ? job.settings.mode_details : [];
         const thumbHtml = inputThumb
             ? `<img class="queue-item-thumb" src="${escapeHtml(inputThumb)}" alt="Queue input preview" loading="lazy" />`
@@ -2599,7 +2637,7 @@ function renderQueuePanel(data) {
                     ? 'Cancelling'
                     : status;
         const isExpanded = expandedQueueJobs.has(job.job_id);
-        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0 || modeDetails.length > 0;
+        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0 || embeddings.length > 0 || modeDetails.length > 0;
         const detailsHtml = hasExtraDetails
             ? `
                 <div class="queue-item-details ${isExpanded ? '' : 'hidden'}" data-details-for="${job.job_id}">
@@ -2607,6 +2645,7 @@ function renderQueuePanel(data) {
                   <div class="queue-detail-row"><span class="queue-detail-label">Negative</span><span class="queue-detail-value">${negative ? escapeHtml(negative.slice(0, 220)) : 'None'}</span></div>
                   <div class="queue-detail-row"><span class="queue-detail-label">Mode</span><span class="queue-detail-value">${modeDetails.length > 0 ? escapeHtml(modeDetails.join(' | ')) : 'Default'}</span></div>
                   <div class="queue-detail-row"><span class="queue-detail-label">LoRAs</span><span class="queue-detail-value">${loras.length > 0 ? escapeHtml(loras.join(', ')) : 'None'}</span></div>
+                  <div class="queue-detail-row"><span class="queue-detail-label">Embeddings</span><span class="queue-detail-value">${embeddings.length > 0 ? escapeHtml(embeddings.join(', ')) : 'None'}</span></div>
                 </div>
               `
             : '';

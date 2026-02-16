@@ -94,7 +94,7 @@ You can:
 - Download
 - Delete image or run
 
-Use `Info` to show metadata like prompt, model, seed, LoRAs, and inpaint/outpaint settings.
+Use `Info` to show metadata like prompt, model, seed, LoRAs, embeddings, and inpaint/outpaint settings.
 
 ## 10. If Something Goes Wrong
 

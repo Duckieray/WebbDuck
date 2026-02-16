@@ -44,6 +44,7 @@ const DEFAULT_STATE = {
     smartExtendOffsetY: null,
     clipSkip2: false,
     selectedLoras: [],
+    selectedEmbeddings: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
 };
