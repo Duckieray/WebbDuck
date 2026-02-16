@@ -19,6 +19,8 @@ export class LightboxManager {
         };
 
         this.currentPswpInstance = null;
+        this.currentItems = [];
+        this.pendingReopen = null;
         this.pendingDeleteRun = null;
         this.infoVisible = true;
 
@@ -27,15 +29,7 @@ export class LightboxManager {
 
     initActions() {
         listen(byId('lightbox-info-toggle'), 'click', () => {
-            const info = byId('lightbox-info');
-            const btn = byId('lightbox-info-toggle');
-            if (!info || !btn) return;
-
-            this.infoVisible = !this.infoVisible;
-            info.classList.toggle('hidden', !this.infoVisible);
-            btn.textContent = this.infoVisible ? 'Hide Info' : 'Show Info';
-            btn.classList.toggle('is-above-info', this.infoVisible);
-            btn.classList.toggle('is-docked-bottom', !this.infoVisible);
+            this.setInfoVisible(!this.infoVisible);
         });
 
         listen(byId('lightbox-regen'), 'click', () => {
@@ -123,11 +117,12 @@ export class LightboxManager {
         listen(byId('modal-delete-img'), 'click', async () => {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
-            const success = await this.callbacks.onDelete(curr.src, 'image');
+            const deleteSrc = curr?.originalSrc || curr?.src;
+            const success = await this.callbacks.onDelete(deleteSrc, 'image');
             if (!success) return;
 
-            this.currentPswpInstance.pswp.close();
             this.closeModal();
+            this.reopenAfterDeletingCurrentImage(deleteSrc);
         });
 
         listen(byId('modal-delete-run'), 'click', async () => {
@@ -180,7 +175,60 @@ export class LightboxManager {
         setTimeout(() => modal.classList.add('active'), 10);
     }
 
-    open(dataSource, startIndex = 0) {
+    setInfoVisible(visible) {
+        this.infoVisible = Boolean(visible);
+        const info = byId('lightbox-info');
+        const btn = byId('lightbox-info-toggle');
+        if (info) {
+            info.classList.toggle('hidden', !this.infoVisible);
+        }
+        if (btn) {
+            btn.textContent = this.infoVisible ? 'Hide Info' : 'Show Info';
+            btn.classList.toggle('is-above-info', this.infoVisible);
+            btn.classList.toggle('is-docked-bottom', !this.infoVisible);
+        }
+    }
+
+    isTapToggleTarget(target) {
+        if (!(target instanceof Element)) return false;
+        if (target.closest('.lightbox-info')) return false;
+        if (target.closest('.lightbox-toggle-btn')) return false;
+        if (target.closest('.comparison-container')) return false;
+        if (target.closest('.pswp__button, .pswp__top-bar, .pswp__counter')) return false;
+        return true;
+    }
+
+    reopenAfterDeletingCurrentImage(deletedSrc) {
+        const pswp = this.currentPswpInstance?.pswp;
+        if (!pswp) return;
+        const deleteKey = String(deletedSrc || '').trim();
+        if (!deleteKey) {
+            pswp.close();
+            return;
+        }
+
+        const currentIndex = Number(pswp.currIndex ?? pswp.currSlide?.index ?? 0);
+        const remaining = (this.currentItems || []).filter((item) => {
+            const key = item?.originalSrc || item?.src;
+            return key && key !== deleteKey;
+        });
+
+        if (!remaining.length) {
+            this.pendingReopen = null;
+            pswp.close();
+            return;
+        }
+
+        const nextIndex = Math.max(0, Math.min(currentIndex, remaining.length - 1));
+        this.pendingReopen = {
+            items: remaining.map((item) => ({ ...item })),
+            index: nextIndex,
+            infoVisible: this.infoVisible,
+        };
+        pswp.close();
+    }
+
+    open(dataSource, startIndex = 0, options = {}) {
         let items;
 
         if (dataSource.length > 0 && (dataSource[0].tagName || dataSource[0] instanceof Element)) {
@@ -220,8 +268,9 @@ export class LightboxManager {
                 };
             });
         } else {
-            items = dataSource;
+            items = Array.isArray(dataSource) ? dataSource.map((item) => ({ ...item })) : [];
         }
+        this.currentItems = items;
 
         const lightbox = new PhotoSwipeLightbox({
             dataSource: items,
@@ -241,12 +290,11 @@ export class LightboxManager {
             const infoPanel = byId('lightbox-info');
             const toggleBtn = byId('lightbox-info-toggle');
             const comp = byId('lightbox-comparison');
+            const initialInfoVisible = options?.initialInfoVisible ?? true;
 
             if (!pswpEl) return;
 
             if (infoPanel) {
-                this.infoVisible = true;
-                infoPanel.classList.remove('hidden');
                 pswpEl.appendChild(infoPanel);
                 listen(infoPanel, 'pointerdown', (e) => e.stopPropagation());
                 listen(infoPanel, 'mousedown', (e) => e.stopPropagation());
@@ -260,6 +308,14 @@ export class LightboxManager {
                 toggleBtn.classList.add('is-above-info');
                 toggleBtn.classList.remove('is-docked-bottom');
             }
+
+            this.setInfoVisible(initialInfoVisible);
+
+            listen(pswpEl, 'click', (e) => {
+                if (!this.currentPswpInstance?.pswp) return;
+                if (!this.isTapToggleTarget(e.target)) return;
+                this.setInfoVisible(!this.infoVisible);
+            });
 
             if (comp) {
                 pswpEl.appendChild(comp);
@@ -298,6 +354,15 @@ export class LightboxManager {
             }
 
             this.currentPswpInstance = null;
+            if (this.pendingReopen) {
+                const reopen = this.pendingReopen;
+                this.pendingReopen = null;
+                setTimeout(() => {
+                    this.open(reopen.items, reopen.index, { initialInfoVisible: reopen.infoVisible });
+                }, 30);
+                return;
+            }
+            this.currentItems = [];
         });
 
         lightbox.on('contentActivate', ({ content }) => {
