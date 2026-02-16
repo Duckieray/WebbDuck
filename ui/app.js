@@ -379,6 +379,223 @@ function showAppConfirmModal({
     });
 }
 
+async function loadWebPlugins() {
+    let plugins = [];
+    try {
+        const response = await api.getWebPlugins();
+        plugins = Array.isArray(response?.plugins) ? response.plugins : [];
+    } catch (error) {
+        console.warn('Failed to load web plugins:', error);
+        return;
+    }
+
+    for (const plugin of plugins) {
+        registerWebPlugin(plugin);
+    }
+}
+
+function registerWebPlugin(plugin) {
+    const id = String(plugin?.id || '').trim();
+    if (!id) return;
+
+    const viewName = String(plugin?.view || `plugin-${id}`).trim();
+    const title = String(plugin?.name || id);
+    const description = String(plugin?.description || '');
+    const uiUrl = String(plugin?.ui_url || '').trim();
+    if (!uiUrl) return;
+
+    const desktopTabs = document.querySelector('.nova-tabs');
+    if (desktopTabs && !desktopTabs.querySelector(`[data-view="${viewName}"]`)) {
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = 'nav-tab';
+        tab.dataset.view = viewName;
+        tab.textContent = title;
+        desktopTabs.appendChild(tab);
+    }
+
+    const mobileTabs = document.querySelector('.mobile-tabs');
+    if (mobileTabs && !mobileTabs.querySelector(`[data-view="${viewName}"]`)) {
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = 'mobile-tab';
+        tab.dataset.view = viewName;
+        tab.textContent = title;
+        mobileTabs.appendChild(tab);
+    }
+
+    if (byId(`view-${viewName}`)) return;
+
+    const container = document.querySelector('.view-container');
+    if (!container) return;
+
+    const section = document.createElement('section');
+    section.className = 'view';
+    section.id = `view-${viewName}`;
+
+    const shell = document.createElement('div');
+    shell.className = 'plugin-shell';
+
+    const header = document.createElement('header');
+    header.className = 'plugin-shell-header';
+
+    const heading = document.createElement('h2');
+    heading.className = 'plugin-shell-title';
+    heading.textContent = title;
+
+    const sub = document.createElement('p');
+    sub.className = 'plugin-shell-subtitle';
+    sub.textContent = description || 'Plugin workspace';
+
+    header.appendChild(heading);
+    header.appendChild(sub);
+
+    const frameWrap = document.createElement('div');
+    frameWrap.className = 'plugin-frame-wrap';
+
+    const frame = document.createElement('iframe');
+    frame.className = 'plugin-frame';
+    frame.src = uiUrl;
+    frame.loading = 'lazy';
+    frame.title = title;
+    frame.referrerPolicy = 'same-origin';
+
+    frameWrap.appendChild(frame);
+    shell.appendChild(header);
+    shell.appendChild(frameWrap);
+    section.appendChild(shell);
+    container.appendChild(section);
+}
+
+function unregisterWebPlugin(pluginId) {
+    const id = String(pluginId || '').trim();
+    if (!id) return;
+    const viewName = `plugin-${id}`;
+
+    document.querySelectorAll(`.nav-tab[data-view="${viewName}"], .mobile-tab[data-view="${viewName}"]`).forEach(el => {
+        el.remove();
+    });
+
+    const view = byId(`view-${viewName}`);
+    if (view) {
+        view.remove();
+    }
+
+    const currentView = getState('view');
+    if (currentView === viewName) {
+        switchView('studio');
+    }
+}
+
+async function refreshRemotePluginList() {
+    const listEl = byId('remote-plugin-list');
+    if (!listEl) return;
+
+    let plugins = [];
+    try {
+        const response = await api.getRemoteWebPlugins();
+        plugins = Array.isArray(response?.plugins) ? response.plugins : [];
+    } catch (error) {
+        listEl.innerHTML = '<div class="queue-item-empty">Failed to load remote plugins.</div>';
+        return;
+    }
+
+    renderRemotePluginList(plugins);
+}
+
+function renderRemotePluginList(plugins) {
+    const listEl = byId('remote-plugin-list');
+    if (!listEl) return;
+
+    if (!Array.isArray(plugins) || plugins.length === 0) {
+        listEl.innerHTML = '<div class="queue-item-empty">No remote plugins connected.</div>';
+        return;
+    }
+
+    listEl.innerHTML = '';
+    plugins.forEach(plugin => {
+        const pluginId = String(plugin?.id || '').trim();
+        if (!pluginId) return;
+
+        const row = document.createElement('div');
+        row.className = 'remote-plugin-item';
+
+        const textWrap = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'remote-plugin-name';
+        name.textContent = String(plugin?.name || pluginId);
+
+        const meta = document.createElement('div');
+        meta.className = 'remote-plugin-meta';
+        const remoteBase = String(plugin?.remote_base || plugin?.ui_url || '').trim();
+        meta.textContent = remoteBase || pluginId;
+
+        textWrap.appendChild(name);
+        textWrap.appendChild(meta);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn-danger btn-sm';
+        removeBtn.textContent = 'Disconnect';
+        removeBtn.dataset.pluginId = pluginId;
+        listen(removeBtn, 'click', async () => {
+            removeBtn.disabled = true;
+            try {
+                await api.disconnectRemoteWebPlugin(pluginId);
+                unregisterWebPlugin(pluginId);
+                await refreshRemotePluginList();
+                toast(`Disconnected plugin: ${pluginId}`, 'info');
+            } catch (error) {
+                toast(error?.message || 'Disconnect failed', 'error');
+            } finally {
+                removeBtn.disabled = false;
+            }
+        });
+
+        row.appendChild(textWrap);
+        row.appendChild(removeBtn);
+        listEl.appendChild(row);
+    });
+}
+
+function setupRemotePluginSettings() {
+    const connectBtn = byId('remote-plugin-connect');
+    const input = byId('remote-plugin-base');
+    if (!connectBtn || !input) return;
+
+    const connect = async () => {
+        const baseUrl = String(input.value || '').trim();
+        if (!baseUrl) {
+            toast('Enter plugin IP:port or URL', 'warning');
+            return;
+        }
+
+        connectBtn.disabled = true;
+        try {
+            const response = await api.connectRemoteWebPlugin(baseUrl);
+            const plugin = response?.plugin;
+            if (plugin) {
+                registerWebPlugin(plugin);
+            }
+            input.value = '';
+            await refreshRemotePluginList();
+            toast('Remote plugin connected', 'success');
+        } catch (error) {
+            toast(error?.message || 'Remote plugin connect failed', 'error');
+        } finally {
+            connectBtn.disabled = false;
+        }
+    };
+
+    listen(connectBtn, 'click', connect);
+    listen(input, 'keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            connect();
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         initState();
@@ -399,6 +616,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         window.galleryManager.init();
 
+        await loadWebPlugins();
         setupNavigation();
         setupHelpModals();
         setupMobileStudioToggle();
@@ -450,17 +668,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function setupNavigation() {
-    $$('.nav-tab').forEach(tab => {
-        listen(tab, 'click', () => switchView(tab.dataset.view));
-    });
-
-    $$('.mobile-tab').forEach(tab => {
-        listen(tab, 'click', () => switchView(tab.dataset.view));
+    listen(document, 'click', (event) => {
+        const tab = event.target?.closest?.('.nav-tab, .mobile-tab');
+        if (!tab) return;
+        const view = tab.dataset?.view;
+        if (!view) return;
+        switchView(view);
     });
 }
 
 function switchView(viewName) {
-    const nextView = viewName === 'gallery' ? 'gallery' : 'studio';
+    const requested = String(viewName || '').trim();
+    const nextView = byId(`view-${requested}`) ? requested : 'studio';
 
     $$('.nav-tab, .mobile-tab').forEach(tab => {
         toggleClass(tab, 'active', tab.dataset.view === nextView);
@@ -2270,6 +2489,7 @@ function setupQueuePanel() {
     listen(byId('close-settings-modal-footer'), 'click', closeSettingsModal);
     listen(byId('unload-models-btn'), 'click', handleUnloadModelsClick);
     listen(byId('shutdown-app-btn'), 'click', handleShutdownAppClick);
+    setupRemotePluginSettings();
     listen(byId('queue-modal'), 'click', (event) => {
         if (event.target?.id === 'queue-modal') {
             closeQueueModal();
@@ -2484,6 +2704,7 @@ function openSettingsModal() {
     modal.classList.remove('hidden');
     modal.classList.add('active');
     modal.setAttribute('aria-hidden', 'false');
+    void refreshRemotePluginList();
 }
 
 function closeSettingsModal() {

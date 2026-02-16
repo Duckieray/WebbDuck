@@ -453,6 +453,8 @@
                 <input type="range" class="slider" id="gallery-thumb-size" min="140" max="420" step="10" value="240" />
                 <span id="gallery-thumb-size-value">240px</span>
               </div>
+              <button class="btn btn-secondary btn-sm" id="gallery-select-toggle" type="button">Select</button>
+              <button class="btn btn-danger btn-sm hidden" id="gallery-delete-selected" type="button" disabled>Delete</button>
               <button class="btn btn-secondary btn-sm" id="refresh-gallery" type="button">Refresh</button>
             </div>
           </header>
@@ -513,6 +515,20 @@
           <span>Enable CLIP_SKIP2</span>
           <span class="section-help-trigger" title="CLIP_SKIP2 shifts prompt interpretation by skipping deeper text-encoder layers. It can change composition/style and works better on some checkpoints.">i</span>
         </label>
+        <div class="form-group">
+          <label class="form-label" for="remote-plugin-base">Connect Remote Plugin (IP:Port or URL)</label>
+          <div class="remote-plugin-connect-row">
+            <input class="input" type="text" id="remote-plugin-base" placeholder="127.0.0.1:8020" />
+            <button class="btn btn-primary btn-sm" id="remote-plugin-connect" type="button">Connect Plugin</button>
+          </div>
+          <span class="form-hint">Use this for plugins not installed in local plugin folders.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Connected Remote Plugins</label>
+          <div id="remote-plugin-list" class="remote-plugin-list">
+            <div class="queue-item-empty">No remote plugins connected.</div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="close-settings-modal-footer" type="button">Close</button>
@@ -571,6 +587,21 @@
         <button id="modal-delete-img" class="btn btn-danger">Delete Image</button>
         <button id="modal-delete-run" class="btn btn-danger btn-outline">Delete Run</button>
         <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gallery-batch-delete-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Delete Images</h3>
+      </div>
+      <div class="modal-body">
+        <p id="gallery-batch-delete-message">Deleting 0 images, are you sure?</p>
+      </div>
+      <div class="modal-actions">
+        <button id="gallery-batch-delete-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="gallery-batch-delete-confirm" class="btn btn-danger" type="button">Delete</button>
       </div>
     </div>
   </div>
@@ -692,7 +723,7 @@
       setTimeout(bindFallbackToggle, 400);
     })();
   </script>
-  <script type="module" src="/ui/app.js?v=20260209f"></script>
+  <script type="module" src="/ui/app.js?v=20260216a"></script>
 </body>
 
 </html>

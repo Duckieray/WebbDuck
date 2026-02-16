@@ -9,9 +9,10 @@ import random
 import threading
 from pathlib import Path
 import shutil
-from fastapi import FastAPI, Form, WebSocket, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, WebSocket, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from webbduck.server.state import snapshot, update_stage, update_progress
 from webbduck.server.events import broadcast, broadcast_state, active_sockets
@@ -49,8 +50,12 @@ from webbduck.core.captioner import (
     generate_caption,
 )
 from webbduck.core.web_plugins import (
+    build_public_web_plugin_list,
+    connect_remote_web_plugin,
     discover_web_plugins,
+    disconnect_remote_web_plugin,
     include_web_plugin_routers,
+    list_remote_web_plugins,
     mount_web_plugin_assets,
 )
 
@@ -79,6 +84,14 @@ SMART_EXTEND_REFINE_EACH_STEP_DEFAULT = True
 SMART_EXTEND_REFINE_WIDTH_DEFAULT = 64
 SMART_EXTEND_REFINE_STRENGTH_DEFAULT = 0.32
 SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT = 2.4
+
+
+class RemotePluginConnectRequest(BaseModel):
+    base_url: str
+
+
+class DeleteImagesRequest(BaseModel):
+    paths: list[str]
 
 
 def _resolve_smart_extend_settings(
@@ -541,8 +554,38 @@ def simple_guide():
 def list_web_plugins():
     """List discovered web plugins for dynamic UI tab injection."""
     return {
-        "plugins": [plugin.to_public() for plugin in WEB_PLUGINS],
+        "plugins": build_public_web_plugin_list(WEB_PLUGINS),
     }
+
+
+@app.get("/plugins/web/remote")
+def list_remote_plugins():
+    """List remote plugins connected by URL."""
+    return {
+        "plugins": list_remote_web_plugins(),
+    }
+
+
+@app.post("/plugins/web/remote/connect")
+def connect_remote_plugin(payload: RemotePluginConnectRequest):
+    """Connect a remote plugin by base URL (for example 127.0.0.1:8020)."""
+    local_ids = {plugin.plugin_id for plugin in WEB_PLUGINS}
+    try:
+        plugin = connect_remote_web_plugin(payload.base_url, reserved_ids=local_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to connect remote plugin: {exc}") from exc
+    return {"plugin": plugin}
+
+
+@app.delete("/plugins/web/remote/{plugin_id}")
+def disconnect_remote_plugin_route(plugin_id: str):
+    """Disconnect and remove a previously connected remote plugin."""
+    removed = disconnect_remote_web_plugin(plugin_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Remote plugin not found.")
+    return {"removed": True, "id": str(plugin_id).strip().lower()}
 
 
 app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
@@ -852,43 +895,121 @@ async def generate(
         )
 
 
+def _unlink_file(path: Path) -> bool:
+    """Delete a file if it exists. Return True when deleted."""
+    try:
+        if path.exists() and path.is_file():
+            path.unlink()
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _cleanup_run_if_empty(run_dir: Path):
+    """Delete run metadata when the last image has been removed."""
+    if not run_dir.exists() or not run_dir.is_dir():
+        return
+
+    has_any_png = any(run_dir.glob("*.png"))
+    if has_any_png:
+        return
+
+    _unlink_file(run_dir / "meta.json")
+    remove_manifest_run(run_dir.name)
+    remove_favorite_run(run_dir.name)
+
+
+def _delete_image_artifacts(target: Path) -> list[str]:
+    """Delete image + sidecars and return deleted web paths."""
+    deleted_paths: list[str] = []
+
+    if not target.is_file():
+        return deleted_paths
+
+    candidates = [target]
+    if target.suffix.lower() == ".png" and not target.name.endswith("_upscaled.png"):
+        candidates.append(target.with_name(f"{target.stem}_upscaled.png"))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+
+        if _unlink_file(candidate):
+            candidate_web = to_web_path(candidate)
+            deleted_paths.append(candidate_web)
+            remove_manifest_image(candidate_web)
+            remove_favorite_image(candidate_web)
+
+        thumb = get_thumbnail_path(candidate)
+        if _unlink_file(thumb):
+            deleted_paths.append(to_web_path(thumb))
+
+    _cleanup_run_if_empty(target.parent)
+    return deleted_paths
+
+
 @app.post("/delete_image")
 async def delete_image(path: str = Form(...)):
-    """Delete an image file."""
+    """Delete a single image and related artifacts."""
     try:
-        # Security check: ensure path is within BASE
         target = resolve_web_path(path)
-        
-        # Double check it is actually a file
         if not target.is_file():
-             return JSONResponse(status_code=400, content={"error": "Not a file"})
+            return JSONResponse(status_code=400, content={"error": "Not a file"})
 
-        target_web_path = to_web_path(target)
-
-        def _unlink_if_exists(p: Path):
-            try:
-                if p.exists() and p.is_file():
-                    p.unlink()
-            except Exception:
-                pass
-
-        # Delete requested image and its thumbnail sidecar.
-        _unlink_if_exists(target)
-        _unlink_if_exists(get_thumbnail_path(target))
-        remove_favorite_image(target_web_path)
-
-        # If deleting a base image, also clean paired upscaled artifact + thumbnail.
-        if not target.name.endswith("_upscaled.png"):
-            paired_upscaled = target.with_name(f"{target.stem}_upscaled.png")
-            _unlink_if_exists(paired_upscaled)
-            _unlink_if_exists(get_thumbnail_path(paired_upscaled))
-            remove_favorite_image(to_web_path(paired_upscaled))
-
-        remove_manifest_image(target_web_path)
-        print(f"[Info] Deleted {target}")
-        return {"status": "ok"}
+        deleted = _delete_image_artifacts(target)
+        print(f"[Info] Deleted {target} ({len(deleted)} artifacts)")
+        return {
+            "status": "ok",
+            "deleted_count": len(deleted),
+            "deleted": deleted,
+        }
     except Exception as e:
         print(f"[Error] Delete failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/delete_images")
+async def delete_images(payload: DeleteImagesRequest):
+    """Batch delete image files and related artifacts."""
+    try:
+        raw_paths = payload.paths if isinstance(payload.paths, list) else []
+        requested: list[str] = []
+        seen: set[str] = set()
+        for raw in raw_paths:
+            if not isinstance(raw, str):
+                continue
+            path = raw.strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            requested.append(path)
+
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+
+        for path in requested:
+            try:
+                target = resolve_web_path(path)
+                if not target.is_file():
+                    failed.append({"path": path, "error": "Not a file"})
+                    continue
+                deleted.extend(_delete_image_artifacts(target))
+            except Exception as exc:
+                failed.append({"path": path, "error": str(exc)})
+
+        return {
+            "status": "ok",
+            "requested_count": len(requested),
+            "deleted_count": len(deleted),
+            "failed_count": len(failed),
+            "deleted": deleted,
+            "failed": failed,
+        }
+    except Exception as e:
+        print(f"[Error] Batch delete failed: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
@@ -924,35 +1045,25 @@ async def delete_run(path: str = Form(...)):
 @app.get("/gallery")
 def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
     """List generated image runs with pagination."""
-    # fast scan of directories
     runs = sorted(BASE.iterdir(), reverse=True)
-    
-    # Slice the list of folders to avoid processing everything
-    # We slice slightly more than limit to account for potentially invalid folders
-    # But for simplicity and speed, strict slicing is usually fine if cleanup is good
-    if start >= len(runs):
-        return []
-        
-    runs_slice = runs[start : start + limit + 10] # +10 buffer for non-runs
-    
+    bounded_start = max(0, int(start))
+    bounded_limit = max(1, min(int(limit), 500))
+
     out = []
-    count = 0
+    valid_seen = 0
     favorites = favorite_map()
-    
-    for r in runs_slice:
-        if count >= limit:
-            break
-            
+
+    for r in runs:
         if not r.is_dir():
             continue
         meta_file = r / "meta.json"
         if not meta_file.exists():
             continue
-        
+
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
-                
+
             # Fallback for old runs
             if "timestamp" not in meta:
                 try:
@@ -962,7 +1073,7 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
                     meta["timestamp"] = dt.timestamp()
                 except Exception:
                     pass
-            
+
             # Legacy 'after' filter (optional, mostly for polling)
             if after > 0 and meta.get("timestamp", 0) <= after:
                 continue
@@ -989,16 +1100,24 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
             return (1, 0, stem)
 
         imgs.sort(key=sort_key)
+        if not imgs:
+            continue
+
+        if valid_seen < bounded_start:
+            valid_seen += 1
+            continue
 
         out.append({
-            "run": r.name, 
-            "images": imgs, 
+            "run": r.name,
+            "images": imgs,
             "variants": variants,
             "favorites": {Path(p).name: True for p in imgs if favorites.get(p)},
             "meta": meta
         })
-        count += 1
-        
+        valid_seen += 1
+        if len(out) >= bounded_limit:
+            break
+
     return out
 
 
