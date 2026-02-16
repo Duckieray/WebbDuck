@@ -3,7 +3,11 @@
 import torch
 import logging
 from webbduck.prompt.management import truncate_to_tokens
-from webbduck.prompt.conditioning import build_sdxl_conditioning, encode_long_prompt
+from webbduck.prompt.conditioning import (
+    build_sdxl_conditioning,
+    encode_long_prompt,
+    _expand_textual_inversion_prompt,
+)
 
 log = logging.getLogger(__name__)
 
@@ -129,10 +133,14 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
     from webbduck.prompt.management import chunk_prompt
     
     device = pipe.device
+    pos_text_1 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer, prompt or "")
+    pos_text_2 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, prompt_2 or prompt or "")
+    neg_text_1 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer, negative or "")
+    neg_text_2 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, negative or "")
 
     # Positive prompt (chunked)
-    chunks = chunk_prompt(pipe.tokenizer, prompt)
-    chunks_2 = chunk_prompt(pipe.tokenizer_2, prompt_2 or prompt)
+    chunks = chunk_prompt(pipe.tokenizer, pos_text_1)
+    chunks_2 = chunk_prompt(pipe.tokenizer_2, pos_text_2)
 
     token_embeds = encode_chunks_experimental(
         pipe.tokenizer,
@@ -153,7 +161,7 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
     # Pooled prompt (first chunk only)
     pooled_text = truncate_to_tokens(
         pipe.tokenizer_2,
-        prompt_2 or prompt,
+        pos_text_2,
         max_tokens=77,
     )
 
@@ -173,7 +181,7 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
     )
 
     # Negative prompt (chunked)
-    neg_chunks = chunk_prompt(pipe.tokenizer, negative)
+    neg_chunks = chunk_prompt(pipe.tokenizer, neg_text_1)
 
     neg_token_embeds = encode_chunks_experimental(
         pipe.tokenizer,
@@ -196,7 +204,7 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
 
     neg_pooled_text = truncate_to_tokens(
         pipe.tokenizer_2,
-        negative,
+        neg_text_2,
         max_tokens=77,
     )
 
@@ -226,8 +234,8 @@ def build_sdxl_conditioning_experimental(pipe, prompt, prompt_2, negative):
 def build_sdxl_refiner_conditioning(pipe, prompt, prompt_2, negative):
     """Build conditioning for true SDXL refiners (CLIP-G only), with long-prompt chunking."""
     device = pipe.device
-    pos_text = prompt_2 or prompt or ""
-    neg_text = negative or ""
+    pos_text = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, prompt_2 or prompt or "")
+    neg_text = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, negative or "")
 
     prompt_embeds, pooled_prompt_embeds = encode_long_prompt(
         pipe.tokenizer_2,

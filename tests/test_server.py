@@ -18,6 +18,7 @@ class TestHealthEndpoint:
         assert data["status"] == "ok"
         assert "cuda_available" in data
         assert "models" in data
+        assert "embeddings" in data
 
     def test_health_includes_pipeline_info(self, client):
         """Health should include pipeline information."""
@@ -55,6 +56,13 @@ class TestModelEndpoints:
         schedulers = response.json()
         assert isinstance(schedulers, list)
         assert len(schedulers) > 0
+
+    def test_list_model_embeddings(self, client, first_available_model):
+        """Should list embeddings for a model."""
+        response = client.get(f"/models/{first_available_model}/embeddings")
+        assert response.status_code == 200
+        embeddings = response.json()
+        assert isinstance(embeddings, list)
 
 
 class TestUIEndpoint:

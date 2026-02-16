@@ -225,6 +225,9 @@ def _make_manifest_entry(image_path: Path, run_dir: Path, meta: dict) -> dict:
     loras = safe_meta.get("loras")
     if not isinstance(loras, list):
         loras = []
+    embeddings = safe_meta.get("embeddings")
+    if not isinstance(embeddings, list):
+        embeddings = []
 
     searchable_parts = [
         str(safe_meta.get("prompt", "")),
@@ -235,6 +238,10 @@ def _make_manifest_entry(image_path: Path, run_dir: Path, meta: dict) -> dict:
         " ".join([
             item if isinstance(item, str) else str(item.get("name") or item.get("model") or "")
             for item in loras if isinstance(item, (str, dict))
+        ]),
+        " ".join([
+            item if isinstance(item, str) else str(item.get("name") or item.get("model") or item.get("token") or "")
+            for item in embeddings if isinstance(item, (str, dict))
         ]),
     ]
 
@@ -258,9 +265,16 @@ def _entry_searchable(entry: dict) -> str:
     loras = meta.get("loras")
     if not isinstance(loras, list):
         loras = []
+    embeddings = meta.get("embeddings")
+    if not isinstance(embeddings, list):
+        embeddings = []
     lora_names = " ".join(
         item if isinstance(item, str) else str(item.get("name") or item.get("model") or "")
         for item in loras if isinstance(item, (str, dict))
+    )
+    embedding_names = " ".join(
+        item if isinstance(item, str) else str(item.get("name") or item.get("model") or item.get("token") or "")
+        for item in embeddings if isinstance(item, (str, dict))
     )
     parts = [
         str(meta.get("prompt", "")),
@@ -269,6 +283,7 @@ def _entry_searchable(entry: dict) -> str:
         str(meta.get("scheduler", "")),
         str(meta.get("seed", "")),
         lora_names,
+        embedding_names,
     ]
     return " ".join(parts).lower()
 

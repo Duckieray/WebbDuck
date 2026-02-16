@@ -1,8 +1,9 @@
-"""Model and LoRA registry with auto-discovery."""
+"""Model, LoRA, and embedding registries with auto-discovery."""
 
 from safetensors.torch import safe_open
 from pathlib import Path
 import json
+import os
 import threading
 
 # Paths
@@ -10,9 +11,15 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 HF_CACHE = Path.home() / ".cache/huggingface/hub"
 CHECKPOINT_ROOT = ROOT / "checkpoint/sdxl"
-LORA_ROOT = ROOT / "lora"
-LORA_ROOT = ROOT / "lora"
+LORA_ROOT = Path(os.getenv("WEBBDUCK_LORA_DIR", str(ROOT / "lora"))).expanduser()
 LORA_FILE = LORA_ROOT / "loras.json"
+EMBEDDING_ROOT = Path(
+    os.getenv(
+        "WEBBDUCK_EMBEDDING_DIR",
+        str(ROOT / "embeddings"),
+    )
+).expanduser()
+EMBEDDING_FILE = EMBEDDING_ROOT / "embeddings.json"
 MODELS_FILE = CHECKPOINT_ROOT / "models.json"
 
 KNOWN_DEFAULTS = {
@@ -63,6 +70,40 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         return "sd15"
 
     return None
+
+
+def detect_embedding_arch(embedding_path: Path) -> str | None:
+    """Detect embedding architecture from tensor names.
+
+    Falls back to SDXL when keys are inconclusive.
+    """
+    if embedding_path.suffix.lower() != ".safetensors":
+        # Most modern embeddings in this app are SDXL-focused; allow non-safetensors
+        # files to participate with SDXL default unless explicitly changed in JSON.
+        return "sdxl"
+
+    try:
+        with safe_open(embedding_path, framework="pt", device="cpu") as f:
+            keys = list(f.keys())
+    except Exception:
+        return "sdxl"
+
+    joined = " ".join(keys).lower()
+
+    # Common SD1.x style textual inversion key names.
+    if "cond_stage_model" in joined:
+        return "sd15"
+
+    # SDXL textual inversion exports frequently include clip_l / clip_g style keys
+    # or generic learned-embedding maps that are used with SDXL tokenizers.
+    if "clip_g" in joined or "clip_l" in joined or "string_to_param" in joined:
+        return "sdxl"
+
+    return "sdxl"
+
+
+def _is_embedding_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in {".safetensors", ".pt", ".bin"}
 
 
 def scan_hf_cache():
@@ -141,7 +182,7 @@ def discover_local_models():
 
 def ensure_lora_registry():
     """Create initial LoRA registry if missing."""
-    LORA_ROOT.mkdir(exist_ok=True)
+    LORA_ROOT.mkdir(exist_ok=True, parents=True)
 
     if LORA_FILE.exists():
         return
@@ -162,9 +203,33 @@ def ensure_lora_registry():
         LORA_FILE.write_text(json.dumps(registry, indent=2))
 
 
+def ensure_embedding_registry():
+    """Create initial embedding registry if missing."""
+    EMBEDDING_ROOT.mkdir(exist_ok=True, parents=True)
+
+    if EMBEDDING_FILE.exists():
+        return
+
+    registry = {}
+    for f in sorted(EMBEDDING_ROOT.iterdir(), key=lambda p: p.name.lower()):
+        if not _is_embedding_file(f):
+            continue
+        arch = detect_embedding_arch(f)
+        if not arch:
+            continue
+        registry[f.stem] = {
+            "file": f.name,
+            "token": f.stem,
+            "description": "",
+        }
+
+    if registry:
+        EMBEDDING_FILE.write_text(json.dumps(registry, indent=2))
+
+
 def sync_lora_registry_file():
     """Ensure new local .safetensors files are reflected in loras.json."""
-    LORA_ROOT.mkdir(exist_ok=True)
+    LORA_ROOT.mkdir(exist_ok=True, parents=True)
     if LORA_FILE.exists():
         try:
             data = json.loads(LORA_FILE.read_text())
@@ -193,6 +258,38 @@ def sync_lora_registry_file():
         LORA_FILE.write_text(json.dumps(data, indent=2))
 
 
+def sync_embedding_registry_file():
+    """Ensure new local embedding files are reflected in embeddings.json."""
+    EMBEDDING_ROOT.mkdir(exist_ok=True, parents=True)
+    if EMBEDDING_FILE.exists():
+        try:
+            data = json.loads(EMBEDDING_FILE.read_text())
+        except Exception:
+            data = {}
+    else:
+        data = {}
+
+    changed = False
+    for f in sorted(EMBEDDING_ROOT.iterdir(), key=lambda p: p.name.lower()):
+        if not _is_embedding_file(f):
+            continue
+        key = f.stem
+        if key in data:
+            continue
+        arch = detect_embedding_arch(f)
+        if not arch:
+            continue
+        data[key] = {
+            "file": f.name,
+            "token": key,
+            "description": "",
+        }
+        changed = True
+
+    if changed:
+        EMBEDDING_FILE.write_text(json.dumps(data, indent=2))
+
+
 def load_lora_registry():
     """Load local LoRA registry."""
     if not LORA_FILE.exists():
@@ -219,9 +316,32 @@ def load_lora_registry():
     return registry
 
 
-# Initialize registries
-# Initialize registries
+def load_embedding_registry():
+    """Load local embedding registry."""
+    if not EMBEDDING_FILE.exists():
+        return {}
+
+    data = json.loads(EMBEDDING_FILE.read_text())
+    registry = {}
+
+    for name, cfg in data.items():
+        file_path = EMBEDDING_ROOT / cfg["file"]
+        if not file_path.exists():
+            raise FileNotFoundError(f"Embedding file not found for '{name}': {file_path}")
+
+        registry[name] = {
+            "path": file_path,
+            "arch": cfg.get("arch") or detect_embedding_arch(file_path) or "sdxl",
+            "token": cfg.get("token") or name,
+            "description": cfg.get("description", ""),
+            "source": "local",
+        }
+
+    return registry
+
+
 ensure_lora_registry()
+ensure_embedding_registry()
 
 def ensure_model_registry():
     """Create initial model registry if missing and sync with disk."""
@@ -273,23 +393,29 @@ def merge_model_registry(disk_models: dict, hf_models: dict, persist: bool = Tru
 
 
 def refresh_registries() -> bool:
-    """Refresh model/LoRA registries in place; returns True when changed."""
+    """Refresh model/LoRA/embedding registries in place; returns True when changed."""
     with _registry_lock:
         ensure_lora_registry()
+        ensure_embedding_registry()
         sync_lora_registry_file()
+        sync_embedding_registry_file()
         local_models = discover_local_models()
         new_models = merge_model_registry(local_models, _HF_MODELS, persist=True)
         new_loras = {**load_lora_registry(), **_HF_LORAS}
+        new_embeddings = {**load_embedding_registry(), **_HF_EMBEDDINGS}
 
         models_changed = _registry_signature(MODEL_REGISTRY) != _registry_signature(new_models)
         loras_changed = _registry_signature(LORA_REGISTRY) != _registry_signature(new_loras)
-        changed = models_changed or loras_changed
+        embeddings_changed = _registry_signature(EMBEDDING_REGISTRY) != _registry_signature(new_embeddings)
+        changed = models_changed or loras_changed or embeddings_changed
 
         if changed:
             MODEL_REGISTRY.clear()
             MODEL_REGISTRY.update(new_models)
             LORA_REGISTRY.clear()
             LORA_REGISTRY.update(new_loras)
+            EMBEDDING_REGISTRY.clear()
+            EMBEDDING_REGISTRY.update(new_embeddings)
 
         return changed
 
@@ -301,6 +427,9 @@ def _registry_signature(data: dict):
     )
 
 _HF_MODELS, _HF_LORAS = scan_hf_cache()
+_HF_EMBEDDINGS = {}
 MODEL_REGISTRY = merge_model_registry(discover_local_models(), _HF_MODELS, persist=True)
 sync_lora_registry_file()
+sync_embedding_registry_file()
 LORA_REGISTRY = {**load_lora_registry(), **_HF_LORAS}
+EMBEDDING_REGISTRY = {**load_embedding_registry(), **_HF_EMBEDDINGS}

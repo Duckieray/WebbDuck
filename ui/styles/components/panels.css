@@ -147,6 +147,16 @@
   font-size: 12px;
 }
 
+.embedding-token-row {
+  display: grid;
+  gap: 6px;
+}
+
+.embedding-token-row .form-label {
+  margin: 0;
+  font-size: 11px;
+}
+
 .queue-summary {
   font-size: 12px;
   color: var(--text-secondary);

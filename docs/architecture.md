@@ -15,14 +15,14 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 
 ### `server/app.py`
 
-- API endpoints for generate/test/upscale/gallery/models/loras/tokenize/caption.
+- API endpoints for generate/test/upscale/gallery/models/loras/embeddings/tokenize/caption.
 - `generation_queue` (`asyncio.Queue`, maxsize 32).
 - Job lifecycle tracking in `job_registry`.
 - Queue endpoints:
   - `GET /queue`
   - `POST /queue/cancel`
 - WebSocket endpoint: `GET /ws` (upgrades to ws) for push updates.
-- Catalog watcher task scans model/LoRA files and broadcasts `catalog` updates.
+- Catalog watcher task scans model/LoRA/embedding files and broadcasts `catalog` updates.
 - Gallery search endpoint serves global keyword lookup via manifest index.
 
 ### `core/worker.py`
@@ -34,16 +34,17 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 ### `core/generation.py`
 
 - Selects generation mode (txt2img, img2img, inpaint, two-pass).
-- Applies LoRAs through pipeline manager.
+- Applies LoRAs and embeddings through pipeline manager.
 - Injects computed LoRA trigger phrase into prompt(s) before generation.
 - Runs mode with callback-based progress updates.
 
 ### `models/registry.py`
 
-- Auto-discovers local checkpoints and LoRAs.
+- Auto-discovers local checkpoints, LoRAs, and embeddings.
 - Maintains `checkpoint/sdxl/models.json` defaults.
 - Maintains and syncs `lora/loras.json` entries with local `.safetensors` files.
-- Supports architecture-aware model/LoRA filtering.
+- Maintains and syncs `embeddings/embeddings.json` entries with local embedding files.
+- Supports architecture-aware model/LoRA/embedding filtering.
 
 ## Frontend Components
 
@@ -64,13 +65,19 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 - Stores selected LoRAs with live weight updates (`step=0.05`).
 - Restores selected LoRAs from persisted state when possible.
 
+### `ui/modules/EmbeddingManager.js`
+
+- Loads embeddings for selected base model.
+- Stores selected embeddings with editable trigger token per entry.
+- Restores selected embeddings from persisted state when possible.
+
 ### `ui/core/events.js`
 
 - In-app event bus.
 - WebSocket bridge emitting:
   - `status:update` for runtime/progress,
   - `queue:update` for queue/job metadata,
-- `catalog:update` for model/LoRA catalog changes.
+- `catalog:update` for model/LoRA/embedding catalog changes.
 
 ### `ui/modules/GalleryManager.js`
 
@@ -85,6 +92,7 @@ WebbDuck is split into a FastAPI backend, a single GPU worker queue, and a zero-
 - Search index: `outputs/manifest.jsonl`
 - Input/upload temp files for img2img/inpaint/caption: `inpaint_input/`
 - LoRA registry file: `lora/loras.json`
+- Embedding registry file: `embeddings/embeddings.json`
 - Model defaults file: `checkpoint/sdxl/models.json`
 
 ## Performance Controls

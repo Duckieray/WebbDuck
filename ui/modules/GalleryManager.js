@@ -586,6 +586,9 @@ export class GalleryManager {
         const loras = Array.isArray(meta.loras)
             ? meta.loras.map((l) => (typeof l === 'string' ? l : (l?.name || l?.model || ''))).join(' ')
             : '';
+        const embeddings = Array.isArray(meta.embeddings)
+            ? meta.embeddings.map((e) => (typeof e === 'string' ? e : (e?.name || e?.model || e?.token || ''))).join(' ')
+            : '';
         const parts = [
             session?.prompt,
             meta?.prompt,
@@ -597,6 +600,7 @@ export class GalleryManager {
             meta?.seed,
             meta?.width && meta?.height ? `${meta.width}x${meta.height}` : '',
             loras,
+            embeddings,
         ];
         const haystack = parts.filter(Boolean).join(' ').toLowerCase();
         return terms.every((t) => haystack.includes(t));

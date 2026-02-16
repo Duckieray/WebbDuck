@@ -12,10 +12,11 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 - Queue modal supports canceling queued jobs and requesting cancellation for active running jobs.
 - Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
 - LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
+- Embedding stack (textual inversion) with auto-discovery, architecture filtering, and per-model token loading.
 - Token counter with warning when prompt exceeds the 77-token CLIP window.
 - Long-prompt chunking for SDXL conditioning (prompts beyond 77 tokens are chunk-encoded instead of hard-truncated).
 - Flat gallery grid with thumbnail-size slider, infinite scroll, global keyword search, and lightbox action toolbar.
-- Live catalog refresh when checkpoints or LoRAs are added/removed from watched folders.
+- Live catalog refresh when checkpoints, LoRAs, or embeddings are added/removed from watched folders.
 - Optional captioner plugin system (JoyCaption supported).
 - Generic web-app plugin host (`plugins/webapps`) so plugins can render their own UI page in WebbDuck.
 
@@ -24,7 +25,7 @@ Everything runs on your machine: generation, queueing, gallery, inpaint, and opt
 - OS: Windows 10/11 or Linux.
 - Python: 3.10+.
 - GPU: NVIDIA recommended for practical SDXL speed and memory headroom.
-- Disk: enough space for checkpoints, LoRAs, and outputs.
+- Disk: enough space for checkpoints, LoRAs, embeddings, and outputs.
 
 ## Installation
 
@@ -41,6 +42,7 @@ Windows:
 pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 pip install -r requirements.windows.txt
 mkdir checkpoint\sdxl, lora, outputs, weights
+mkdir embeddings
 ```
 
 PyTorch GPU compatibility note (important):
@@ -62,6 +64,7 @@ Linux:
 source .venv/bin/activate
 pip install -r requirements.txt
 mkdir -p checkpoint/sdxl lora outputs weights
+mkdir -p embeddings
 ```
 
 ## Run
@@ -85,6 +88,9 @@ python run.py --port 8020
 - Gallery search uses a manifest index (`outputs/manifest.jsonl`) for global matching.
 - Catalog changes are scanned on an interval and pushed to UI:
   - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
+- Asset folders can be overridden:
+  - `WEBBDUCK_LORA_DIR` (default `../lora` relative to app root)
+  - `WEBBDUCK_EMBEDDING_DIR` (default `../embeddings` relative to app root)
 - Thumbnail serving concurrency can be tuned:
   - `WEBBDUCK_THUMB_CONCURRENCY` (default `2`)
 - Runtime device/dtype can be overridden:

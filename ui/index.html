@@ -210,6 +210,22 @@
                 </div>
               </section>
 
+              <section class="section collapsible collapsed nova-block" id="section-embeddings">
+                <button class="section-header" type="button" data-section="section-embeddings">
+                  <span class="section-header-main">
+                    <span class="section-title">Embedding Stack</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="embedding" aria-label="Embedding help" title="Embedding help">i</span>
+                  </span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <select class="select" id="embedding-select">
+                    <option value="">+ Add Embedding...</option>
+                  </select>
+                  <div class="lora-selected" id="embedding-selected"></div>
+                </div>
+              </section>
+
               <section class="section collapsible nova-block" id="section-input">
                 <button class="section-header" type="button" data-section="section-input">
                   <span class="section-header-main">
@@ -564,6 +580,7 @@
         <div class="lightbox-meta-item"><label>Settings</label><span id="lightbox-settings">--</span></div>
         <div class="lightbox-meta-item"><label>In/Outpaint</label><span id="lightbox-inoutpaint">None</span></div>
         <div class="lightbox-meta-item"><label>LoRAs</label><span id="lightbox-loras">None</span></div>
+        <div class="lightbox-meta-item"><label>Embeddings</label><span id="lightbox-embeddings">None</span></div>
       </div>
     </div>
   </div>

@@ -39,6 +39,13 @@ The Studio view is where generation jobs are configured and submitted.
 - Selected LoRAs persist across refresh (when still compatible with model).
 - Trigger phrases defined in `loras.json` are injected into the prompt automatically at generation time.
 
+### Embedding Stack
+
+- Embeddings are filtered by selected model architecture.
+- Local embedding files are discovered from the embeddings folder and synced into `embeddings/embeddings.json`.
+- Each selected embedding can set/edit the active token used in prompt text.
+- Selected embeddings persist across refresh (when still compatible with model).
+
 ### Input Image / Inpaint
 
 - Drag/drop or click upload for img2img.
@@ -60,6 +67,7 @@ Each queued/running job can show:
 - model/scheduler/steps/cfg/batch,
 - truncated prompt,
 - seed/negative/LoRA summary in expandable details,
+- embedding summary in expandable details,
 - img2img/inpaint input thumbnail when available.
 
 Queued jobs can be canceled from the modal.
@@ -84,7 +92,7 @@ Running jobs can also be cancellation-requested from the modal or the progress c
 ## Lightbox
 
 - Open any image to inspect at full size.
-- Bottom metadata/info panel includes prompt, negative, model, seed, settings, inpaint/outpaint settings, LoRAs, and timing info.
+- Bottom metadata/info panel includes prompt, negative, model, seed, settings, inpaint/outpaint settings, LoRAs, embeddings, and timing info.
 - `Info` toggle shows/hides metadata panel.
 - Actions: regenerate, upscale, inpaint, download, compare (when variant exists), delete.
 
@@ -96,4 +104,4 @@ Open `Settings` from the top bar to configure:
 
 ## State Persistence
 
-Most Studio settings are persisted in `localStorage` and restored on refresh, including prompt fields, dimensions, scheduler, second-pass settings, denoise strength, and selected LoRAs.
+Most Studio settings are persisted in `localStorage` and restored on refresh, including prompt fields, dimensions, scheduler, second-pass settings, denoise strength, selected LoRAs, and selected embeddings.

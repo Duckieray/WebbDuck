@@ -32,13 +32,16 @@ Platform install notes:
 - Running jobs support cancellation request (`running -> cancelling -> cancelled` when successful).
 - Queue updates are pushed over WebSocket to avoid constant frontend polling.
 
-### 2.3 Model and LoRA Management
+### 2.3 Model, LoRA, and Embedding Management
 
 - Base model list is dynamically loaded from registry.
 - LoRAs are filtered by model architecture.
 - Local `lora/*.safetensors` files are synced into `lora/loras.json`.
 - `loras.json` default `weight` is used by UI slider initialization.
 - LoRA trigger phrases are injected into prompt text during generation.
+- Embeddings are filtered by model architecture.
+- Local embedding files are synced into `embeddings/embeddings.json`.
+- Embedding tokens are loaded into the active SDXL pipeline before generation.
 
 ### 2.4 Gallery and Viewer
 
@@ -46,7 +49,7 @@ Platform install notes:
 - Images are rendered in a flat newest-first grid in the UI (backed by paginated API pages).
 - Search supports global keyword matching across gallery metadata.
 - Gallery supports filter chips (`All`, `HD`, `Favorites`), adjustable thumbnail size, and infinite scroll loading.
-- Lightbox metadata panel includes prompt, negative, model, seed, settings, LoRAs.
+- Lightbox metadata panel includes prompt, negative, model, seed, settings, LoRAs, embeddings.
 - Lightbox metadata includes generation timing fields.
 - Lightbox includes regenerate, upscale, inpaint, download, compare, delete actions.
 
@@ -54,6 +57,7 @@ Platform install notes:
 
 - Core Studio fields persist to `localStorage` and restore on reload.
 - Selected LoRAs and weights restore when compatible with the current model.
+- Selected embeddings and tokens restore when compatible with the current model.
 - Resolution preset chip state syncs with width/height; `Custom` indicates non-preset values.
 
 ### 2.6 Mobile UX
@@ -65,7 +69,7 @@ Platform install notes:
 
 - Thumbnail generation is on-demand and concurrency-limited.
 - Queue processing is serialized to avoid GPU contention.
-- Catalog watcher auto-refreshes model/LoRA registries and notifies UI.
+- Catalog watcher auto-refreshes model/LoRA/embedding registries and notifies UI.
 - No mandatory heavy frontend dependencies or client build chain.
 
 ## 4. API Surface (Current)
@@ -78,6 +82,7 @@ Platform install notes:
 - `GET /second_pass_models`
 - `GET /schedulers`
 - `GET /models/{base_model:path}/loras`
+- `GET /models/{base_model:path}/embeddings`
 - `GET /gallery/search`
 - `GET /queue`
 - `POST /queue/cancel`
@@ -93,3 +98,5 @@ Platform install notes:
 
 - `WEBBDUCK_CATALOG_POLL_SECONDS`: catalog refresh interval (seconds).
 - `WEBBDUCK_THUMB_CONCURRENCY`: concurrent thumbnail generation cap.
+- `WEBBDUCK_LORA_DIR`: optional override for LoRA folder path.
+- `WEBBDUCK_EMBEDDING_DIR`: optional override for embedding folder path.

@@ -3,6 +3,17 @@
 import torch
 
 
+def _expand_textual_inversion_prompt(pipe, tokenizer, text: str) -> str:
+    """Expand multi-vector textual inversion tokens when available."""
+    converter = getattr(pipe, "maybe_convert_prompt", None)
+    if callable(converter):
+        try:
+            return converter(text or "", tokenizer)
+        except Exception:
+            return text or ""
+    return text or ""
+
+
 def _tokenize_without_special(tokenizer, text: str) -> list[int]:
     raw = tokenizer(
         text or "",
@@ -106,13 +117,16 @@ def encode_long_prompt(tokenizer, text_encoder, text: str, device):
 def build_sdxl_conditioning(pipe, prompt, prompt_2, negative):
     """Build SDXL conditioning embeddings with long-prompt chunking for both encoders."""
     device = pipe.device
-    pos_text_2 = prompt_2 or prompt
+    pos_text_1 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer, prompt or "")
+    pos_text_2 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, prompt_2 or prompt or "")
+    neg_text_1 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer, negative or "")
+    neg_text_2 = _expand_textual_inversion_prompt(pipe, pipe.tokenizer_2, negative or "")
 
-    pos_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, prompt or "", device)
-    pos_seq_2, pos_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, pos_text_2 or "", device)
+    pos_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, pos_text_1, device)
+    pos_seq_2, pos_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, pos_text_2, device)
 
-    neg_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, negative or "", device)
-    neg_seq_2, neg_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, negative or "", device)
+    neg_seq_1, _ = encode_long_prompt(pipe.tokenizer, pipe.text_encoder, neg_text_1, device)
+    neg_seq_2, neg_pool = encode_long_prompt(pipe.tokenizer_2, pipe.text_encoder_2, neg_text_2, device)
 
     pos_pair_len = max(int(pos_seq_1.shape[1]), int(pos_seq_2.shape[1]))
     neg_pair_len = max(int(neg_seq_1.shape[1]), int(neg_seq_2.shape[1]))

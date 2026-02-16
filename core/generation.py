@@ -318,6 +318,7 @@ def run_generation(settings, cancel_event=None):
         base_model=settings["base_model"],
         second_pass_model=second_pass_model,
         loras=settings.get("loras", []),
+        embeddings=settings.get("embeddings", []),
         scheduler_name=settings.get("scheduler"),
         cancel_event=cancel_event,
     )

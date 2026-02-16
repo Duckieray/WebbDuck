@@ -459,6 +459,17 @@ export class LightboxManager {
             : 'None';
         setText('lightbox-loras', loraText);
 
+        const embeddings = Array.isArray(meta.embeddings) ? meta.embeddings : [];
+        const embeddingText = embeddings.length
+            ? embeddings.map((embedding) => {
+                if (typeof embedding === 'string') return embedding;
+                const name = embedding?.name || embedding?.model || 'Unknown';
+                const token = embedding?.token;
+                return token ? `${name} [${token}]` : name;
+            }).join(' | ')
+            : 'None';
+        setText('lightbox-embeddings', embeddingText);
+
         const inout = meta.inoutpaint || {};
         const parts = [];
         const mode = meta.mode || (inout.has_mask ? 'inpaint' : (inout.has_input_image ? 'img2img' : 'txt2img'));

@@ -27,7 +27,7 @@ from transformers import (
 from huggingface_hub import snapshot_download
 
 from safetensors.torch import load_file
-from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY
+from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY, EMBEDDING_REGISTRY
 from webbduck.core.exceptions import GenerationCancelledError
 from webbduck.core.runtime import resolve_runtime_profile
 
@@ -514,6 +514,7 @@ class PipelineManager:
 
         self.current_second_pass_model = None
         self.current_loras = {}
+        self.current_embeddings = {}
 
     def _ensure_not_cancelled(self, cancel_event):
         if cancel_event is not None and cancel_event.is_set():
@@ -565,6 +566,7 @@ class PipelineManager:
         self.base_scheduler_config = None
         self.current_second_pass_model = None
         self.current_loras = {}
+        self.current_embeddings = {}
 
         self._clear_component_caches()
         gc.collect()
@@ -615,6 +617,15 @@ class PipelineManager:
         self.current_loras = {}
         self.trigger_phrase = ""
 
+    def clear_embeddings(self):
+        """Remove all loaded textual-inversion embeddings."""
+        try:
+            if self.pipe is not None and hasattr(self.pipe, "unload_textual_inversion"):
+                self.pipe.unload_textual_inversion()
+        except Exception:
+            pass
+        self.current_embeddings = {}
+
     def apply_loras(self, loras):
         """Load and configure LoRA adapters."""
         desired = {}
@@ -655,6 +666,47 @@ class PipelineManager:
         self.current_loras = desired
         self.trigger_phrase = ", ".join(trigger_phrases)
 
+    def apply_embeddings(self, embeddings):
+        """Load textual inversion embeddings for the active pipeline."""
+        desired = {}
+        model_arch = MODEL_REGISTRY.get(self.key, {}).get("arch")
+        for item in embeddings or []:
+            if isinstance(item, str):
+                name = item
+                token = None
+            elif isinstance(item, dict):
+                name = item.get("name") or item.get("model")
+                token = item.get("token")
+            else:
+                continue
+
+            if not name or name not in EMBEDDING_REGISTRY:
+                continue
+
+            reg = EMBEDDING_REGISTRY[name]
+            if model_arch and reg.get("arch") and reg.get("arch") != model_arch:
+                continue
+            desired[name] = str(token or reg.get("token") or name)
+
+        if desired == self.current_embeddings:
+            return
+
+        self.clear_embeddings()
+        if not desired:
+            return
+        if self.pipe is None or not hasattr(self.pipe, "load_textual_inversion"):
+            return
+
+        for name, token in desired.items():
+            reg = EMBEDDING_REGISTRY[name]
+            load_kwargs = {"token": token} if token else {}
+            self.pipe.load_textual_inversion(
+                str(reg["path"]),
+                **load_kwargs,
+            )
+
+        self.current_embeddings = desired
+
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""
         assert which in ("base", "second_pass"), f"Invalid UNet target: {which}"
@@ -673,7 +725,7 @@ class PipelineManager:
             self.img2img.unet.to(DEVICE)
             self.img2img.vae.to(DEVICE)
 
-    def get(self, base_model, second_pass_model=None, loras=None, scheduler_name="UniPC", cancel_event=None):
+    def get(self, base_model, second_pass_model=None, loras=None, embeddings=None, scheduler_name="UniPC", cancel_event=None):
         """Get or create pipeline with specified configuration."""
         with self.lock:
             if self.key != base_model:
@@ -723,6 +775,7 @@ class PipelineManager:
                 self.key = base_model
                 self.current_second_pass_model = None
                 self.current_loras = {}
+                self.current_embeddings = {}
                 self.trigger_phrase = ""
                 self.scheduler_name = None # Reset scheduler tracking
                 self.base_scheduler_config = self.pipe.scheduler.config
@@ -754,6 +807,11 @@ class PipelineManager:
             update_progress(0.25)
             self._ensure_not_cancelled(cancel_event)
             self.apply_loras(loras or [])
+
+            update_stage("Loading embeddings")
+            update_progress(0.30)
+            self._ensure_not_cancelled(cancel_event)
+            self.apply_embeddings(embeddings or [])
 
             update_stage("Generating")
             update_progress(0.35)
