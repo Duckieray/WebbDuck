@@ -103,6 +103,34 @@ export async function getCaptioners() {
 }
 
 /**
+ * Fetch discovered web plugins.
+ */
+export async function getWebPlugins() {
+    return get('/plugins/web');
+}
+
+/**
+ * Fetch connected remote web plugins.
+ */
+export async function getRemoteWebPlugins() {
+    return get('/plugins/web/remote');
+}
+
+/**
+ * Connect a remote web plugin by base URL.
+ */
+export async function connectRemoteWebPlugin(baseUrl) {
+    return post('/plugins/web/remote/connect', { base_url: baseUrl });
+}
+
+/**
+ * Disconnect a remote web plugin by plugin ID.
+ */
+export async function disconnectRemoteWebPlugin(pluginId) {
+    return request(`/plugins/web/remote/${encodeURIComponent(pluginId)}`, { method: 'DELETE' });
+}
+
+/**
  * Generate images (full batch)
  */
 export async function generate(formData) {
@@ -210,12 +238,23 @@ export async function setFavorite(imagePath, favorite = true) {
  * Delete a single image
  */
 export async function deleteImage(imagePath) {
-    return post('/delete_image', { image_path: imagePath });
+    const formData = new FormData();
+    formData.append('path', imagePath);
+    return postForm('/delete_image', formData);
 }
 
 /**
  * Delete an entire run/session
  */
 export async function deleteRun(runId) {
-    return post('/delete_run', { run_id: runId });
+    const formData = new FormData();
+    formData.append('path', runId);
+    return postForm('/delete_run', formData);
+}
+
+/**
+ * Delete multiple images in one request
+ */
+export async function deleteImages(paths = []) {
+    return post('/delete_images', { paths: Array.isArray(paths) ? paths : [] });
 }

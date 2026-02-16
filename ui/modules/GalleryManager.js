@@ -24,12 +24,19 @@ export class GalleryManager {
         this.isLoadingPage = false;
         this.observer = null;
         this.thumbSize = this.loadThumbSize();
+        this.selectionMode = false;
+        this.selectedPaths = new Set();
 
         this.load = this.load.bind(this);
         this.refreshLatest = this.refreshLatest.bind(this);
         this.render = this.render.bind(this);
         this.handleDelete = this.handleDelete.bind(this);
         this.handleFavoriteToggle = this.handleFavoriteToggle.bind(this);
+        this.toggleSelectionMode = this.toggleSelectionMode.bind(this);
+        this.updateSelectionUI = this.updateSelectionUI.bind(this);
+        this.openBatchDeleteModal = this.openBatchDeleteModal.bind(this);
+        this.closeBatchDeleteModal = this.closeBatchDeleteModal.bind(this);
+        this.confirmBatchDelete = this.confirmBatchDelete.bind(this);
     }
 
     init() {
@@ -38,6 +45,7 @@ export class GalleryManager {
         this.setupFilters();
         this.setupThumbSizeControl();
         this.setupInfiniteScroll();
+        this.setupBatchDeleteControls();
     }
 
     loadThumbSize() {
@@ -132,6 +140,26 @@ export class GalleryManager {
         }, { root, threshold: 0.1 });
     }
 
+    setupBatchDeleteControls() {
+        const selectBtn = byId('gallery-select-toggle');
+        const deleteBtn = byId('gallery-delete-selected');
+        const modal = byId('gallery-batch-delete-modal');
+        const cancelBtn = byId('gallery-batch-delete-cancel');
+        const confirmBtn = byId('gallery-batch-delete-confirm');
+
+        if (selectBtn) listen(selectBtn, 'click', () => this.toggleSelectionMode());
+        if (deleteBtn) listen(deleteBtn, 'click', () => this.openBatchDeleteModal());
+        if (cancelBtn) listen(cancelBtn, 'click', () => this.closeBatchDeleteModal());
+        if (confirmBtn) listen(confirmBtn, 'click', () => this.confirmBatchDelete());
+        if (modal) {
+            listen(modal, 'click', (e) => {
+                if (e.target === modal) this.closeBatchDeleteModal();
+            });
+        }
+
+        this.updateSelectionUI();
+    }
+
     bindScrollSentinel() {
         if (!this.observer) return;
         this.observer.disconnect();
@@ -159,6 +187,9 @@ export class GalleryManager {
             this.searchData = null;
             this.filterData = null;
             this.filterCache.clear();
+            this.selectedPaths.clear();
+            this.selectionMode = false;
+            this.updateSelectionUI();
 
             await this.fetchPage();
             await this.ensureFilterData(this.activeFilter);
@@ -187,6 +218,7 @@ export class GalleryManager {
             this.searchData = null;
             this.filterData = null;
             this.filterCache.clear();
+            this.selectedPaths.clear();
             this.render(byId('gallery-search')?.value || '');
         } catch (error) {
             console.error('Failed to refresh latest gallery items:', error);
@@ -258,26 +290,136 @@ export class GalleryManager {
         return flat;
     }
 
+    toggleSelectionMode(forceValue = null) {
+        if (typeof forceValue === 'boolean') this.selectionMode = forceValue;
+        else this.selectionMode = !this.selectionMode;
+
+        if (!this.selectionMode) {
+            this.selectedPaths.clear();
+            this.closeBatchDeleteModal();
+        }
+        this.updateSelectionUI();
+        this.render(byId('gallery-search')?.value || '');
+    }
+
+    toggleImageSelection(src) {
+        if (!src) return;
+        if (this.selectedPaths.has(src)) this.selectedPaths.delete(src);
+        else this.selectedPaths.add(src);
+        this.updateSelectionUI();
+        this.render(byId('gallery-search')?.value || '');
+    }
+
+    updateSelectionUI() {
+        const selectBtn = byId('gallery-select-toggle');
+        const deleteBtn = byId('gallery-delete-selected');
+        const selectedCount = this.selectedPaths.size;
+
+        if (selectBtn) {
+            selectBtn.classList.toggle('is-active', this.selectionMode);
+            selectBtn.textContent = this.selectionMode ? 'Cancel Select' : 'Select';
+        }
+
+        if (deleteBtn) {
+            deleteBtn.classList.toggle('hidden', !this.selectionMode);
+            deleteBtn.disabled = selectedCount === 0;
+            deleteBtn.textContent = selectedCount > 0 ? `Delete (${selectedCount})` : 'Delete';
+        }
+    }
+
+    openBatchDeleteModal() {
+        if (!this.selectionMode || this.selectedPaths.size === 0) return;
+        const modal = byId('gallery-batch-delete-modal');
+        const msg = byId('gallery-batch-delete-message');
+        if (!modal || !msg) return;
+        const count = this.selectedPaths.size;
+        msg.textContent = `Deleting ${count} image${count === 1 ? '' : 's'}, are you sure?`;
+        modal.classList.remove('hidden');
+        void modal.offsetWidth;
+        setTimeout(() => modal.classList.add('active'), 10);
+    }
+
+    closeBatchDeleteModal() {
+        const modal = byId('gallery-batch-delete-modal');
+        if (!modal) return;
+        modal.classList.remove('active');
+        setTimeout(() => modal.classList.add('hidden'), 220);
+    }
+
+    async confirmBatchDelete() {
+        if (!this.selectionMode || this.selectedPaths.size === 0) {
+            this.closeBatchDeleteModal();
+            return;
+        }
+
+        const paths = Array.from(this.selectedPaths);
+        const confirmBtn = byId('gallery-batch-delete-confirm');
+        const cancelBtn = byId('gallery-batch-delete-cancel');
+        if (confirmBtn) confirmBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+
+        try {
+            const result = await api.deleteImages(paths);
+            const failedCount = Number(result?.failed_count || 0);
+            const failedPaths = new Set(
+                Array.isArray(result?.failed) ? result.failed.map((item) => item?.path).filter(Boolean) : [],
+            );
+            const removedPaths = paths.filter((path) => !failedPaths.has(path));
+            const deletedCount = removedPaths.length;
+
+            this.removeImagesInMemory(removedPaths);
+            this.selectedPaths.clear();
+            this.closeBatchDeleteModal();
+            this.updateSelectionUI();
+            this.render(byId('gallery-search')?.value || '');
+
+            if (failedCount > 0) {
+                toast(`Deleted ${deletedCount} image${deletedCount === 1 ? '' : 's'}, ${failedCount} failed`, 'error');
+            } else {
+                toast(`Deleted ${deletedCount} image${deletedCount === 1 ? '' : 's'}`, 'success');
+            }
+        } catch (error) {
+            console.error('Batch delete failed:', error);
+            toast('Batch delete failed', 'error');
+        } finally {
+            if (confirmBtn) confirmBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+        }
+    }
+
     render(filterText = '', sourceData = null) {
         this.currentSearchTerm = filterText.toLowerCase();
         const container = byId('gallery-sessions');
         const emptyState = byId('gallery-empty');
         const countEl = byId('gallery-count');
 
-        let baseData = sourceData || this.getActiveFilterData();
-        if (sourceData && this.activeFilter !== 'all') {
-            baseData = this.applyImageFilter(sourceData, this.activeFilter);
+        const hasExplicitSource = Array.isArray(sourceData);
+        const hasSearchSource = !hasExplicitSource && Boolean(this.currentSearchTerm) && Array.isArray(this.searchData);
+
+        let baseData = hasExplicitSource
+            ? sourceData
+            : (hasSearchSource ? this.searchData : this.getActiveFilterData());
+
+        if ((hasExplicitSource || hasSearchSource) && this.activeFilter !== 'all') {
+            baseData = this.applyImageFilter(baseData, this.activeFilter);
         }
+
         let filteredData = baseData;
-        if (this.currentSearchTerm && sourceData == null) {
+        if (this.currentSearchTerm && !hasExplicitSource && !hasSearchSource) {
             filteredData = filteredData.filter((session) => this.matchesSearch(session, this.currentSearchTerm));
         }
 
         const flatImages = this.flattenSessions(filteredData);
+        const available = new Set(flatImages.map((item) => item.src));
+        for (const selected of Array.from(this.selectedPaths)) {
+            if (!available.has(selected)) this.selectedPaths.delete(selected);
+        }
+
         if (!flatImages.length) {
             hide(container);
             show(emptyState);
             countEl.textContent = '0 images';
+            this.updateSelectionUI();
             const emptyTitle = byId('gallery-empty-title');
             const emptyText = byId('gallery-empty-text');
             if (this.currentSearchTerm) {
@@ -293,6 +435,7 @@ export class GalleryManager {
         show(container);
         hide(emptyState);
         countEl.textContent = `${flatImages.length} image${flatImages.length !== 1 ? 's' : ''}`;
+        container.classList.toggle('gallery-select-mode', this.selectionMode);
 
         const loadingTail = this.shouldAutoLoadMore()
             ? `<div class="gallery-tail">${this.isLoadingPage ? 'Loading more...' : 'Scroll for more'}</div>`
@@ -308,17 +451,23 @@ export class GalleryManager {
 
         this.attachListeners(container);
         this.bindScrollSentinel();
+        this.updateSelectionUI();
     }
 
     renderImageItem(item, index) {
         const thumbUrl = `/thumbs/${item.src}`;
         const safeMeta = encodeURIComponent(JSON.stringify(item.meta || {}));
         const ratio = Math.max(0.5, Math.min(2.2, item.height / Math.max(1, item.width)));
+        const selected = this.selectedPaths.has(item.src);
+        const selectionBadge = this.selectionMode
+            ? `<span class="selection-badge ${selected ? 'is-selected' : ''}">${selected ? '✓' : ''}</span>`
+            : '';
         return `
-            <div class="image-item flat-item" data-src="${item.src}" data-index="${index}" data-width="${item.width}" data-height="${item.height}" data-favorite="${item.favorite ? '1' : '0'}" data-meta="${safeMeta}" ${item.variant ? `data-variant="${item.variant}"` : ''}>
+            <div class="image-item flat-item ${selected ? 'is-selected' : ''}" data-src="${item.src}" data-index="${index}" data-width="${item.width}" data-height="${item.height}" data-favorite="${item.favorite ? '1' : '0'}" data-meta="${safeMeta}" ${item.variant ? `data-variant="${item.variant}"` : ''}>
                 <img src="${thumbUrl}" alt="${this.escapeHtml(item.prompt)}" loading="lazy" style="aspect-ratio:${1 / ratio};" />
                 ${item.variant ? '<span class="hd-badge">HD</span>' : ''}
                 ${item.favorite ? '<span class="favorite-badge">♥</span>' : ''}
+                ${selectionBadge}
                 <button class="image-favorite-btn ${item.favorite ? 'is-favorite' : ''}" type="button" title="${item.favorite ? 'Unfavorite' : 'Favorite'}" aria-label="${item.favorite ? 'Unfavorite image' : 'Favorite image'}">♥</button>
             </div>
         `;
@@ -328,6 +477,11 @@ export class GalleryManager {
         container.querySelectorAll('.image-item').forEach((item) => {
             listen(item, 'click', (e) => {
                 if (e) e.stopPropagation();
+                const src = item.dataset.src;
+                if (this.selectionMode) {
+                    this.toggleImageSelection(src);
+                    return;
+                }
                 const allImages = Array.from(container.querySelectorAll('.image-item img'));
                 const clickedImg = item.querySelector('img');
                 const realIndex = allImages.indexOf(clickedImg);
@@ -341,6 +495,7 @@ export class GalleryManager {
             listen(btn, 'click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if (this.selectionMode) return;
                 const item = btn.closest('.image-item');
                 if (!item) return;
                 const src = item.dataset.src;
@@ -495,24 +650,61 @@ export class GalleryManager {
 
     async handleDelete(src, type) {
         try {
+            if (type === 'run') await api.deleteRun(src);
+            else await api.deleteImage(src);
+
             this.removeImageInMemory(src, type);
+            this.selectedPaths.delete(src);
+            this.updateSelectionUI();
             this.render(byId('gallery-search')?.value || '');
             toast(type === 'run' ? 'Run deleted' : 'Image deleted', 'success');
-
-            const formData = new FormData();
-            formData.append('path', src);
-            const endpoint = type === 'run' ? '/delete_run' : '/delete_image';
-            fetch(endpoint, { method: 'POST', body: formData }).then((res) => {
-                if (!res.ok) {
-                    console.error('Background delete failed');
-                    toast('Failed to delete on server', 'error');
-                }
-            }).catch((e) => console.error('Delete network error:', e));
             return true;
         } catch (e) {
             console.error('Delete error:', e);
+            toast('Failed to delete image', 'error');
             return false;
         }
+    }
+
+    sourceMatchesAny(path, targets) {
+        if (!path) return false;
+        if (targets.has(path)) return true;
+        for (const target of targets) {
+            if (path.includes(target) || target.includes(path)) return true;
+        }
+        return false;
+    }
+
+    removeImagesInMemory(paths) {
+        const targets = new Set((paths || []).filter(Boolean));
+        if (!targets.size) return;
+
+        const prune = (sessions) => {
+            if (!Array.isArray(sessions)) return sessions;
+            const next = [];
+            for (const s of sessions) {
+                const allImages = Array.isArray(s.images) ? s.images : [];
+                const kept = allImages.filter((p) => !this.sourceMatchesAny(p, targets));
+                if (!kept.length) continue;
+
+                const variants = { ...(s.variants || {}) };
+                const favorites = { ...(s.favorites || {}) };
+                Object.keys(variants).forEach((name) => {
+                    if (!kept.some((p) => p.endsWith(`/${name}`))) delete variants[name];
+                });
+                Object.keys(favorites).forEach((name) => {
+                    if (!kept.some((p) => p.endsWith(`/${name}`))) delete favorites[name];
+                });
+                next.push({ ...s, images: kept, variants, favorites });
+            }
+            return next;
+        };
+
+        this.data = prune(this.data);
+        this.searchData = prune(this.searchData);
+        this.fullData = prune(this.fullData);
+        this.filterData = prune(this.filterData);
+        this.filterCache.clear();
     }
 
     removeImageInMemory(src, type) {
