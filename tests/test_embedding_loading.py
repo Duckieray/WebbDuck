@@ -49,11 +49,31 @@ def test_dual_clip_embedding_loads_both_encoders(monkeypatch):
     assert second_kwargs["text_encoder"] is pipe.text_encoder_2
 
 
-def test_dual_clip_embedding_skips_non_safetensors():
+def test_dual_clip_embedding_loads_pt_export(monkeypatch):
+    def fake_torch_load(_path, map_location="cpu"):
+        return {
+            "clip_l": torch.zeros((2, 768), dtype=torch.float32),
+            "clip_g": torch.zeros((2, 1280), dtype=torch.float32),
+        }
+
+    monkeypatch.setattr(pipeline_mod.torch, "load", fake_torch_load)
+
     pipe = _FakePipe()
     ok = pipeline_mod._load_sdxl_dual_clip_embedding(
         pipe,
         Path("/tmp/example.pt"),
+        "emb_token",
+    )
+
+    assert ok is True
+    assert len(pipe.calls) == 2
+
+
+def test_dual_clip_embedding_skips_unsupported_extension():
+    pipe = _FakePipe()
+    ok = pipeline_mod._load_sdxl_dual_clip_embedding(
+        pipe,
+        Path("/tmp/example.ckpt"),
         "emb_token",
     )
 

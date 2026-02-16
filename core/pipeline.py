@@ -210,11 +210,14 @@ def _load_sdxl_dual_clip_embedding(pipe, embedding_path: Path, token: str) -> bo
 
     Returns True when this format was detected and loaded, otherwise False.
     """
-    if embedding_path.suffix.lower() != ".safetensors":
-        return False
-
+    suffix = embedding_path.suffix.lower()
     try:
-        state = load_file(str(embedding_path), device="cpu")
+        if suffix == ".safetensors":
+            state = load_file(str(embedding_path), device="cpu")
+        elif suffix in {".pt", ".bin"}:
+            state = torch.load(str(embedding_path), map_location="cpu")
+        else:
+            return False
     except Exception:
         return False
 
