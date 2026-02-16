@@ -50,6 +50,19 @@ Verify your install:
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None)"
 ```
 
+Runtime overrides (optional):
+
+```powershell
+# Force safer precision on mixed GPU setups
+$env:WEBBDUCK_DTYPE=\"float16\"
+
+# Force CPU fallback (very slow, but useful for validation)
+$env:WEBBDUCK_DEVICE=\"cpu\"
+
+# Fail immediately instead of auto-falling back when WEBBDUCK_DEVICE=cuda
+$env:WEBBDUCK_STRICT_DEVICE=\"1\"
+```
+
 ## 3. Run App
 
 ```powershell
