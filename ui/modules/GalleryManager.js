@@ -7,6 +7,7 @@ import * as api from '../core/api.js';
 import { byId, listen, show, hide, toast } from '../core/utils.js';
 
 const THUMB_SIZE_KEY = 'webbduck_gallery_thumb_size';
+const MOBILE_CONTROLS_KEY = 'webbduck_gallery_controls_collapsed';
 
 export class GalleryManager {
     constructor() {
@@ -26,6 +27,7 @@ export class GalleryManager {
         this.thumbSize = this.loadThumbSize();
         this.selectionMode = false;
         this.selectedPaths = new Set();
+        this.mobileControlsCollapsed = this.loadMobileControlsCollapsed();
 
         this.load = this.load.bind(this);
         this.refreshLatest = this.refreshLatest.bind(this);
@@ -37,6 +39,8 @@ export class GalleryManager {
         this.openBatchDeleteModal = this.openBatchDeleteModal.bind(this);
         this.closeBatchDeleteModal = this.closeBatchDeleteModal.bind(this);
         this.confirmBatchDelete = this.confirmBatchDelete.bind(this);
+        this.toggleMobileControls = this.toggleMobileControls.bind(this);
+        this.applyMobileControlsState = this.applyMobileControlsState.bind(this);
     }
 
     init() {
@@ -46,6 +50,7 @@ export class GalleryManager {
         this.setupThumbSizeControl();
         this.setupInfiniteScroll();
         this.setupBatchDeleteControls();
+        this.setupMobileControlsToggle();
     }
 
     loadThumbSize() {
@@ -56,6 +61,17 @@ export class GalleryManager {
 
     saveThumbSize(size) {
         localStorage.setItem(THUMB_SIZE_KEY, String(size));
+    }
+
+    loadMobileControlsCollapsed() {
+        const saved = localStorage.getItem(MOBILE_CONTROLS_KEY);
+        if (saved === '1') return true;
+        if (saved === '0') return false;
+        return window.matchMedia('(max-width: 860px)').matches;
+    }
+
+    saveMobileControlsCollapsed(value) {
+        localStorage.setItem(MOBILE_CONTROLS_KEY, value ? '1' : '0');
     }
 
     setupRefresh() {
@@ -158,6 +174,38 @@ export class GalleryManager {
         }
 
         this.updateSelectionUI();
+    }
+
+    setupMobileControlsToggle() {
+        const btn = byId('gallery-controls-toggle');
+        if (btn) listen(btn, 'click', this.toggleMobileControls);
+        listen(window, 'resize', () => this.applyMobileControlsState());
+        this.applyMobileControlsState();
+    }
+
+    toggleMobileControls() {
+        this.mobileControlsCollapsed = !this.mobileControlsCollapsed;
+        this.saveMobileControlsCollapsed(this.mobileControlsCollapsed);
+        this.applyMobileControlsState();
+    }
+
+    applyMobileControlsState() {
+        const layout = document.querySelector('#view-gallery .gallery-layout');
+        const btn = byId('gallery-controls-toggle');
+        const isMobile = window.matchMedia('(max-width: 860px)').matches;
+
+        if (!layout) return;
+        if (!isMobile) {
+            layout.classList.remove('controls-collapsed');
+            if (btn) btn.classList.add('hidden');
+            return;
+        }
+
+        if (btn) {
+            btn.classList.remove('hidden');
+            btn.textContent = this.mobileControlsCollapsed ? 'Show Controls' : 'Hide Controls';
+        }
+        layout.classList.toggle('controls-collapsed', this.mobileControlsCollapsed);
     }
 
     bindScrollSentinel() {
@@ -297,6 +345,10 @@ export class GalleryManager {
         if (!this.selectionMode) {
             this.selectedPaths.clear();
             this.closeBatchDeleteModal();
+        } else if (window.matchMedia('(max-width: 860px)').matches && this.mobileControlsCollapsed) {
+            this.mobileControlsCollapsed = false;
+            this.saveMobileControlsCollapsed(false);
+            this.applyMobileControlsState();
         }
         this.updateSelectionUI();
         this.render(byId('gallery-search')?.value || '');
@@ -451,6 +503,7 @@ export class GalleryManager {
 
         this.attachListeners(container);
         this.bindScrollSentinel();
+        this.applyMobileControlsState();
         this.updateSelectionUI();
     }
 
