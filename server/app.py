@@ -1328,7 +1328,7 @@ async def shutdown_app():
 def health():
     """System health check."""
     import torch
-    from webbduck.core.pipeline import pipeline_manager
+    from webbduck.core.pipeline import pipeline_manager, get_runtime_profile_dict
     from webbduck.server.state import snapshot
 
     cuda_ok = torch.cuda.is_available()
