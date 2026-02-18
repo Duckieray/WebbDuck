@@ -106,6 +106,10 @@ def _is_embedding_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in {".safetensors", ".pt", ".bin"}
 
 
+def _is_lora_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() == ".safetensors"
+
+
 def scan_hf_cache():
     """Scan HuggingFace cache for models and LoRAs."""
     models = {}
@@ -189,15 +193,15 @@ def ensure_lora_registry():
 
     registry = {}
 
-    for f in LORA_ROOT.glob("*.safetensors"):
-        arch = detect_lora_arch(f)
-        if arch:
-            registry[f.stem] = {
-                "file": f.name,
-                "trigger": None,
-                "weight": 1.0,
-                "description": "",
-            }
+    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+        if not _is_lora_file(f):
+            continue
+        registry[f.stem] = {
+            "file": f.name,
+            "trigger": None,
+            "weight": 1.0,
+            "description": "",
+        }
 
     if registry:
         LORA_FILE.write_text(json.dumps(registry, indent=2))
@@ -239,12 +243,11 @@ def sync_lora_registry_file():
         data = {}
 
     changed = False
-    for f in sorted(LORA_ROOT.glob("*.safetensors"), key=lambda p: p.name.lower()):
+    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+        if not _is_lora_file(f):
+            continue
         key = f.stem
         if key in data:
-            continue
-        arch = detect_lora_arch(f)
-        if not arch:
             continue
         data[key] = {
             "file": f.name,
@@ -295,14 +298,20 @@ def load_lora_registry():
     if not LORA_FILE.exists():
         return {}
 
-    data = json.loads(LORA_FILE.read_text())
+    try:
+        data = json.loads(LORA_FILE.read_text())
+    except Exception:
+        data = {}
     registry = {}
 
     for name, cfg in data.items():
-        file_path = LORA_ROOT / cfg["file"]
+        file_value = cfg.get("file")
+        if not file_value:
+            continue
+        file_path = LORA_ROOT / file_value
 
         if not file_path.exists():
-            raise FileNotFoundError(f"LoRA file not found for '{name}': {file_path}")
+            continue
 
         registry[name] = {
             "path": file_path,

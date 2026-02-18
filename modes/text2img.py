@@ -2,8 +2,10 @@
 
 import logging
 from webbduck.core.pipeline import pipeline_manager
+from webbduck.core.perf import stage_timer
 from webbduck.modes.base import GenerationMode
 from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
+from webbduck.prompt.conditioning import should_use_native_prompt_path
 
 log = logging.getLogger(__name__)
 
@@ -20,38 +22,53 @@ class Text2ImgMode(GenerationMode):
 
         cb = callback.get_callback() if callback else None
         clip_skip = settings.get("clip_skip")
-
-        (
-            prompt_embeds,
-            pooled_prompt_embeds,
-            negative_prompt_embeds,
-            negative_pooled_prompt_embeds,
-        ) = build_sdxl_conditioning_dispatch(
+        use_native_prompt = should_use_native_prompt_path(
             pipe=pipe,
             prompt=prompt,
             prompt_2=prompt_2,
             negative=negative,
-            experimental=settings.get("experimental_compress", False),
+            embeddings_active=bool(settings.get("embeddings")),
         )
 
         pipeline_manager.set_active_unet("base")
 
-        images = pipe(
-            prompt_embeds=prompt_embeds,
-            pooled_prompt_embeds=pooled_prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
-            added_cond_kwargs={},
-            cross_attention_kwargs=None,
-            width=settings["width"],
-            height=settings["height"],
-            num_inference_steps=settings["steps"],
-            guidance_scale=settings["cfg"],
-            num_images_per_prompt=num_images,
-            generator=generator,
-            callback_on_step_end=cb,
-            callback_on_step_end_tensor_inputs=['latents'],
-            clip_skip=clip_skip,
-        ).images
+        kwargs = {
+            "width": settings["width"],
+            "height": settings["height"],
+            "num_inference_steps": settings["steps"],
+            "guidance_scale": settings["cfg"],
+            "num_images_per_prompt": num_images,
+            "generator": generator,
+            "callback_on_step_end": cb,
+            "callback_on_step_end_tensor_inputs": ['latents'],
+            "clip_skip": clip_skip,
+        }
+        if use_native_prompt:
+            kwargs["prompt"] = prompt
+            kwargs["prompt_2"] = prompt_2
+            kwargs["negative_prompt"] = negative
+        else:
+            (
+                prompt_embeds,
+                pooled_prompt_embeds,
+                negative_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            ) = build_sdxl_conditioning_dispatch(
+                pipe=pipe,
+                prompt=prompt,
+                prompt_2=prompt_2,
+                negative=negative,
+            )
+            kwargs.update({
+                "prompt_embeds": prompt_embeds,
+                "pooled_prompt_embeds": pooled_prompt_embeds,
+                "negative_prompt_embeds": negative_prompt_embeds,
+                "negative_pooled_prompt_embeds": negative_pooled_prompt_embeds,
+                "added_cond_kwargs": {},
+                "cross_attention_kwargs": None,
+            })
+
+        with stage_timer("denoise_seconds"):
+            images = pipe(**kwargs).images
 
         return images, generator.initial_seed()

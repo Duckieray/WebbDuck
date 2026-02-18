@@ -534,7 +534,7 @@ def run_pyramid_outpaint(
             **inject_prompt_conditioning_kwargs(
                 outpaint_kwargs,
                 active_pipe=base_inpaint,
-                use_experimental=settings.get("experimental_compress", False),
+                embeddings_active=bool(settings.get("embeddings")),
                 builder=build_sdxl_conditioning_dispatch,
                 cache=conditioning_cache,
             )
@@ -592,7 +592,7 @@ def run_pyramid_outpaint(
                 **inject_prompt_conditioning_kwargs(
                     seam_kwargs,
                     active_pipe=base_inpaint,
-                    use_experimental=settings.get("experimental_compress", False),
+                        embeddings_active=bool(settings.get("embeddings")),
                     builder=build_sdxl_conditioning_dispatch,
                     cache=conditioning_cache,
                 )
@@ -709,7 +709,7 @@ def run_pyramid_outpaint(
             **inject_prompt_conditioning_kwargs(
                 refine_kwargs,
                 active_pipe=base_inpaint,
-                use_experimental=settings.get("experimental_compress", False),
+                embeddings_active=bool(settings.get("embeddings")),
                 builder=build_sdxl_conditioning_dispatch,
                 cache=conditioning_cache,
             )

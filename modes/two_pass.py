@@ -3,7 +3,6 @@
 import torch
 import logging
 from webbduck.prompt.experimental import (
-    split_prompt_for_two_pass,
     build_sdxl_conditioning_dispatch,
     build_sdxl_refiner_conditioning,
 )
@@ -80,22 +79,13 @@ class TwoPassMode(GenerationMode):
         negative = settings.get("negative_prompt")
         height = settings["height"]
         width = settings["width"]
-        experimental = settings.get("experimental_compress", False)
         clip_skip = settings.get("clip_skip")
 
         # Pass 1: Base composition
-        if experimental:
-            base_prompt, late_prompt = split_prompt_for_two_pass(
-                pipe.tokenizer, prompt
-            )
-            base_prompt_2, late_prompt_2 = split_prompt_for_two_pass(
-                pipe.tokenizer_2, prompt_2 or prompt
-            )
-        else:
-            base_prompt = prompt
-            base_prompt_2 = prompt_2 or prompt
-            late_prompt = None
-            late_prompt_2 = None
+        base_prompt = prompt
+        base_prompt_2 = prompt_2 or prompt
+        late_prompt = None
+        late_prompt_2 = None
 
         log.debug(f"Pass 1 tokens: {len(pipe.tokenizer(base_prompt)['input_ids'])}")
         
@@ -112,7 +102,6 @@ class TwoPassMode(GenerationMode):
                 prompt=base_prompt,
                 prompt_2=base_prompt_2,
                 negative=negative,
-                experimental=experimental,
             )
 
             pipeline_manager.set_active_unet("base")
@@ -139,7 +128,7 @@ class TwoPassMode(GenerationMode):
             callback.finish_pass(settings["steps"])
         
         # Pass 2: Refinement
-        if experimental and late_prompt is None and late_prompt_2 is None:
+        if late_prompt is None and late_prompt_2 is None:
             if settings.get("second_pass_mode") != "img2img":
                 log.info("Skipping pass 2 (no late content)")
                 pipeline_manager.set_active_unet("base")
@@ -219,7 +208,6 @@ class TwoPassMode(GenerationMode):
                     prompt=refine_prompt,
                     prompt_2=refine_prompt_2,
                     negative=negative,
-                    experimental=False,
                 )
 
                 bsz = base_latents.shape[0]

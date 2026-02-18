@@ -675,13 +675,13 @@ class InpaintMode(GenerationMode):
                             stage_kwargs["callback_on_step_end_tensor_inputs"] = ['latents']
 
                         stage_raw = base_inpaint(**_inject_clip_skip(
-                            inject_prompt_conditioning_kwargs(
-                                stage_kwargs,
-                                active_pipe=base_inpaint,
-                                use_experimental=settings.get("experimental_compress", False),
-                                builder=build_sdxl_conditioning_dispatch,
-                                cache=conditioning_cache,
-                            ),
+                                inject_prompt_conditioning_kwargs(
+                                    stage_kwargs,
+                                    active_pipe=base_inpaint,
+                                    embeddings_active=bool(settings.get("embeddings")),
+                                    builder=build_sdxl_conditioning_dispatch,
+                                    cache=conditioning_cache,
+                                ),
                             settings,
                         )).images[0].convert("RGB")
                         stage_out = [stage_raw]
@@ -755,7 +755,7 @@ class InpaintMode(GenerationMode):
                                 inject_prompt_conditioning_kwargs(
                                     refine_kwargs,
                                     active_pipe=base_inpaint,
-                                    use_experimental=settings.get("experimental_compress", False),
+                                    embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
                                 ),
@@ -1065,7 +1065,7 @@ class InpaintMode(GenerationMode):
                             inject_prompt_conditioning_kwargs(
                                 pass_kwargs,
                                 active_pipe=base_inpaint,
-                                use_experimental=settings.get("experimental_compress", False),
+                                                embeddings_active=bool(settings.get("embeddings")),
                                 builder=build_sdxl_conditioning_dispatch,
                                 cache=conditioning_cache,
                             ),
@@ -1140,7 +1140,7 @@ class InpaintMode(GenerationMode):
                             inject_prompt_conditioning_kwargs(
                                 pass_kwargs,
                                 active_pipe=base_inpaint,
-                                use_experimental=settings.get("experimental_compress", False),
+                                                embeddings_active=bool(settings.get("embeddings")),
                                 builder=build_sdxl_conditioning_dispatch,
                                 cache=conditioning_cache,
                             ),
@@ -1205,7 +1205,7 @@ class InpaintMode(GenerationMode):
                                 inject_prompt_conditioning_kwargs(
                                     pass_kwargs,
                                     active_pipe=base_inpaint,
-                                    use_experimental=settings.get("experimental_compress", False),
+                                    embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
                                 ),
@@ -1287,7 +1287,7 @@ class InpaintMode(GenerationMode):
                                 inject_prompt_conditioning_kwargs(
                                     pass_kwargs,
                                     active_pipe=base_inpaint,
-                                    use_experimental=settings.get("experimental_compress", False),
+                                    embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
                                 ),
@@ -1444,7 +1444,7 @@ class InpaintMode(GenerationMode):
                         inject_prompt_conditioning_kwargs(
                             refine_kwargs,
                             active_pipe=base_inpaint,
-                            use_experimental=settings.get("experimental_compress", False),
+                                        embeddings_active=bool(settings.get("embeddings")),
                             builder=build_sdxl_conditioning_dispatch,
                             cache=conditioning_cache,
                         ),

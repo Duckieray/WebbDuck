@@ -3,7 +3,9 @@
 import torch
 from webbduck.modes.base import GenerationMode
 from webbduck.core.pipeline import pipeline_manager
+from webbduck.core.perf import stage_timer
 from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
+from webbduck.prompt.conditioning import should_use_native_prompt_path
 
 
 class Img2ImgMode(GenerationMode):
@@ -28,25 +30,15 @@ class Img2ImgMode(GenerationMode):
 
         cb = callback.get_callback() if callback else None
         clip_skip = settings.get("clip_skip")
-
-        (
-            prompt_embeds,
-            pooled_prompt_embeds,
-            negative_prompt_embeds,
-            negative_pooled_prompt_embeds,
-        ) = build_sdxl_conditioning_dispatch(
+        use_native_prompt = should_use_native_prompt_path(
             pipe=active_pipe,
             prompt=prompt,
             prompt_2=prompt_2,
             negative=negative,
-            experimental=settings.get("experimental_compress", False),
+            embeddings_active=bool(settings.get("embeddings")),
         )
 
         kwargs = {
-            "prompt_embeds": prompt_embeds,
-            "pooled_prompt_embeds": pooled_prompt_embeds,
-            "negative_prompt_embeds": negative_prompt_embeds,
-            "negative_pooled_prompt_embeds": negative_pooled_prompt_embeds,
             "num_inference_steps": settings["steps"],
             "guidance_scale": settings["cfg"],
             "generator": generator,
@@ -56,6 +48,28 @@ class Img2ImgMode(GenerationMode):
             "callback_on_step_end_tensor_inputs": ['latents'],
             "clip_skip": clip_skip,
         }
+        if use_native_prompt:
+            kwargs["prompt"] = prompt
+            kwargs["prompt_2"] = prompt_2
+            kwargs["negative_prompt"] = negative
+        else:
+            (
+                prompt_embeds,
+                pooled_prompt_embeds,
+                negative_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            ) = build_sdxl_conditioning_dispatch(
+                pipe=active_pipe,
+                prompt=prompt,
+                prompt_2=prompt_2,
+                negative=negative,
+            )
+            kwargs.update({
+                "prompt_embeds": prompt_embeds,
+                "pooled_prompt_embeds": pooled_prompt_embeds,
+                "negative_prompt_embeds": negative_prompt_embeds,
+                "negative_pooled_prompt_embeds": negative_pooled_prompt_embeds,
+            })
 
         if is_latent:
             kwargs["image"] = image
@@ -66,7 +80,8 @@ class Img2ImgMode(GenerationMode):
         else:
             kwargs["image"] = image
 
-        result = active_pipe(**kwargs)
+        with stage_timer("denoise_seconds"):
+            result = active_pipe(**kwargs)
         images = result.images
         
         return images, generator.initial_seed()

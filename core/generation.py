@@ -9,6 +9,7 @@ from PIL import Image, ImageOps, ImageStat, ImageFilter
 from webbduck.core.pipeline import pipeline_manager
 from webbduck.core.captioner import unload_captioners
 from webbduck.core.exceptions import GenerationCancelledError
+from webbduck.core.perf import reset_metrics, snapshot_metrics, stage_timer
 from webbduck.modes import select_mode
 from webbduck.modes.inpaint import _build_step_fractions, _auto_repeat_passes
 from webbduck.server.state import update_progress
@@ -301,6 +302,7 @@ def _build_smart_extend_inputs(
 
 def run_generation(settings, cancel_event=None):
     """Execute image generation based on settings."""
+    reset_metrics()
     settings["width"] = _normalize_dim8(settings.get("width", 1024), fallback=1024)
     settings["height"] = _normalize_dim8(settings.get("height", 1024), fallback=1024)
 
@@ -314,14 +316,15 @@ def run_generation(settings, cancel_event=None):
     # Unload any captioner models to free VRAM before loading generation pipelines
     unload_captioners()
 
-    pipe, img2img, base_img2img, base_inpaint, trigger_phrase = pipeline_manager.get(
-        base_model=settings["base_model"],
-        second_pass_model=second_pass_model,
-        loras=settings.get("loras", []),
-        embeddings=settings.get("embeddings", []),
-        scheduler_name=settings.get("scheduler"),
-        cancel_event=cancel_event,
-    )
+    with stage_timer("pipeline_get_seconds"):
+        pipe, img2img, base_img2img, base_inpaint, trigger_phrase = pipeline_manager.get(
+            base_model=settings["base_model"],
+            second_pass_model=second_pass_model,
+            loras=settings.get("loras", []),
+            embeddings=settings.get("embeddings", []),
+            scheduler_name=settings.get("scheduler"),
+            cancel_event=cancel_event,
+        )
 
     # Always inject LoRA trigger phrases into active prompts.
     settings["prompt"] = inject_lora_trigger(settings.get("prompt"), trigger_phrase)
@@ -421,14 +424,17 @@ def run_generation(settings, cancel_event=None):
     total_steps = estimate_total_steps(settings)
     progress_tracker = GlobalProgress(total_steps, cancel_event=cancel_event)
     
-    images, out_seed = mode.run(
-        settings=settings,
-        pipe=pipe,
-        img2img=img2img,
-        base_img2img=base_img2img,
-        base_inpaint=base_inpaint,
-        generator=generator,
-        callback=progress_tracker,
-    )
+    with stage_timer("mode_run_seconds"):
+        images, out_seed = mode.run(
+            settings=settings,
+            pipe=pipe,
+            img2img=img2img,
+            base_img2img=base_img2img,
+            base_inpaint=base_inpaint,
+            generator=generator,
+            callback=progress_tracker,
+        )
+
+    settings["performance_timing"] = snapshot_metrics()
 
     return images, out_seed

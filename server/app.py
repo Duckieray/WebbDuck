@@ -690,7 +690,6 @@ async def test(
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     clip_skip: int = Form(None),
-    experimental_compress: bool = Form(False),
     wait_for_result: bool = Form(True),
 ):
     """Generate single test image."""
@@ -725,7 +724,6 @@ async def test(
         "smart_extend_offset_y": smart_extend_offset_y,
         "smart_extend_pyramid_enable": smart_extend_pyramid_enable,
         "clip_skip": clip_skip,
-        "experimental_compress": experimental_compress,
     }
     settings.update(
         _resolve_smart_extend_settings(
@@ -803,8 +801,6 @@ async def generate(
     second_pass_mode: str = Form("auto"),
     loras: str = Form("[]"),
     embeddings: str = Form("[]"),
-
-    experimental_compress: bool = Form(False),
     scheduler: str = Form("UniPC"),
     strength: float = Form(0.75),
     refinement_strength: float = Form(0.3),
@@ -855,7 +851,6 @@ async def generate(
         "seed": resolve_seed(seed),
         "loras": lora_list,
         "embeddings": embedding_list,
-        "experimental_compress": experimental_compress,
         "scheduler": scheduler,
         "strength": strength,
         "refinement_strength": refinement_strength,

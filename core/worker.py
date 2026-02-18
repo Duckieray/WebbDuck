@@ -201,6 +201,21 @@ async def gpu_worker(queue):
                 max(0.0, gen_finished_monotonic - gen_started_monotonic),
                 3,
             )
+            num_images = max(1, int(job["settings"].get("num_images", 1)))
+            job["settings"]["generation_elapsed_seconds_per_image"] = round(
+                float(job["settings"]["generation_elapsed_seconds"]) / float(num_images),
+                3,
+            )
+            perf = job["settings"].get("performance_timing")
+            if isinstance(perf, dict) and perf:
+                per_image = {}
+                for key, val in perf.items():
+                    try:
+                        per_image[str(key)] = round(float(val) / float(num_images), 6)
+                    except Exception:
+                        continue
+                if per_image:
+                    job["settings"]["performance_timing_per_image"] = per_image
 
             update_stage("Decoding")
             update_progress(0.98)

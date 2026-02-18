@@ -14,6 +14,41 @@ def _expand_textual_inversion_prompt(pipe, tokenizer, text: str) -> str:
     return text or ""
 
 
+def _fits_single_clip_window(tokenizer, text: str) -> bool:
+    """Return True when text fits a single CLIP window (no chunking needed)."""
+    max_length = int(getattr(tokenizer, "model_max_length", 77) or 77)
+    payload = max(1, max_length - 2)
+    token_ids = _tokenize_without_special(tokenizer, text or "")
+    return len(token_ids) <= payload
+
+
+def should_use_native_prompt_path(
+    *,
+    pipe,
+    prompt: str,
+    prompt_2: str | None,
+    negative: str,
+    embeddings_active: bool = False,
+) -> bool:
+    """Prefer native prompt path when chunking/explicit embeds are unnecessary."""
+    if pipe is None:
+        return False
+    if bool(embeddings_active):
+        return False
+    if not hasattr(pipe, "tokenizer") or not hasattr(pipe, "tokenizer_2"):
+        return False
+
+    pos_1 = prompt or ""
+    pos_2 = prompt_2 or prompt or ""
+    neg = negative or ""
+    return (
+        _fits_single_clip_window(pipe.tokenizer, pos_1)
+        and _fits_single_clip_window(pipe.tokenizer_2, pos_2)
+        and _fits_single_clip_window(pipe.tokenizer, neg)
+        and _fits_single_clip_window(pipe.tokenizer_2, neg)
+    )
+
+
 def _tokenize_without_special(tokenizer, text: str) -> list[int]:
     raw = tokenizer(
         text or "",
@@ -152,7 +187,7 @@ def inject_prompt_conditioning_kwargs(
     kwargs: dict,
     *,
     active_pipe,
-    use_experimental: bool,
+    embeddings_active: bool,
     builder,
     cache: dict | None = None,
 ) -> dict:
@@ -162,10 +197,23 @@ def inject_prompt_conditioning_kwargs(
     if "prompt" not in kwargs and "negative_prompt" not in kwargs:
         return kwargs
 
-    prompt = kwargs.pop("prompt", "") or ""
-    prompt_2 = kwargs.pop("prompt_2", None)
-    negative = kwargs.pop("negative_prompt", "") or ""
-    key = (id(active_pipe), prompt, prompt_2 or "", negative, bool(use_experimental))
+    prompt = kwargs.get("prompt", "") or ""
+    prompt_2 = kwargs.get("prompt_2", None)
+    negative = kwargs.get("negative_prompt", "") or ""
+
+    if should_use_native_prompt_path(
+        pipe=active_pipe,
+        prompt=prompt,
+        prompt_2=prompt_2,
+        negative=negative,
+        embeddings_active=bool(embeddings_active),
+    ):
+        return kwargs
+
+    kwargs.pop("prompt", None)
+    kwargs.pop("prompt_2", None)
+    kwargs.pop("negative_prompt", None)
+    key = (id(active_pipe), prompt, prompt_2 or "", negative)
 
     if cache is not None and key in cache:
         prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds = cache[key]
@@ -180,7 +228,6 @@ def inject_prompt_conditioning_kwargs(
             prompt=prompt,
             prompt_2=prompt_2,
             negative=negative,
-            experimental=bool(use_experimental),
         )
         if cache is not None:
             cache[key] = (

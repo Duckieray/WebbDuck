@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import torch
 
-from webbduck.prompt.conditioning import build_sdxl_conditioning, _chunk_token_ids
+from webbduck.prompt.conditioning import (
+    build_sdxl_conditioning,
+    _chunk_token_ids,
+    should_use_native_prompt_path,
+)
 
 
 class _FakeTokenizer:
@@ -119,3 +123,36 @@ def test_pooled_embedding_uses_last_chunk_of_encoder2():
 
     assert torch.allclose(pooled, torch.full((1, 6), expected_prompt))
     assert torch.allclose(neg_pooled, torch.full((1, 6), expected_neg))
+
+
+def test_native_prompt_path_allowed_for_short_prompt_without_embeddings():
+    pipe = _FakePipe()
+    assert should_use_native_prompt_path(
+        pipe=pipe,
+        prompt="p1 p2 p3",
+        prompt_2="",
+        negative="n1 n2",
+        experimental=False,
+        embeddings_active=False,
+    )
+
+
+def test_native_prompt_path_disabled_for_long_or_embedding_prompt():
+    pipe = _FakePipe()
+    long_prompt = " ".join(f"p{i}" for i in range(200))
+    assert not should_use_native_prompt_path(
+        pipe=pipe,
+        prompt=long_prompt,
+        prompt_2="",
+        negative="",
+        experimental=False,
+        embeddings_active=False,
+    )
+    assert not should_use_native_prompt_path(
+        pipe=pipe,
+        prompt="p1",
+        prompt_2="",
+        negative="",
+        experimental=False,
+        embeddings_active=True,
+    )

@@ -38,7 +38,6 @@ def basic_settings():
         "height": 512,
         "num_images": 1,
         "seed": 42,
-        "experimental_compress": False,
         "scheduler": "UniPC",
     }
 

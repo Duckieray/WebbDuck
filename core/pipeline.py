@@ -29,6 +29,7 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY, EMBEDDING_REGISTRY
 from webbduck.core.exceptions import GenerationCancelledError
+from webbduck.core.perf import stage_timer
 from webbduck.core.runtime import resolve_runtime_profile
 
 from webbduck.core.schedulers import create_scheduler
@@ -211,14 +212,32 @@ def _load_sdxl_dual_clip_embedding(pipe, embedding_path: Path, token: str) -> bo
     Returns True when this format was detected and loaded, otherwise False.
     """
     suffix = embedding_path.suffix.lower()
-    try:
-        if suffix == ".safetensors":
-            state = load_file(str(embedding_path), device="cpu")
-        elif suffix in {".pt", ".bin"}:
-            state = torch.load(str(embedding_path), map_location="cpu")
-        else:
-            return False
-    except Exception:
+    if suffix not in {".safetensors", ".pt", ".bin"}:
+        return False
+
+    state = None
+    # Some embedding files are safetensors content with a .pt extension.
+    # Try both loaders to preserve compatibility with mixed community formats.
+    loaders = []
+    if suffix == ".safetensors":
+        loaders = [
+            lambda: load_file(str(embedding_path), device="cpu"),
+            lambda: torch.load(str(embedding_path), map_location="cpu"),
+        ]
+    else:
+        loaders = [
+            lambda: torch.load(str(embedding_path), map_location="cpu"),
+            lambda: load_file(str(embedding_path), device="cpu"),
+        ]
+
+    for loader in loaders:
+        try:
+            state = loader()
+            break
+        except Exception:
+            continue
+
+    if state is None:
         return False
 
     if not isinstance(state, dict) or "clip_l" not in state or "clip_g" not in state:
@@ -706,90 +725,92 @@ class PipelineManager:
 
     def apply_loras(self, loras):
         """Load and configure LoRA adapters."""
-        desired = {}
+        with stage_timer("lora_apply_seconds"):
+            desired = {}
 
-        for l in loras:
-            name = l["name"]
-            reg = LORA_REGISTRY[name]
+            for l in loras:
+                name = l["name"]
+                reg = LORA_REGISTRY[name]
 
-            weight = float(l.get("weight", reg.get("weight", 1.0)))
-            weight = min(weight, 1.25)
+                weight = float(l.get("weight", reg.get("weight", 1.0)))
+                weight = min(weight, 1.25)
 
-            desired[name] = weight
+                desired[name] = weight
 
-        if desired == self.current_loras:
-            return
+            if desired == self.current_loras:
+                return
 
-        self.clear_loras()
+            self.clear_loras()
 
-        trigger_phrases = []
+            trigger_phrases = []
 
-        for name, weight in desired.items():
-            lora = LORA_REGISTRY[name]
-            adapter = sanitize_adapter_name(name)
-            self.pipe.load_lora_weights(
-                lora["path"],
-                adapter_name=adapter,
-            )
-            trigger = lora.get("trigger")
-            if trigger:
-                trigger_phrases.append(f"({trigger}:{weight})")
+            for name, weight in desired.items():
+                lora = LORA_REGISTRY[name]
+                adapter = sanitize_adapter_name(name)
+                self.pipe.load_lora_weights(
+                    lora["path"],
+                    adapter_name=adapter,
+                )
+                trigger = lora.get("trigger")
+                if trigger:
+                    trigger_phrases.append(f"({trigger}:{weight})")
 
-        if desired:
-            self.pipe.set_adapters(
-                [sanitize_adapter_name(n) for n in desired.keys()],
-                adapter_weights=list(desired.values())
-            )
-        
-        self.current_loras = desired
-        self.trigger_phrase = ", ".join(trigger_phrases)
+            if desired:
+                self.pipe.set_adapters(
+                    [sanitize_adapter_name(n) for n in desired.keys()],
+                    adapter_weights=list(desired.values())
+                )
+
+            self.current_loras = desired
+            self.trigger_phrase = ", ".join(trigger_phrases)
 
     def apply_embeddings(self, embeddings):
         """Load textual inversion embeddings for the active pipeline."""
-        desired = {}
-        model_arch = MODEL_REGISTRY.get(self.key, {}).get("arch")
-        for item in embeddings or []:
-            if isinstance(item, str):
-                name = item
-                token = None
-            elif isinstance(item, dict):
-                name = item.get("name") or item.get("model")
-                token = item.get("token")
-            else:
-                continue
+        with stage_timer("embedding_apply_seconds"):
+            desired = {}
+            model_arch = MODEL_REGISTRY.get(self.key, {}).get("arch")
+            for item in embeddings or []:
+                if isinstance(item, str):
+                    name = item
+                    token = None
+                elif isinstance(item, dict):
+                    name = item.get("name") or item.get("model")
+                    token = item.get("token")
+                else:
+                    continue
 
-            if not name or name not in EMBEDDING_REGISTRY:
-                continue
+                if not name or name not in EMBEDDING_REGISTRY:
+                    continue
 
-            reg = EMBEDDING_REGISTRY[name]
-            if model_arch and reg.get("arch") and reg.get("arch") != model_arch:
-                continue
-            desired[name] = str(token or reg.get("token") or name)
+                reg = EMBEDDING_REGISTRY[name]
+                if model_arch and reg.get("arch") and reg.get("arch") != model_arch:
+                    continue
+                desired[name] = str(token or reg.get("token") or name)
 
-        if desired == self.current_embeddings:
-            return
+            if desired == self.current_embeddings:
+                return
 
-        self.clear_embeddings()
-        if not desired:
-            return
-        if self.pipe is None or not hasattr(self.pipe, "load_textual_inversion"):
-            return
+            self.clear_embeddings()
+            if not desired:
+                return
+            if self.pipe is None or not hasattr(self.pipe, "load_textual_inversion"):
+                return
 
-        for name, token in desired.items():
-            reg = EMBEDDING_REGISTRY[name]
-            path = Path(reg["path"])
-            try:
-                loaded_dual = _load_sdxl_dual_clip_embedding(self.pipe, path, token)
-                if not loaded_dual:
-                    load_kwargs = {"token": token} if token else {}
-                    self.pipe.load_textual_inversion(
-                        str(path),
-                        **load_kwargs,
-                    )
-            except Exception as exc:
-                raise ValueError(f"Failed to load embedding '{name}' from {path}: {exc}") from exc
+            for name, token in desired.items():
+                reg = EMBEDDING_REGISTRY[name]
+                path = Path(reg["path"])
+                try:
+                    loaded_dual = _load_sdxl_dual_clip_embedding(self.pipe, path, token)
+                    if not loaded_dual:
+                        load_kwargs = {"token": token} if token else {}
+                        self.pipe.load_textual_inversion(
+                            str(path),
+                            **load_kwargs,
+                        )
+                except Exception as exc:
+                    raise ValueError(f"Failed to load embedding '{name}' from {path}: {exc}") from exc
 
-        self.current_embeddings = desired
+            self.current_embeddings = desired
 
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""
