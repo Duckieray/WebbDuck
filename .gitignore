@@ -11,6 +11,7 @@ ENV/
 
 # Project specific
 outputs/
+inpaint_input/
 checkpoint/
 lora/
 weights/

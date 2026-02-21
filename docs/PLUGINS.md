@@ -14,7 +14,7 @@ WebbDuck checks these locations in order:
 2. `webbduck/plugins/`
 3. `~/.webbduck/plugins/`
 
-On Windows this is usually `C:\Users\<username>\.webbduck\plugins\`.
+On Windows this is usually `%USERPROFILE%\.webbduck\plugins\`.
 
 ## Plugin Structure
 

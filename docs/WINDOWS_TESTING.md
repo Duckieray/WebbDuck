@@ -5,7 +5,7 @@ This guide is for running WebbDuck directly on Windows (not WSL).
 ## 1. Create Environment
 
 ```powershell
-cd C:\Users\<you>\scrape\img-gen\webbduck
+cd <path-to-webbduck-repo>
 conda create -n webbduck python=3.10 -y
 conda activate webbduck
 ```
