@@ -1240,7 +1240,7 @@ function setupUploadHandling() {
             toast('Generating prompt from image...', 'info');
             const formData = new FormData();
             formData.append('image', window._uploadedImage);
-            formData.append('style', 'art');
+            formData.append('style', 'sd_prompt');
 
             const result = await api.caption(formData);
             if (result?.caption) {

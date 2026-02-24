@@ -1488,7 +1488,7 @@ def get_caption_styles_endpoint():
 @app.post("/caption")
 async def caption_image(
     image: UploadFile = File(...),
-    style: str = Form("detailed"),
+    style: str = Form("sd_prompt"),
     captioner: str = Form(None),
     max_tokens: int = Form(300),
 ):

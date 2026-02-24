@@ -54,7 +54,7 @@ def unload_model():
 def generate_caption(
     image_path: Path,
     prompt: str,
-    max_tokens: int = 150,
+    max_tokens: int = 300,
 ) -> str:
     """Generate a caption for the image using JoyCaption.
     
@@ -122,8 +122,11 @@ def generate_caption(
             attention_mask=attention_mask,
             max_new_tokens=max_tokens,
             do_sample=False,  # Greedy decoding is faster
+            repetition_penalty=1.08,
+            no_repeat_ngram_size=3,
             use_cache=True,   # KV cache for faster generation
             pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
         )
         
         # Decode - skip the input tokens

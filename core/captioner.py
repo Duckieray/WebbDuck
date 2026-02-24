@@ -7,6 +7,7 @@ as plugins from the user's plugins directory.
 
 import importlib.util
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Callable
 import torch
@@ -24,10 +25,51 @@ logger = logging.getLogger(__name__)
 CAPTION_PROMPTS = {
     "detailed": "Please provide a detailed description of the image.",
     "short": "Write a short description of the image.",
-    "sd_prompt": "Write a stable diffusion prompt for this image.",
+    "sd_prompt": (
+        "Write a concise Stable Diffusion prompt as comma-separated tags. "
+        "Focus on subject, clothing, pose, setting, lighting, camera angle, and style. "
+        "Avoid full sentences and avoid extra explanation."
+    ),
     "midjourney": "Write a MidJourney prompt for this image.",
     "booru": "Write a list of Booru-like tags for this image.",
 }
+
+
+def _normalize_caption_text(text: str) -> str:
+    """Normalize whitespace and strip trivial wrapper punctuation."""
+    text = (text or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    return text.strip(" ,\n\t")
+
+
+def _dedupe_comma_tags(text: str) -> str:
+    """Deduplicate comma-separated tags/phrases while preserving order."""
+    parts = [p.strip() for p in text.split(",")]
+    seen = set()
+    out = []
+    for part in parts:
+        if not part:
+            continue
+        key = re.sub(r"\s+", " ", part).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(part)
+    return ", ".join(out)
+
+
+def _postprocess_caption(style: str, caption: str) -> str:
+    """Apply light cleanup to reduce visible repetition."""
+    cleaned = _normalize_caption_text(caption)
+
+    # Tag-style outputs benefit from exact de-duplication.
+    if style in {"sd_prompt", "booru"}:
+        cleaned = _dedupe_comma_tags(cleaned)
+
+    # Collapse immediate repeated sentence/phrase tails in descriptive modes.
+    cleaned = re.sub(r"(.{8,}?)\s+\1(\b|$)", r"\1", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" ,\n\t")
 
 
 class CaptionerManager:
@@ -138,7 +180,7 @@ class CaptionerManager:
             prompt=prompt,
             max_tokens=max_tokens,
         )
-        return caption.strip()
+        return _postprocess_caption(style, caption)
 
 
 # Global captioner manager instance
