@@ -201,10 +201,11 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 ## 12. Source-of-Truth Docs
 
 - `README.md`
-- `docs/architecture.md`
 - `docs/DEVELOPMENT.md`
-- `docs/REQUIREMENTS.md`
 - `docs/WINDOWS_TESTING.md`
+- `docs/USER_GUIDE.md`
+- `docs/PLUGINS.md`
 - `tests/README.md`
+- `ui/README.md`
 
 When behavior changes, keep these docs in sync.

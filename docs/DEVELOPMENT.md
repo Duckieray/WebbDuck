@@ -26,6 +26,15 @@ webbduck/
 |  |- styles/
 ```
 
+## High-Level Runtime Flow
+
+1. UI submits an action (`/generate`, `/test`, `/upscale`, etc.).
+2. Backend validates and enqueues GPU work.
+3. `core/worker.py` processes jobs serially.
+4. `core/generation.py` selects mode and runs the pipeline.
+5. Outputs + metadata are written to `outputs/`.
+6. WebSocket updates push `state`, `queue`, and `catalog` events to clients.
+
 ## Backend Patterns
 
 ### Queue-first GPU execution
@@ -132,6 +141,38 @@ pytest tests/test_modes.py -v
 ```
 
 Use the project conda environment if you run tests through WSL.
+
+## API Surface (Common Endpoints)
+
+- `POST /generate`
+- `POST /test`
+- `POST /upscale`
+- `GET /models`
+- `GET /second_pass_models`
+- `GET /models/{base_model:path}/loras`
+- `GET /models/{base_model:path}/embeddings`
+- `GET /gallery`
+- `GET /gallery/search`
+- `GET /queue`
+- `POST /queue/cancel`
+- `POST /tokenize`
+- `POST /caption`
+- `GET /captioners`
+- `GET /caption_styles`
+- `GET /health`
+- `GET /ws` (WebSocket)
+
+## Runtime Environment Knobs
+
+- `WEBBDUCK_OUTPUT_DIR`
+- `WEBBDUCK_PORT`
+- `WEBBDUCK_LORA_DIR`
+- `WEBBDUCK_EMBEDDING_DIR`
+- `WEBBDUCK_CATALOG_POLL_SECONDS`
+- `WEBBDUCK_THUMB_CONCURRENCY`
+- `WEBBDUCK_DEVICE`
+- `WEBBDUCK_DTYPE`
+- `WEBBDUCK_STRICT_DEVICE`
 
 ## Cleanup Notes
 

@@ -103,8 +103,6 @@ python run.py --port 8020
 - `docs/SIMPLE_GUIDE.md`
 - `docs/USER_GUIDE.md`
 - `docs/DEVELOPMENT.md`
-- `docs/architecture.md`
-- `docs/REQUIREMENTS.md`
 - `docs/WINDOWS_TESTING.md`
 - `docs/PLUGINS.md`
 - `ui/README.md`
