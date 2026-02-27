@@ -97,6 +97,8 @@ python run.py --port 8020
   - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
   - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)
   - `WEBBDUCK_STRICT_DEVICE=1` to fail fast instead of auto-fallback when CUDA is requested but unusable
+- GPU lease wait timeout for core generation jobs:
+  - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default `180`; avoids indefinite 0% waits if another in-process runtime holds the GPU lease)
 
 ## Documentation
 

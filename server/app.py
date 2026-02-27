@@ -61,6 +61,7 @@ from webbduck.core.web_plugins import (
     list_remote_web_plugins,
     mount_web_plugin_assets,
 )
+from webbduck.core.gpu_lease import get_gpu_lease
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -362,6 +363,7 @@ def build_queue_payload() -> dict:
     return {
         "active_job_id": active_job_id,
         "queued_count": generation_queue.qsize(),
+        "gpu_lease": get_gpu_lease(),
         "jobs": jobs[:100],
         "recent_completed": recent_completed[:50],
     }
@@ -1296,6 +1298,20 @@ def get_queue():
     return build_queue_payload()
 
 
+@app.get("/gpu/lease")
+def gpu_lease_status():
+    """Inspect shared GPU lease state (WebbDuck + local plugins)."""
+    return get_gpu_lease()
+
+
+@app.get("/runtime/profile")
+def runtime_profile():
+    """Return resolved runtime device/dtype profile."""
+    from webbduck.core.runtime import resolve_runtime_profile
+
+    return {"runtime": resolve_runtime_profile().to_dict()}
+
+
 @app.post("/queue/cancel")
 async def cancel_queue_job(job_id: str = Form(...)):
     """Cancel a queued or running job."""
@@ -1345,6 +1361,14 @@ async def unload_all_models():
         return JSONResponse(
             status_code=409,
             content={"error": "Cannot unload while a job is running"},
+        )
+    lease = get_gpu_lease()
+    held = bool(lease.get("held"))
+    lease_owner = ((lease.get("lease") or {}) if isinstance(lease, dict) else {}).get("owner")
+    if held and lease_owner and str(lease_owner) != "webbduck-core":
+        return JSONResponse(
+            status_code=409,
+            content={"error": f"Cannot unload while GPU is leased by {lease_owner}"},
         )
 
     from webbduck.core.pipeline import pipeline_manager, get_runtime_profile_dict
@@ -1423,6 +1447,7 @@ def health():
             "maxsize": generation_queue.maxsize,
             "active_job_id": active_job_id,
             "tracked_jobs": len(job_registry),
+            "gpu_lease": get_gpu_lease(),
         },
         "pipeline": {
             "loaded": pipeline_manager.pipe is not None,

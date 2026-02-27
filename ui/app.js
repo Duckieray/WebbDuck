@@ -32,6 +32,10 @@ const SMART_EXTEND_FIXED = Object.freeze({
 });
 let appConfirmResolver = null;
 const IS_COARSE_POINTER = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
+const webPluginRegistry = new Map();
+const webPluginFrames = new Map();
+const pendingPluginMessages = new Map();
+const DUCKMOTION_PLUGIN_ID = 'duckmotion';
 
 window._uploadedImage = null;
 window._maskBlob = null;
@@ -393,11 +397,135 @@ async function loadWebPlugins() {
     for (const plugin of plugins) {
         registerWebPlugin(plugin);
     }
+    updateOptionalPluginUi();
+}
+
+function getWebPluginRecord(pluginId) {
+    return webPluginRegistry.get(String(pluginId || '').trim().toLowerCase()) || null;
+}
+
+function hasWebPlugin(pluginId) {
+    return Boolean(getWebPluginRecord(pluginId));
+}
+
+function queuePluginMessage(pluginId, payload) {
+    const id = String(pluginId || '').trim().toLowerCase();
+    if (!id) return;
+    const rows = pendingPluginMessages.get(id) || [];
+    rows.push(payload);
+    pendingPluginMessages.set(id, rows.slice(-10));
+}
+
+function flushPluginMessages(pluginId) {
+    const id = String(pluginId || '').trim().toLowerCase();
+    const frame = webPluginFrames.get(id);
+    if (!frame?.contentWindow) return;
+    const rows = pendingPluginMessages.get(id) || [];
+    if (!rows.length) return;
+    pendingPluginMessages.delete(id);
+    for (const payload of rows) {
+        try {
+            frame.contentWindow.postMessage(payload, window.location.origin);
+        } catch (_) {
+            // Ignore transient iframe messaging failures.
+        }
+    }
+}
+
+function postMessageToPlugin(pluginId, payload) {
+    const id = String(pluginId || '').trim().toLowerCase();
+    if (!id) return false;
+    const frame = webPluginFrames.get(id);
+    if (!frame?.contentWindow) {
+        queuePluginMessage(id, payload);
+        return false;
+    }
+    if (frame.dataset.loaded === '1') {
+        try {
+            frame.contentWindow.postMessage(payload, window.location.origin);
+            return true;
+        } catch (_) {
+            queuePluginMessage(id, payload);
+            return false;
+        }
+    }
+    queuePluginMessage(id, payload);
+    return true;
+}
+
+function switchToPluginView(pluginId) {
+    const id = String(pluginId || '').trim().toLowerCase();
+    if (!id) return false;
+    const viewName = `plugin-${id}`;
+    if (!byId(`view-${viewName}`)) return false;
+    switchView(viewName);
+    return true;
+}
+
+function updateOptionalPluginUi() {
+    const duckMotionAvailable = hasWebPlugin(DUCKMOTION_PLUGIN_ID);
+    const previewBtn = byId('preview-duckmotion');
+    const lightboxBtn = byId('lightbox-duckmotion');
+    if (previewBtn) toggleClass(previewBtn, 'hidden', !duckMotionAvailable);
+    if (lightboxBtn) toggleClass(lightboxBtn, 'hidden', !duckMotionAvailable);
+}
+
+async function sendToDuckMotion(imageSrc, curr) {
+    if (!hasWebPlugin(DUCKMOTION_PLUGIN_ID)) {
+        toast('DuckMotion plugin is not installed', 'warning');
+        updateOptionalPluginUi();
+        return false;
+    }
+
+    if (!imageSrc || typeof imageSrc !== 'string') {
+        toast('No image available to send', 'warning');
+        return false;
+    }
+
+    if (imageSrc.startsWith('data:') || imageSrc.startsWith('blob:')) {
+        toast('Send to DuckMotion currently requires a saved image path from outputs/gallery', 'warning');
+        return false;
+    }
+
+    let normalizedPath = imageSrc;
+    try {
+        const url = new URL(imageSrc, window.location.origin);
+        normalizedPath = `${url.pathname}${url.search || ''}`;
+    } catch (_) {
+        normalizedPath = imageSrc;
+    }
+
+    if (!normalizedPath.startsWith('/outputs/')) {
+        toast('Send to DuckMotion currently supports WebbDuck output images', 'warning');
+        return false;
+    }
+
+    const meta = curr?.meta || curr || {};
+    const payload = {
+        type: 'webbduck.duckmotion.handoff',
+        source: 'webbduck',
+        image: { src: normalizedPath },
+        meta: {
+            prompt: meta.prompt || '',
+            negative_prompt: meta.negative_prompt || meta.negative || '',
+            seed: meta.seed ?? null,
+            width: meta.width ?? null,
+            height: meta.height ?? null,
+        },
+        sent_at: Date.now(),
+    };
+
+    switchToPluginView(DUCKMOTION_PLUGIN_ID);
+    postMessageToPlugin(DUCKMOTION_PLUGIN_ID, payload);
+    toast('Sent image to DuckMotion', 'success');
+    return true;
 }
 
 function registerWebPlugin(plugin) {
     const id = String(plugin?.id || '').trim();
     if (!id) return;
+    const pluginId = id.toLowerCase();
+    webPluginRegistry.set(pluginId, { ...plugin, id: pluginId });
 
     const viewName = String(plugin?.view || `plugin-${id}`).trim();
     const title = String(plugin?.name || id);
@@ -425,7 +553,10 @@ function registerWebPlugin(plugin) {
         mobileTabs.appendChild(tab);
     }
 
-    if (byId(`view-${viewName}`)) return;
+    if (byId(`view-${viewName}`)) {
+        updateOptionalPluginUi();
+        return;
+    }
 
     const container = document.querySelector('.view-container');
     if (!container) return;
@@ -460,17 +591,27 @@ function registerWebPlugin(plugin) {
     frame.loading = 'lazy';
     frame.title = title;
     frame.referrerPolicy = 'same-origin';
+    frame.dataset.pluginId = pluginId;
+    webPluginFrames.set(pluginId, frame);
+    frame.addEventListener('load', () => {
+        frame.dataset.loaded = '1';
+        flushPluginMessages(pluginId);
+    });
 
     frameWrap.appendChild(frame);
     shell.appendChild(header);
     shell.appendChild(frameWrap);
     section.appendChild(shell);
     container.appendChild(section);
+    updateOptionalPluginUi();
 }
 
 function unregisterWebPlugin(pluginId) {
     const id = String(pluginId || '').trim();
     if (!id) return;
+    webPluginRegistry.delete(id.toLowerCase());
+    webPluginFrames.delete(id.toLowerCase());
+    pendingPluginMessages.delete(id.toLowerCase());
     const viewName = `plugin-${id}`;
 
     document.querySelectorAll(`.nav-tab[data-view="${viewName}"], .mobile-tab[data-view="${viewName}"]`).forEach(el => {
@@ -486,6 +627,7 @@ function unregisterWebPlugin(pluginId) {
     if (currentView === viewName) {
         switchView('studio');
     }
+    updateOptionalPluginUi();
 }
 
 async function refreshRemotePluginList() {
@@ -610,6 +752,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.lightboxManager = new LightboxManager({
             onUpscale: (src, cb) => startUpscale(src, cb),
             onInpaint: (src) => sendToInpaint(src),
+            onDuckMotion: (src, curr) => sendToDuckMotion(src, curr),
             onRegenerate: handleRegenerateFromLightbox,
             onStageSettings: handleStageSettingsFromLightbox,
             onDelete: (src, type) => window.galleryManager.handleDelete(src, type),
@@ -2253,6 +2396,12 @@ function setupPreviewToolbar() {
         const img = byId('preview-image');
         if (!img?.src) return;
         sendToInpaint(img.src);
+    });
+
+    listen(byId('preview-duckmotion'), 'click', async () => {
+        const img = byId('preview-image');
+        if (!img?.src) return;
+        await sendToDuckMotion(img.src, { src: img.src });
     });
 
     listen(byId('preview-download'), 'click', () => {

@@ -173,6 +173,7 @@ Use the project conda environment if you run tests through WSL.
 - `WEBBDUCK_DEVICE`
 - `WEBBDUCK_DTYPE`
 - `WEBBDUCK_STRICT_DEVICE`
+- `WEBBDUCK_GPU_LEASE_WAIT_SECONDS`
 
 ## Cleanup Notes
 

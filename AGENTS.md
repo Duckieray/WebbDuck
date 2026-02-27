@@ -9,8 +9,11 @@ Use it as the first-stop reference for architecture, workflows, project rules, a
 - Backend: FastAPI + Uvicorn.
 - Frontend: vanilla JavaScript (ES modules), no Node build pipeline.
 - Execution model: queue-first GPU worker (single worker path for GPU-heavy work).
+- Shared in-process GPU lease coordinates WebbDuck core and local web plugins.
 - Realtime: WebSocket events for status/queue/catalog updates.
 - Storage: filesystem outputs + metadata JSON + manifest index for gallery search.
+- Plugin model: optional web-app plugins (`plugins/webapps`) can run local or remote.
+- DuckMotion/DNADuck are separately managed plugin repos; WebbDuck should not hard-require them.
 
 ## 2. Tech Stack
 
@@ -54,6 +57,15 @@ Key folders:
 5. Modal UX over browser popups
 - Prefer app modal components over native `alert/confirm/prompt`.
 
+6. Shared GPU lease discipline
+- All GPU-heavy runtimes in-process (core + plugins) must coordinate through `core/gpu_lease.py`.
+- Always release lease tokens in `finally` blocks.
+- Prefer bounded waits over indefinite blocking (`WEBBDUCK_GPU_LEASE_WAIT_SECONDS`).
+
+7. Optional plugin isolation
+- WebbDuck core must remain fully usable when optional plugins are missing, disabled, or failing.
+- Plugin faults should surface clear errors and must not silently stall WebbDuck generation.
+
 ## 4. Coding Guidelines (Project-Specific)
 
 - Make narrow, intentional edits; preserve existing patterns.
@@ -72,10 +84,19 @@ Key folders:
 - Exclude local artifacts/debug data from commits (examples: `outputs/`, `inpaint_input/`, local checkpoints, local LoRA/embedding/model binaries).
 - Keep commit messages descriptive and scoped.
 
+## 5.1 Backlog Privacy Rules
+
+- Public backlog tasks live in `backlog/` and are commit-safe by default.
+- Personal/environment-specific details must NOT be written to public Backlog.md task fields.
+- Store personal/local details in `backlog-private/` only (this directory is gitignored).
+- If a task needs local context, keep the public task high level and reference a local note like `backlog-private/TASK-<id>.local.md`.
+- Never commit secrets, local paths, hostnames, tokens, or machine-specific instructions to `backlog/` or other tracked files.
+
 ## 6. Environment Variables (Important)
 
 - `WEBBDUCK_OUTPUT_DIR`
 - `WEBBDUCK_PORT`
+- `WEBBDUCK_PLUGINS_DIR` (optional plugin root override)
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
 - `WEBBDUCK_CATALOG_POLL_SECONDS` (default: `3.0`)
@@ -83,6 +104,8 @@ Key folders:
 - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
 - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)
 - `WEBBDUCK_STRICT_DEVICE=1` (fail fast instead of auto fallback)
+- `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default: `180`; fail fast if GPU lease is stuck)
+- `WEBBDUCK_USE_IPC_COLLECT=1` (optional; enables aggressive CUDA IPC cleanup)
 
 ## 7. WSL/Linux Commands
 
@@ -185,6 +208,12 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Keep infinite scroll + search + selection interactions compatible.
 - Validate lightbox actions and metadata rendering.
 
+4. Integrate/update optional web plugins
+- Follow plugin search precedence: `WEBBDUCK_PLUGINS_DIR` -> `webbduck/plugins` -> `~/.webbduck/plugins`.
+- For local plugin installs, prefer installer commands that target WebbDuck repo root:
+  - `python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite`
+- Keep plugin integration optional and non-blocking for core generation flow.
+
 ## 11. Troubleshooting Quick Reference
 
 - Port already in use:
@@ -195,6 +224,13 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
   - Enable Developer Mode or run elevated; warning is often non-fatal.
 - `no kernel image is available for execution on the device`:
   - Torch/CUDA wheel mismatch for the GPU architecture.
+- Generation stuck at `0%` or waiting forever:
+  - Check `GET /gpu/lease` to see current holder.
+  - If lease holder is stale, restart WebbDuck.
+  - Tune `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` to avoid indefinite waits.
+- WebbDuck performance regressed after plugin testing:
+  - Confirm no local plugin job is still running.
+  - Verify plugin install path precedence (a stale plugin copy in a higher-priority path can override expected code).
 - Slow generation after feature changes:
   - Check whether conditioning path changed, whether extra passes were enabled, and whether dtype/device fallback occurred.
 
@@ -209,3 +245,32 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - `ui/README.md`
 
 When behavior changes, keep these docs in sync.
+
+<!-- BACKLOG.MD MCP GUIDELINES START -->
+
+<CRITICAL_INSTRUCTION>
+
+## BACKLOG WORKFLOW INSTRUCTIONS
+
+This project uses Backlog.md MCP for all task and project management activities.
+
+**CRITICAL GUIDANCE**
+
+- If your client supports MCP resources, read `backlog://workflow/overview` to understand when and how to use Backlog for this project.
+- If your client only supports tools or the above request fails, call `backlog.get_workflow_overview()` tool to load the tool-oriented overview (it lists the matching guide tools).
+
+- **First time working here?** Read the overview resource IMMEDIATELY to learn the workflow
+- **Already familiar?** You should have the overview cached ("## Backlog.md Overview (MCP)")
+- **When to read it**: BEFORE creating tasks, or when you're unsure whether to track work
+
+These guides cover:
+- Decision framework for when to create tasks
+- Search-first workflow to avoid duplicates
+- Links to detailed guides for task creation, execution, and finalization
+- MCP tools reference
+
+You MUST read the overview resource to understand the complete workflow. The information is NOT summarized here.
+
+</CRITICAL_INSTRUCTION>
+
+<!-- BACKLOG.MD MCP GUIDELINES END -->

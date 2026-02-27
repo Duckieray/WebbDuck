@@ -12,6 +12,7 @@ export class LightboxManager {
         this.callbacks = {
             onUpscale: callbacks.onUpscale || (() => { }),
             onInpaint: callbacks.onInpaint || (() => { }),
+            onDuckMotion: callbacks.onDuckMotion || (() => { }),
             onRegenerate: callbacks.onRegenerate || (() => { }),
             onStageSettings: callbacks.onStageSettings || (() => { }),
             onDelete: callbacks.onDelete || (() => { }),
@@ -59,6 +60,13 @@ export class LightboxManager {
             const curr = this.currentPswpInstance.pswp.currSlide.data;
             this.currentPswpInstance.pswp.close();
             this.callbacks.onInpaint(curr.src);
+        });
+
+        listen(byId('lightbox-duckmotion'), 'click', () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            const src = curr?.originalSrc || curr?.src;
+            this.callbacks.onDuckMotion(src, curr);
         });
 
         listen(byId('lightbox-download'), 'click', () => {
