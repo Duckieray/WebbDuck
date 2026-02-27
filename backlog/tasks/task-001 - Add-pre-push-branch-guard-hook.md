@@ -1,9 +1,10 @@
 ---
 id: TASK-001
 title: Add pre-push branch guard hook
-status: Backlog
+status: Done
 assignee: []
 created_date: '2026-02-27 23:16'
+updated_date: '2026-02-27 23:18'
 labels: []
 dependencies: []
 ---
@@ -34,12 +35,22 @@ exit 0
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `.git/hooks/pre-push` exists with the specified script content.
-- [ ] #2 The hook is executable and runs on `git push`.
-- [ ] #3 Push attempts from `main` are blocked with the configured message and non-zero exit.
-- [ ] #4 Push attempts from branches not matching `feature/*` are blocked with the configured message and non-zero exit.
-- [ ] #5 Push attempts from branches matching `feature/*` are allowed to proceed.
+- [x] #1 `.git/hooks/pre-push` exists with the specified script content.
+- [x] #2 The hook is executable and runs on `git push`.
+- [x] #3 Push attempts from `main` are blocked with the configured message and non-zero exit.
+- [x] #4 Push attempts from branches not matching `feature/*` are blocked with the configured message and non-zero exit.
+- [x] #5 Push attempts from branches matching `feature/*` are allowed to proceed.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented `.git/hooks/pre-push` with the requested script content.
+
+Set executable permission on the hook file.
+
+Validated behavior with mocked branch values: `main` blocked (exit 1), `dev/test` blocked (exit 1), and `feature/demo` allowed (exit 0).
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
