@@ -76,6 +76,14 @@ Key folders:
 - Add/update tests for behavior changes when practical.
 - Update docs when behavior or setup changes.
 
+## 4.1 Agent Operating Rules
+
+- Instruction precedence: system/developer instructions first, then explicit user request, then this file and repo conventions.
+- No silent failure: never claim a command/test/check ran when it did not; explicitly report what was run and what was skipped.
+- Strict scope control: implement only the requested task; if you find unrelated issues, create/follow up with a separate backlog task.
+- Stop and report when requirements are ambiguous, credentials are missing, a requested action is destructive/irreversible, or instructions conflict.
+- Read-only mode: for analysis/planning/review-only requests, inspect and explain without editing files or changing backlog state.
+
 ## 5. Git + Workspace Rules
 
 - Never use destructive git commands (`reset --hard`, `checkout --`, etc.) unless explicitly requested.
@@ -83,6 +91,10 @@ Key folders:
 - Commit only relevant files.
 - Exclude local artifacts/debug data from commits (examples: `outputs/`, `inpaint_input/`, local checkpoints, local LoRA/embedding/model binaries).
 - Keep commit messages descriptive and scoped.
+- Do not amend commits unless explicitly requested.
+- Do not force-push unless explicitly requested.
+- Worktrees are recommended (not required) for parallel work or high-conflict changes.
+- If not using a dedicated worktree, verify `git status` before and after edits and keep touched files tightly scoped.
 
 ## 5.1 Backlog Privacy Rules
 
@@ -92,10 +104,28 @@ Key folders:
 - If a task needs local context, keep the public task high level and reference a local note like `backlog-private/TASK-<id>.local.md`.
 - Never commit secrets, local paths, hostnames, tokens, or machine-specific instructions to `backlog/` or other tracked files.
 
+## 5.2 Backlog Execution Rules
+
+- Search existing backlog tasks before creating a new task.
+- Create a task for non-trivial implementation work that requires planning/decisions.
+- Skip task creation for trivial/mechanical edits unless the user explicitly requests task tracking.
+- Keep public backlog entries outcome-focused and collaborator-safe; move personal execution details to `backlog-private/`.
+
+## 5.3 Verification Policy (Tiered)
+
+- Tier 0 (default): run fast targeted checks for touched areas (focused `pytest` modules/tests, quick smoke checks).
+- Tier 1 (feature-level): run broader integration validation when behavior crosses API/UI/worker boundaries.
+- Tier 2 (broad): run larger/full suite only when risk is high, shared interfaces changed, or user requests it.
+- Always report exactly which verification commands were executed and their result.
+
 ## 6. Environment Variables (Important)
 
 - `WEBBDUCK_OUTPUT_DIR`
 - `WEBBDUCK_PORT`
+- `WEBBDUCK_MODELS_DIR` (model library root override)
+- `WEBBDUCK_CHECKPOINT_DIR` (explicit checkpoint root override)
+- `WEBBDUCK_HF_CACHE_DIR` (explicit Hugging Face hub cache override)
+- `WEBBDUCK_WEIGHTS_DIR` (explicit upscaler weights root override)
 - `WEBBDUCK_PLUGINS_DIR` (optional plugin root override)
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
@@ -245,6 +275,13 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - `ui/README.md`
 
 When behavior changes, keep these docs in sync.
+
+## 13. PR Expectations
+
+- Summarize what changed and why, scoped to the task.
+- List verification commands run and whether they passed/failed/skipped.
+- Call out risk areas, trade-offs, and any follow-up tasks created.
+- For UI changes, include screenshots or a short recording in the PR description when practical.
 
 <!-- BACKLOG.MD MCP GUIDELINES START -->
 
