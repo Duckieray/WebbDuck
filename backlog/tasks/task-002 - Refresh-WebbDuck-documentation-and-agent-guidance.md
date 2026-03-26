@@ -1,9 +1,11 @@
 ---
 id: TASK-002
 title: Refresh WebbDuck documentation and agent guidance
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - OpenCode
 created_date: '2026-03-26 17:22'
+updated_date: '2026-03-26 17:23'
 labels: []
 dependencies: []
 references:
@@ -32,6 +34,16 @@ Update the tracked documentation so contributors and agents can quickly locate m
 - [ ] #3 Stale or redundant docs are removed or replaced, and remaining docs have consistent cross-links and terminology.
 - [ ] #4 Documentation changes are verified with targeted checks for obvious broken references or mismatched commands.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Audit the current tracked docs (`README.md`, `AGENTS.md`, `docs/*`, `ui/README.md`, `tests/README.md`, `plugins/README.md`) against the live repo layout and commands so stale references are identified before editing.
+2. Consolidate contributor-facing guidance around a clearer source-of-truth set: refresh the top-level README, expand the development/agent docs with an accurate repo map and common change recipes, and decide whether `docs/SIMPLE_GUIDE.md` should be kept, replaced, or folded into another guide.
+3. Update specialized docs (`docs/USER_GUIDE.md`, `docs/PLUGINS.md`, `docs/WINDOWS_TESTING.md`, `ui/README.md`, `tests/README.md`, `plugins/README.md`) so each explains responsibilities, extension points, and how to update the corresponding area.
+4. Remove or replace stale documentation where needed, then run targeted verification focused on broken markdown links, command references, and obvious mismatches with the current filesystem layout.
+5. Record the verification results and completion summary in the task once the documentation set is internally consistent.
+<!-- SECTION:PLAN:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
