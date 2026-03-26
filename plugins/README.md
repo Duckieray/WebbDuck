@@ -1,74 +1,67 @@
-# Webbduck Plugins
+# WebbDuck Plugins Folder
 
-This folder contains optional plugins that extend webbduck's functionality.
+This folder contains bundled optional plugin examples and integration points.
+
+## Layout
+
+```text
+plugins/
+|- captioners/
+|  `- joycaption/
+`- webapps/
+   |- dnaduck/
+   `- duckmotion/
+```
+
+## What Lives Here
+
+- `captioners/`: image-captioning plugins discovered by WebbDuck.
+- `webapps/`: web-app plugin manifests and UI/backend assets.
+
+These plugins are optional. WebbDuck core should still run when they are absent or failing.
 
 ## Captioners
 
-Image captioning plugins for generating prompts from uploaded images.
+Captioner plugins expose a `generate_caption(...)` function from `captioner.py`.
 
-| Plugin | Description | VRAM |
-|--------|-------------|------|
-| [joycaption](captioners/joycaption/) | JoyCaption Alpha 2 - high quality image descriptions | ~22GB |
+Reference example:
 
-## Adding Your Own Captioner
+- `plugins/captioners/joycaption/`
 
-Create a folder in `captioners/` with a `captioner.py` file that implements:
+See `docs/PLUGINS.md` for the full plugin contract and search-path rules.
 
-```python
-def generate_caption(image_path: Path, prompt: str, max_tokens: int = 300) -> str:
-    """Generate a caption for the image."""
-    pass
-```
+## Web-App Plugins
 
-See [docs/PLUGINS.md](../docs/PLUGINS.md) for full documentation.
+Web-app plugins can add a top-level page inside WebbDuck.
 
-## Web Apps
-
-Web-app plugins can add a full page inside WebbDuck with minimal core coupling.
-
-DNADuck is an external optional web-app plugin distributed from:
-
-- `https://github.com/Duckieray/dnaduck`
-
-Install from DNADuck repo:
-
-```bash
-python3 tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
-```
-
-Or connect a remote plugin without local install:
-
-1. Open WebbDuck `Settings`
-2. Enter plugin `ip:port` in `Connect Remote Plugin`
-3. Click `Connect Plugin`
-
-Structure:
+Expected structure:
 
 ```text
 webapps/
 `- my_plugin/
    |- plugin.json
-   |- backend.py      # optional FastAPI router factory
+   |- backend.py      # optional
    `- ui/
       `- index.html
 ```
 
-Required manifest (`plugin.json`) fields:
+`plugin.json` should at least define:
 
-- `id`: stable plugin id (`[a-z0-9_-]`)
-- `name`: tab label in WebbDuck UI
-- `entry`: UI entry file inside `ui/` (usually `index.html`)
+- `id`
+- `name`
+- `entry`
 
-Optional:
+## External Plugin Repos
 
-- `description`
-- `order` (lower appears earlier)
-- `backend` (defaults to `backend.py`)
+`dnaduck/` and `duckmotion/` are integration targets for separately managed plugin projects. Do not make WebbDuck core depend on those repos being installed locally.
 
-The UI is mounted at:
+When a plugin repo provides an installer, point it at the WebbDuck repo root, for example:
 
-- `/plugins/web/<id>/ui/<entry>`
+```bash
+python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
+```
 
-If `backend.py` exists and exports `get_router(...) -> APIRouter`, it is mounted at:
+## Related Docs
 
-- `/plugins/web/<id>/api/*`
+- `docs/PLUGINS.md` for plugin contracts and routing behavior
+- `docs/ARCHITECTURE.md` for where plugin loading lives in WebbDuck core

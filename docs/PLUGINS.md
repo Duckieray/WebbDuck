@@ -1,30 +1,38 @@
-# WebbDuck Captioning Plugins
+# WebbDuck Plugins
 
-This guide explains how to set up and use image captioning plugins.
+WebbDuck supports two optional plugin types:
 
-## Overview
+- captioner plugins in `plugins/captioners/` or another plugin search path
+- web-app plugins in `plugins/webapps/` or another plugin search path
 
-Captioners are optional. When available, the `Caption` button appears in the Studio input-image area.
+Core WebbDuck must continue working when plugins are missing, disabled, or failing.
 
-## Plugin Search Paths
+## Plugin Search Order
 
-WebbDuck checks these locations in order:
+WebbDuck checks plugin roots in this order:
 
 1. `WEBBDUCK_PLUGINS_DIR`
-2. `webbduck/plugins/`
-3. `~/.webbduck/plugins/`
+2. `<repo>/plugins`
+3. `~/.webbduck/plugins`
 
-On Windows this is usually `%USERPROFILE%\.webbduck\plugins\`.
+On Windows, the fallback user path is usually `%USERPROFILE%\.webbduck\plugins`.
 
-## Plugin Structure
+## Captioner Plugins
+
+Captioners add prompt-generation help for uploaded images.
+
+### Folder Layout
 
 ```text
-captioners/
-`- joycaption/
-   `- captioner.py
+plugins/
+`- captioners/
+   `- joycaption/
+      `- captioner.py
 ```
 
-## Required Interface
+### Required Interface
+
+Each captioner plugin must expose:
 
 ```python
 def generate_caption(
@@ -35,97 +43,111 @@ def generate_caption(
     ...
 ```
 
-## Installing JoyCaption
+### Runtime Notes
 
-Create:
+- Captioners are discovered by `core/captioning_config.py`.
+- Loading and execution are handled by `core/captioner.py`.
+- Captioning is GPU-heavy; WebbDuck unloads generation pipelines before captioning to free VRAM.
+- If no captioner is installed, the rest of WebbDuck still works normally.
 
-```text
-~/.webbduck/plugins/captioners/joycaption/captioner.py
-```
+### Bundled Reference
 
-You can also use the bundled reference implementation at:
-
-- `plugins/captioners/joycaption/captioner.py`
-
-## Notes
-
-- Captioning is GPU-intensive.
-- WebbDuck offloads generation pipelines before captioning to free VRAM.
-
-## Troubleshooting
-
-- If `Caption` does not appear: verify plugin path and restart server.
-- If out-of-memory occurs: close other GPU apps or reduce model load.
-
----
+The repo includes a reference captioner layout in `plugins/captioners/joycaption/`.
 
 ## Web-App Plugins
 
-Web-app plugins can provide their own page inside WebbDuck without hardcoding
-tool-specific logic in WebbDuck core.
+Web-app plugins render their own page inside WebbDuck and can optionally mount backend API routes.
 
-### Structure
+### Folder Layout
 
 ```text
-webapps/
-`- your_plugin/
-   |- plugin.json
-   |- backend.py      # optional
-   `- ui/
-      `- index.html
+plugins/
+`- webapps/
+   `- my_plugin/
+      |- plugin.json
+      |- backend.py      # optional
+      `- ui/
+         `- index.html
 ```
 
-### plugin.json
+### `plugin.json`
+
+Required fields:
 
 ```json
 {
-  "id": "your_plugin",
-  "name": "Your Plugin",
-  "description": "Optional short summary",
-  "entry": "index.html",
-  "order": 50,
-  "backend": "backend.py"
+  "id": "my_plugin",
+  "name": "My Plugin",
+  "entry": "index.html"
 }
 ```
 
-### Runtime Routes
+Optional fields:
 
-- Plugin list API: `GET /plugins/web`
-- Plugin UI mount: `/plugins/web/<id>/ui/<entry>`
-- Plugin backend mount: `/plugins/web/<id>/api/*` (if `backend.py` exports `get_router(...)`)
-- Remote plugin list API: `GET /plugins/web/remote`
-- Remote plugin connect API: `POST /plugins/web/remote/connect` with `{ "base_url": "127.0.0.1:8020" }`
-- Remote plugin disconnect API: `DELETE /plugins/web/remote/<id>`
+- `description`
+- `order`
+- `backend` (defaults to `backend.py` if you use a backend file)
 
-### Remote Plugin Connect (No Local Install)
+### Routes Exposed By WebbDuck
 
-You can connect plugins that are not installed in local plugin folders:
+- `GET /plugins/web`: local bundled and discovered web-app plugins
+- `GET /plugins/web/remote`: currently connected remote plugins
+- `POST /plugins/web/remote/connect`: connect a remote plugin by URL
+- `DELETE /plugins/web/remote/<id>`: disconnect a remote plugin
+- `/plugins/web/<id>/ui/<entry>`: mounted plugin UI
+- `/plugins/web/<id>/api/*`: mounted plugin backend routes when `backend.py` exports `get_router(...)`
+
+### Backend Contract
+
+If a plugin needs backend routes, `backend.py` should export `get_router(...) -> APIRouter`.
+
+WebbDuck calls the router factory from `core/web_plugins.py` and mounts the result under `/plugins/web/<id>/api`.
+
+## Remote Plugins
+
+You can connect a plugin without installing it locally:
 
 1. Open WebbDuck `Settings`.
-2. In `Connect Remote Plugin`, enter `ip:port` or full URL (example `127.0.0.1:8020`).
+2. Enter `ip:port` or a full URL in `Connect Remote Plugin`.
 3. Click `Connect Plugin`.
-4. WebbDuck adds a new top tab for that plugin and persists it for future restarts.
 
-Remote connection behavior:
+Discovery tries these manifest URLs first:
 
-- WebbDuck tries manifest discovery at:
-  - `/webbduck-plugin.json`
-  - `/.well-known/webbduck-plugin.json`
-  - `/plugin.json`
-- If no manifest is found, WebbDuck uses the entered URL as the plugin UI URL directly.
+- `/webbduck-plugin.json`
+- `/.well-known/webbduck-plugin.json`
+- `/plugin.json`
 
-### DNADuck (Optional External Plugin)
+If no manifest is found, WebbDuck treats the entered URL as the UI entry directly.
 
-DNADuck is not bundled in WebbDuck. Install it from the DNADuck repo:
+## Updating Plugin Support In WebbDuck
+
+### Captioner changes
+
+- Discovery rules live in `core/captioning_config.py`.
+- Runtime loading/unloading lives in `core/captioner.py`.
+- API surfaces live in `server/app.py` (`/captioners`, `/caption_styles`, `/caption`).
+
+### Web-app plugin changes
+
+- Discovery and mounting live in `core/web_plugins.py`.
+- HTTP endpoints live in `server/app.py`.
+- UI wiring for tabs and remote plugin settings lives in `ui/app.js`.
+
+When plugin contracts change, update this file and `plugins/README.md` together.
+
+## Optional External Plugins
+
+`plugins/webapps/dnaduck/` and `plugins/webapps/duckmotion/` are integration points for separately managed plugin projects. WebbDuck should not require those repos to be present for core functionality.
+
+Install a plugin repo into WebbDuck with its installer script when provided, for example:
 
 ```bash
-cd /path/to/dnaduck
-python3 tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
+python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
 ```
 
-Then restart WebbDuck. The DNADuck plugin supports:
+## Troubleshooting
 
-1. `auto` (default): try managed API first, then fallback to local CLI.
-2. `managed_api`: start/reuse DNADuck API from plugin backend.
-3. `local_cli`: WebbDuck invokes DNADuck CLI directly.
-4. `remote_api`: set API base (for example `http://127.0.0.1:8020`) and WebbDuck forwards plugin requests to that server.
+- Missing caption button: verify the captioner folder path and restart WebbDuck.
+- Plugin tab missing: check `plugin.json` and plugin search path order.
+- Backend plugin routes unavailable: make sure `backend.py` exports `get_router(...)` and returns an `APIRouter`.
+- WebbDuck seems slower after plugin testing: confirm no plugin job is still holding the shared GPU lease.

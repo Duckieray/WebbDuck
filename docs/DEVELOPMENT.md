@@ -1,171 +1,165 @@
 # WebbDuck Development Guide
 
-This guide covers the current backend and frontend extension points.
+Use this guide when you are changing WebbDuck itself. It focuses on where to edit, how the major pieces connect, and which checks to run before you stop.
 
-## Project Layout
+## Start Here
 
-```text
-webbduck/
-|- server/
-|  |- app.py            # FastAPI endpoints, queue metadata, ws wiring
-|  |- events.py         # socket broadcast helpers
-|  |- state.py          # runtime stage/progress/vram snapshot state
-|  |- storage.py        # output persistence + searchable manifest index
-|  |- thumbnails.py     # thumbnail generation
-|- core/
-|  |- worker.py         # GPU worker loop
-|  |- generation.py     # mode selection + prompt/pipeline execution
-|  |- pipeline.py       # pipeline lifecycle, scheduler + LoRA application
-|  |- schedulers.py     # scheduler registry
-|- models/
-|  |- registry.py       # model/LoRA discovery and registry sync
-|- ui/
-|  |- app.js
-|  |- core/
-|  |- modules/
-|  |- styles/
-```
+Read these docs in order when you are new to the repo:
 
-## High-Level Runtime Flow
+1. `docs/ARCHITECTURE.md` for the repo map and ownership.
+2. `AGENTS.md` for project rules, guardrails, and standard commands.
+3. `ui/README.md`, `tests/README.md`, or `docs/PLUGINS.md` if you are working in those areas.
 
-1. UI submits an action (`/generate`, `/test`, `/upscale`, etc.).
-2. Backend validates and enqueues GPU work.
-3. `core/worker.py` processes jobs serially.
-4. `core/generation.py` selects mode and runs the pipeline.
-5. Outputs + metadata are written to `outputs/`.
-6. WebSocket updates push `state`, `queue`, and `catalog` events to clients.
+## Setup
 
-## Backend Patterns
-
-### Queue-first GPU execution
-
-Any GPU-heavy endpoint should enqueue a job and let `core/worker.py` process it.
-
-Current queue endpoint behavior:
-- `POST /generate`, `POST /test`, `POST /upscale` all enqueue jobs.
-- `wait_for_result=false` returns immediately with queue metadata.
-- Queue snapshots are pushed over WebSocket (`type=queue`).
-
-### Gallery search index
-
-- Search uses `outputs/manifest.jsonl` built and maintained by `server/storage.py`.
-- Manifest entries are appended on save and pruned on image/run delete.
-- Search endpoint:
-  - `GET /gallery/search?q=...&start=...&limit=...`
-  - keyword-based matching with relevance ranking.
-
-### Job shape
-
-```python
-job = {
-    "job_id": "uuid",
-    "type": "batch|test|upscale|...",
-    "settings": {...},
-    "future": future,
-    "on_start": callback,
-    "on_finish": callback,
-}
-```
-
-### WebSocket payload types
-
-- `state`: progress/stage/VRAM runtime info.
-- `queue`: queue/running/recent-completed metadata.
-- `catalog`: model/LoRA catalog changed; UI should refresh model lists.
-
-## Catalog Refresh
-
-`server/app.py` runs a background watcher that checks:
-- `checkpoint/sdxl/`
-- `lora/`
-- `lora/loras.json`
-- `checkpoint/sdxl/models.json`
-
-If signatures change, `refresh_registries()` runs and `catalog` is broadcast.
-
-Env var:
-- `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`).
-
-## LoRA Behavior
-
-- LoRAs are architecture-filtered per base model.
-- Local `.safetensors` additions are auto-synced into `lora/loras.json`.
-- API returns LoRA default `weight` and description.
-- During generation, pipeline returns a combined trigger phrase.
-- `core/generation.py` injects that trigger phrase into active prompt fields.
-
-## Frontend Patterns
-
-### State persistence
-
-`ui/core/state.js` persists Studio settings to `localStorage` (`webbduck_state_v2`).
-
-### Queue UI
-
-- Queue list is updated from WebSocket `queue` events.
-- Users can expand job details and cancel queued jobs.
-- Running jobs can be cancellation-requested (status moves to `cancelling`).
-- Queue modal is separate from Studio controls.
-
-### Progress + settings surface
-
-- Main status indicator is always visible in top-right (`Ready`/stage + percentage).
-- Detailed generation progress card is docked in the Studio status bar.
-- Settings modal contains long-run warning threshold and CLIP_SKIP2 toggle.
-
-### Mobile Studio pane mode
-
-- Studio on mobile supports explicit pane switching:
-  - `Settings` pane (controls)
-  - `Preview` pane (workspace)
-- Toggle is managed in `ui/app.js` and styled in `ui/styles/theme-nova.css`.
-
-### Catalog updates
-
-`ui/core/events.js` emits `Events.CATALOG_UPDATE`; `ui/app.js` reloads models/loras when this event arrives.
-
-## Adding an Endpoint
-
-1. Add route in `server/app.py`.
-2. If GPU-bound, enqueue and handle in `core/worker.py`.
-3. Add wrapper in `ui/core/api.js`.
-4. Add UI behavior in `ui/app.js` or a feature module.
-5. Add/adjust tests under `tests/`.
-
-## Testing
+### Linux / WSL
 
 ```bash
-pytest -v
-pytest tests/test_server.py -v
-pytest tests/test_modes.py -v
+conda create -n webbduck python=3.10 -y
+conda activate webbduck
+pip install -r requirements.txt
+mkdir -p checkpoint/sdxl lora embeddings outputs weights
 ```
 
-Use the project conda environment if you run tests through WSL.
+### Windows
 
-## API Surface (Common Endpoints)
+Use `docs/WINDOWS_TESTING.md` for the full Windows-native setup and smoke-test flow.
 
-- `POST /generate`
-- `POST /test`
-- `POST /upscale`
-- `GET /models`
-- `GET /second_pass_models`
-- `GET /models/{base_model:path}/loras`
-- `GET /models/{base_model:path}/embeddings`
-- `GET /gallery`
-- `GET /gallery/search`
-- `GET /queue`
-- `POST /queue/cancel`
-- `POST /tokenize`
-- `POST /caption`
-- `GET /captioners`
-- `GET /caption_styles`
-- `GET /health`
-- `GET /ws` (WebSocket)
+## Run
 
-## Runtime Environment Knobs
+### Scripted launcher
+
+```bash
+./startup.sh
+./startup.sh --env webbduck --output ./outputs --port 8020
+./startup.sh --models /path/to/models --hf-cache /path/to/huggingface-cache --port 8020
+```
+
+### Direct launcher
+
+```bash
+conda activate webbduck
+python run.py --output ./outputs --port 8010
+```
+
+`startup.sh` is the easiest way to run with environment overrides on Linux/WSL. `run.py` is the simplest entrypoint for direct debugging.
+
+## Architecture Rules
+
+- Queue-first GPU execution: request handlers should enqueue heavy work for `core/worker.py`.
+- Shared GPU lease: coordinate in-process GPU access through `core/gpu_lease.py`.
+- Keep backend and frontend payloads aligned whenever request fields change.
+- Preserve catalog refresh behavior for checkpoints, LoRAs, embeddings, and weights.
+- Prefer app modals over browser popup APIs.
+- Keep plugins optional and non-blocking for core generation.
+
+## Where To Make Changes
+
+### Backend and API
+
+- `server/app.py`: routes, payload parsing, queue entrypoints, plugin endpoints.
+- `server/events.py`: WebSocket broadcasts.
+- `server/state.py`: shared runtime status snapshot.
+- `server/storage.py`: output metadata and gallery manifest.
+- `server/thumbnails.py`: thumbnail generation.
+
+### Runtime and Generation
+
+- `core/worker.py`: queued execution.
+- `core/generation.py`: normalized generation flow and mode selection.
+- `core/pipeline.py`: Diffusers lifecycle, model load/unload, LoRA application.
+- `core/runtime.py`: runtime profile and device helpers.
+- `core/gpu_lease.py`: in-process GPU arbitration.
+- `modes/*.py`: per-mode generation logic.
+- `prompt/*.py`: prompt conditioning and long-prompt behavior.
+
+### Models and Assets
+
+- `models/registry.py`: checkpoint, LoRA, embedding, and asset discovery.
+- `models/upscaler.py`: upscaler helpers.
+
+### Frontend
+
+- `ui/index.html`: markup for Studio, Gallery, dialogs, and controls.
+- `ui/app.js`: main page wiring and screen-level behaviors.
+- `ui/core/api.js`: client request wrappers.
+- `ui/core/state.js`: persisted Studio state.
+- `ui/core/events.js`: local event bus.
+- `ui/modules/*.js`: feature modules like Gallery, Lightbox, LoRAs, embeddings, masks, and progress.
+- `ui/styles/`: tokens, layout, components, and theme styles.
+
+## Common Update Recipes
+
+### Add a New Control That Affects Generation
+
+1. Add the markup in `ui/index.html`.
+2. Read and write it in `ui/app.js`.
+3. Persist it in `ui/core/state.js` if it should survive refreshes.
+4. Send it through `ui/core/api.js`.
+5. Parse and validate it in `server/app.py`.
+6. Apply it in `core/generation.py`, `core/pipeline.py`, or the relevant mode file.
+7. Add focused tests and update docs.
+
+### Add a New Endpoint
+
+1. Register the route in `server/app.py`.
+2. Enqueue GPU-heavy work instead of running it inline.
+3. Add a frontend API wrapper if the UI consumes it.
+4. Add a test in `tests/test_server.py` or another focused test module.
+
+### Change LoRA or Embedding Behavior
+
+1. Start in `models/registry.py`.
+2. Check any request/response changes in `server/app.py`.
+3. Update `ui/modules/LoraManager.js` or `ui/modules/EmbeddingManager.js`.
+4. Run focused tests such as `tests/test_embedding_loading.py` and `tests/test_server.py`.
+
+### Change Gallery Behavior
+
+1. Update persistence or search behavior in `server/storage.py`.
+2. Update gallery endpoints in `server/app.py` if needed.
+3. Update rendering and interaction logic in `ui/modules/GalleryManager.js` and `ui/modules/LightboxManager.js`.
+4. Run `tests/test_thumbnails.py` plus the relevant server tests.
+
+### Change Plugin Integration
+
+1. Update `core/captioning_config.py`, `core/captioner.py`, or `core/web_plugins.py`.
+2. Keep failures isolated so WebbDuck still works without the plugin.
+3. Update `docs/PLUGINS.md` and `plugins/README.md`.
+
+## Testing Tiers
+
+### Fast targeted checks
+
+```bash
+conda run -n webbduck pytest tests/test_server.py -v
+conda run -n webbduck pytest tests/test_prompt_conditioning.py -v
+conda run -n webbduck pytest tests/test_ui_sanity.py -v
+```
+
+### Default non-slow suite
+
+```bash
+conda run -n webbduck pytest -v -m "not slow"
+```
+
+### Broader validation when needed
+
+```bash
+conda run -n webbduck pytest -v
+```
+
+Use `tests/README.md` to pick the narrowest suite that still covers your change.
+
+## Environment Variables
 
 - `WEBBDUCK_OUTPUT_DIR`
 - `WEBBDUCK_PORT`
+- `WEBBDUCK_MODELS_DIR`
+- `WEBBDUCK_CHECKPOINT_DIR`
+- `WEBBDUCK_HF_CACHE_DIR`
+- `WEBBDUCK_WEIGHTS_DIR`
+- `WEBBDUCK_PLUGINS_DIR`
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
 - `WEBBDUCK_CATALOG_POLL_SECONDS`
@@ -174,17 +168,15 @@ Use the project conda environment if you run tests through WSL.
 - `WEBBDUCK_DTYPE`
 - `WEBBDUCK_STRICT_DEVICE`
 - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS`
+- `WEBBDUCK_USE_IPC_COLLECT`
 
-## Cleanup Notes
+## Documentation Update Checklist
 
-- Legacy UI entrypoints/modules from the pre-Nova path were removed:
-  - `ui/app_old.js`
-  - `ui/index_old.html`
-  - lowercase legacy modules in `ui/modules/`
-  - legacy `ui/ws.js` and old monolithic CSS files
-- Active app flow is now centered on:
-  - `ui/app.js`
-  - `ui/core/*`
-  - `ui/modules/*` (PascalCase modules)
-  - `ui/styles/main.css` + Nova theme stack
-- For new cleanup passes, keep enforcing “no browser popup APIs” (`alert`, `confirm`) in active UI code; use modal components instead.
+When a change ships, update the smallest set of docs that now differ from reality:
+
+- `README.md` for install, startup, or top-level capability changes.
+- `docs/ARCHITECTURE.md` if file ownership or repo layout changes.
+- `docs/DEVELOPMENT.md` if contributor workflows change.
+- `docs/USER_GUIDE.md` or `docs/SIMPLE_GUIDE.md` if the user workflow changes.
+- `docs/PLUGINS.md` and `plugins/README.md` if plugin contracts change.
+- `ui/README.md` and `tests/README.md` when frontend or validation structure changes.

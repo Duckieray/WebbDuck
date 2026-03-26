@@ -1,16 +1,15 @@
 # WebbDuck Simple Guide
 
-This guide is for first-time users.
-WebbDuck makes images from text on your own machine.
+This is the short help guide shown inside WebbDuck. Use `docs/USER_GUIDE.md` for the full version.
 
 ## 1. What WebbDuck Does
 
 - You type what you want to see.
-- WebbDuck creates one or more images.
-- You can fix parts of an image, extend an image, or upscale an image.
-- Your images and settings are saved so you can find them later.
+- WebbDuck makes images on your own machine.
+- You can edit with img2img, inpaint, smart extend, and upscale tools.
+- Saved images show up later in Gallery.
 
-## 2. Start the Server
+## 2. Start WebbDuck
 
 Run:
 
@@ -18,103 +17,80 @@ Run:
 python run.py
 ```
 
-Then open:
+Then open `http://localhost:8010`.
 
-`http://localhost:8010`
+## 3. Make Your First Image
 
-## 3. First Image (Quick Start)
-
-1. Open the `Studio` tab.
+1. Open `Studio`.
 2. Pick a `Model`.
-3. In `Prompt`, describe your image.
-4. Optional: add a `Negative Prompt` (things to avoid).
+3. Type a short prompt.
+4. Optional: add a negative prompt.
 5. Click `Generate`.
 
-When done, your newest image appears in the big preview.
+Your newest result appears in the preview area when the job finishes.
 
-## 4. Prompt Tips (Simple)
+## 4. Quick Prompt Tips
 
-- Start short and clear.
-- Add details after the main idea.
-- Example prompt: `portrait photo of a woman with glasses, soft light, bedroom background`
+- Start simple.
+- Put the main subject first.
+- Add style and lighting after the main idea.
+- Example prompt: `portrait photo of a woman with glasses, soft window light`
 - Example negative prompt: `blurry, bad hands, watermark, text`
 
-## 5. Main Settings (What They Mean)
+## 5. Main Settings
 
 - `Width` and `Height`: image size.
-  Bigger size can look better, but is slower and uses more memory.
-- `Aspect Ratio` buttons: quick shape presets (1:1, 9:16, etc.).
-- `Steps`: how long the model thinks.
-  More steps can improve detail, but takes longer.
-- `CFG`: how strongly the model follows your prompt.
+- `Steps`: how long the model works.
+- `CFG`: how strongly the prompt is followed.
 - `Scheduler`: the generation method.
-  Different schedulers can give slightly different look/speed.
-- `Seed`: random starting number.
-  Same seed + same settings gives a similar result.
-- `Batch Size`: number of images made in one request.
+- `Seed`: repeatable starting point; blank means random.
+- `Batch Size`: how many images to make in one job.
 
-## 6. Input Image, Inpaint, and Smart Extend
+## 6. Edit an Existing Image
 
-If you upload an image:
+Upload an image to unlock edit tools.
 
-- `Denoising Strength`:
-  Lower = keep image close to original.
-  Higher = change image more.
-- `Mask`: paint where edits are allowed.
+- `Denoising Strength`: low keeps the original closer; high changes it more.
+- `Mask`: paint where edits can happen.
 - `Inpaint Mode`:
-  - `Replace`: repaint masked area.
-  - `Keep`: protect masked area and change outside it.
-- `Smart Extend`: make canvas bigger and fill new space.
-  Use drag handles in preview to choose where to extend.
+  - `Replace` changes the masked area.
+  - `Keep` protects the mask and edits around it.
+- `Smart Extend`: makes the canvas bigger and fills the new space.
 
-## 7. Queue (Many Jobs)
+## 7. Queue and Gallery
 
-- If you click `Generate` many times, jobs go to queue.
-- Open `Queue` in the top bar to see pending/running jobs.
-- You can cancel queued jobs and request cancellation of the currently running job.
+- Open `Queue` to see pending and running jobs.
+- Open `Gallery` to browse saved images.
+- Search Gallery with simple keywords like `forest night`.
+- Use the `Thumb` slider to change gallery thumbnail size.
 
-## 8. Gallery (Find Old Images)
+## 8. Lightbox
 
-- Open `Gallery` to see saved images in a flat grid.
-- Use search to find old images by keywords.
-- Search uses keyword matching.
-  Example: `blonde glasses` finds images that contain both words.
-- Use `All / HD / Favorites` filters and the `Thumb` slider to control gallery view size.
-- Gallery auto-loads more images when you scroll down.
-
-## 9. Lightbox (Image Viewer)
-
-Click any image to open viewer.
+Click any gallery image to open the full viewer.
 
 You can:
 
-- Regenerate with same settings
-- Upscale
-- Send to Inpaint
-- Download
-- Delete image or run
+- regenerate
+- upscale
+- send to inpaint
+- download
+- delete
 
-Use `Info` to show metadata like prompt, model, seed, LoRAs, embeddings, and inpaint/outpaint settings.
+Use `Info` to see prompt, model, seed, LoRAs, embeddings, and other settings.
 
-## 10. If Something Goes Wrong
-
-- Generation is very slow:
-  lower size, steps, or batch size.
-- You get memory errors:
-  close other heavy apps and reduce batch/size.
-- Result does not match prompt:
-  simplify prompt and lower CFG a little.
-- Search finds nothing:
-  try fewer words first, then add more.
-
-## 11. Good Starter Preset
-
-Try this first:
+## 9. Good Starter Preset
 
 - Size: `1024 x 1024`
 - Steps: `30`
 - CFG: `6` to `8`
 - Batch: `1`
-- Denoising (img2img): `0.75`
+- Denoising for img2img: about `0.75`
 
-Then adjust one setting at a time.
+Change one setting at a time while learning.
+
+## 10. If Something Goes Wrong
+
+- Slow generation: lower size, steps, or batch size.
+- Memory errors: close other GPU apps and lower the requested size.
+- Bad prompt match: simplify the prompt and lower CFG slightly.
+- Search finds nothing: try fewer words first.

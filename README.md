@@ -1,113 +1,108 @@
-# WebbDuck v1.0.0
+# WebbDuck
 
-WebbDuck is a local SDXL studio focused on fast iteration, clean metadata, and practical workflows.
+WebbDuck is a local-first SDXL image generation studio built for fast iteration, practical editing workflows, and filesystem-backed outputs you can keep on your own machine.
 
-Everything runs on your machine: generation, queueing, gallery, inpaint, and optional captioning.
+## What It Includes
 
-## Key Features
+- FastAPI backend with queue-based generation and WebSocket status updates.
+- Zero-build web UI in `ui/` with Studio, Queue, Gallery, Lightbox, and plugin tabs.
+- Text-to-image, img2img, inpaint, outpaint, two-pass refinement, and upscaling.
+- LoRA and embedding discovery with live catalog refresh.
+- Manifest-backed gallery search and thumbnail serving.
+- Optional captioner and web-app plugin support.
 
-- Modern zero-build web UI (`ui/`) with Studio + Gallery views.
-- Mobile Studio pane toggle (`Preview` / `Settings`) for practical small-screen workflow.
-- Queue-based backend execution with real-time WebSocket updates.
-- Queue modal supports canceling queued jobs and requesting cancellation for active running jobs.
-- Text-to-image, img2img, inpaint, second-pass refinement, and upscaling.
-- LoRA stack with per-LoRA weights, persisted UI state, and trigger phrase injection during generation.
-- Embedding stack (textual inversion) with auto-discovery, architecture filtering, and per-model token loading.
-- Token counter with warning when prompt exceeds the 77-token CLIP window.
-- Long-prompt chunking for SDXL conditioning (prompts beyond 77 tokens are chunk-encoded instead of hard-truncated).
-- Flat gallery grid with thumbnail-size slider, infinite scroll, global keyword search, and lightbox action toolbar.
-- Live catalog refresh when checkpoints, LoRAs, or embeddings are added/removed from watched folders.
-- Optional captioner plugin system (JoyCaption supported).
-- Generic web-app plugin host (`plugins/webapps`) so plugins can render their own UI page in WebbDuck.
+## Quick Start
 
-## Requirements
-
-- OS: Windows 10/11 or Linux.
-- Python: 3.10+.
-- GPU: NVIDIA recommended for practical SDXL speed and memory headroom.
-- Disk: enough space for checkpoints, LoRAs, embeddings, and outputs.
-
-## Installation
+### Linux / WSL
 
 ```bash
-git clone https://github.com/Duckieray/WebbDuck.git
-cd webbduck
 python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+mkdir -p checkpoint/sdxl lora embeddings outputs weights
+python run.py
 ```
 
-Windows:
+### Windows (PowerShell)
 
 ```powershell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 pip install -r requirements.windows.txt
-mkdir checkpoint\sdxl, lora, outputs, weights
-mkdir embeddings
-```
-
-PyTorch GPU compatibility note (important):
-- The correct torch build depends on your GPU generation, driver, Python version, and available PyTorch wheels.
-- Some newer GPUs may require nightly torch builds before stable wheels support their SM architecture.
-- If `torch.cuda.is_available()` is `False`, or you see CUDA kernel errors (for example `no kernel image is available`), switch to a different PyTorch wheel channel.
-- Example alternatives:
-  - Stable: `https://download.pytorch.org/whl/cu124`
-  - Nightly: `https://download.pytorch.org/whl/nightly/cu128` (or `cu126` if needed)
-- Verify after install:
-
-```powershell
-python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu')"
-```
-
-Linux:
-
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-mkdir -p checkpoint/sdxl lora outputs weights
-mkdir -p embeddings
-```
-
-## Run
-
-```bash
-python run.py
+mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
+python .\run.py
 ```
 
 Open `http://localhost:8010`.
 
-Custom port example:
+If you prefer the repo's conda-based workflow, use `startup.sh` on Linux/WSL or the commands in `docs/WINDOWS_TESTING.md` on Windows.
+
+## Common Run Commands
 
 ```bash
 python run.py --port 8020
+python run.py --output ./outputs --models /path/to/models
+python run.py --hf-cache /path/to/huggingface-cache
+./startup.sh --env webbduck --output ./outputs --port 8010
 ```
 
-## Runtime Notes
+## Key Runtime Settings
 
-- `run.py` starts FastAPI with reload and safe environment defaults.
-- Queue and progress updates are pushed over `/ws`.
-- Gallery search uses a manifest index (`outputs/manifest.jsonl`) for global matching.
-- Catalog changes are scanned on an interval and pushed to UI:
-  - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
-- Asset folders can be overridden:
-  - `WEBBDUCK_LORA_DIR` (default `../lora` relative to app root)
-  - `WEBBDUCK_EMBEDDING_DIR` (default `../embeddings` relative to app root)
-- Thumbnail serving concurrency can be tuned:
-  - `WEBBDUCK_THUMB_CONCURRENCY` (default `2`)
-- Runtime device/dtype can be overridden:
-  - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
-  - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)
-  - `WEBBDUCK_STRICT_DEVICE=1` to fail fast instead of auto-fallback when CUDA is requested but unusable
-- GPU lease wait timeout for core generation jobs:
-  - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default `180`; avoids indefinite 0% waits if another in-process runtime holds the GPU lease)
+- `WEBBDUCK_OUTPUT_DIR`: output root for images, metadata, and manifest.
+- `WEBBDUCK_MODELS_DIR`: shared models root; WebbDuck resolves checkpoints, LoRAs, embeddings, and weights under it.
+- `WEBBDUCK_HF_CACHE_DIR`: Hugging Face hub cache override.
+- `WEBBDUCK_DEVICE`: `cuda` or `cpu`.
+- `WEBBDUCK_DTYPE`: `float16`, `bfloat16`, or `float32`.
+- `WEBBDUCK_GPU_LEASE_WAIT_SECONDS`: bounded wait for shared GPU lease.
+- `WEBBDUCK_CATALOG_POLL_SECONDS`: asset refresh interval.
 
-## Documentation
+See `docs/DEVELOPMENT.md` and `AGENTS.md` for the full list and when to use each variable.
 
-- `docs/SIMPLE_GUIDE.md`
-- `docs/USER_GUIDE.md`
-- `docs/DEVELOPMENT.md`
-- `docs/WINDOWS_TESTING.md`
-- `docs/PLUGINS.md`
-- `ui/README.md`
+## Repo Map
+
+| Path | What lives there |
+| --- | --- |
+| `server/` | FastAPI routes, queue entrypoints, WebSocket, gallery APIs, thumbnails |
+| `core/` | worker loop, generation orchestration, pipeline lifecycle, runtime helpers, plugins |
+| `models/` | checkpoint, LoRA, embedding, and upscaler discovery |
+| `modes/` | text2img, img2img, inpaint, outpaint, two-pass mode logic |
+| `prompt/` | prompt conditioning and long-prompt chunking |
+| `ui/` | HTML, ES modules, CSS, and client-side state |
+| `plugins/` | bundled optional plugin examples |
+| `tests/` | pytest coverage and regression checks |
+| `docs/` | user, contributor, plugin, and platform docs |
+
+For a more detailed file-by-file map, read `docs/ARCHITECTURE.md`.
+
+## Documentation Guide
+
+- `docs/ARCHITECTURE.md`: where everything is and which file owns what.
+- `docs/DEVELOPMENT.md`: how to add features, run tests, and keep frontend/backend changes aligned.
+- `docs/USER_GUIDE.md`: end-user features and workflows.
+- `docs/SIMPLE_GUIDE.md`: short in-app help guide served by `/docs/simple-guide`.
+- `docs/PLUGINS.md`: captioner and web-app plugin setup and contracts.
+- `docs/WINDOWS_TESTING.md`: Windows-native setup, PyTorch guidance, and smoke tests.
+- `ui/README.md`: frontend structure and editing guidance.
+- `tests/README.md`: test suite map and how to choose focused verification.
+- `plugins/README.md`: bundled plugin examples and local layout.
+
+## Development Notes
+
+- GPU-heavy work should go through `core/worker.py`, not request handlers.
+- Keep backend request fields aligned with `ui/core/api.js`, `ui/app.js`, and `ui/core/state.js`.
+- Optional plugins must stay optional; WebbDuck core should still work when they are missing.
+- When behavior changes, update the relevant doc in `docs/`, `ui/README.md`, or `tests/README.md`.
+
+## Tests
+
+```bash
+pytest -v -m "not slow"
+pytest tests/test_server.py -v
+pytest tests/test_prompt_conditioning.py -v
+```
+
+See `tests/README.md` for the rest of the suite.
 
 ## License
 

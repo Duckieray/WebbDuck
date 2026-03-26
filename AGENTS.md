@@ -15,6 +15,18 @@ Use it as the first-stop reference for architecture, workflows, project rules, a
 - Plugin model: optional web-app plugins (`plugins/webapps`) can run local or remote.
 - DuckMotion/DNADuck are separately managed plugin repos; WebbDuck should not hard-require them.
 
+## 1.1 Read These Docs First
+
+When you need repo orientation, read these in order:
+
+1. `docs/ARCHITECTURE.md` - top-level repo map and file ownership.
+2. `docs/DEVELOPMENT.md` - contributor workflows and common update recipes.
+3. `ui/README.md` - frontend structure and editing guidance.
+4. `tests/README.md` - test suite map and focused verification.
+5. `docs/PLUGINS.md` - captioner and web-app plugin contracts.
+
+If repo layout or ownership changes, update `docs/ARCHITECTURE.md` before or alongside code changes.
+
 ## 2. Tech Stack
 
 - Python 3.10+
@@ -35,8 +47,9 @@ Key folders:
 - `models/` registry/discovery for models, LoRAs, embeddings
 - `modes/` txt2img, img2img, inpaint, outpaint, two-pass mode logic
 - `prompt/` SDXL conditioning + long-prompt chunking
+- `plugins/` bundled optional plugin examples and manifests
 - `tests/` pytest suite
-- `docs/` architecture and developer docs
+- `docs/` architecture, contributor, user, plugin, and platform docs
 
 ## 3. Core Architecture Rules
 
@@ -139,7 +152,7 @@ Key folders:
 
 ## 7. WSL/Linux Commands
 
-Recommended environment name: `webbduck` (legacy envs like `web_img` may still exist locally).
+Recommended environment name: `webbduck`.
 
 ### Setup
 
@@ -267,14 +280,26 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 ## 12. Source-of-Truth Docs
 
 - `README.md`
+- `docs/ARCHITECTURE.md`
 - `docs/DEVELOPMENT.md`
 - `docs/WINDOWS_TESTING.md`
 - `docs/USER_GUIDE.md`
+- `docs/SIMPLE_GUIDE.md`
 - `docs/PLUGINS.md`
+- `plugins/README.md`
 - `tests/README.md`
 - `ui/README.md`
 
 When behavior changes, keep these docs in sync.
+
+Doc ownership notes:
+
+- Update `README.md` for install/startup/top-level capability changes.
+- Update `docs/ARCHITECTURE.md` when folder ownership or file responsibilities change.
+- Update `docs/DEVELOPMENT.md` when contributor workflows or common recipes change.
+- Update `docs/USER_GUIDE.md` or `docs/SIMPLE_GUIDE.md` when user-visible workflows change.
+- Update `docs/PLUGINS.md` and `plugins/README.md` when plugin contracts or install steps change.
+- Update `ui/README.md` and `tests/README.md` when frontend or validation structure changes.
 
 ## 13. PR Expectations
 

@@ -1,32 +1,91 @@
-# WebbDuck Test Suite
+# WebbDuck Test Guide
 
-Pytest-based test suite for WebbDuck.
+WebbDuck uses pytest for server, runtime, mode, UI-sanity, and regression coverage.
 
-## Quick Start
-
-```bash
-# Activate your environment first
-pytest tests/test_modes.py -v          # fast logic checks
-pytest -v -m "not slow"               # non-GPU tests
-pytest -v                              # full suite
-```
-
-If you run WebbDuck in WSL with conda, use:
+## Quick Commands
 
 ```bash
-conda run -n <env_name> pytest -v -m "not slow"
+pytest tests/test_server.py -v
+pytest tests/test_prompt_conditioning.py -v
+pytest tests/test_ui_sanity.py -v
+pytest -v -m "not slow"
+pytest -v
 ```
 
-## Test Modules
+If you use the recommended conda environment in WSL/Linux:
 
-- `tests/test_modes.py`: mode selection and signatures.
-- `tests/test_pipeline.py`: pipeline manager and scheduler behavior.
-- `tests/test_server.py`: API endpoint behavior.
-- `tests/test_generation.py`: integration generation tests (GPU).
+```bash
+conda run -n webbduck pytest -v -m "not slow"
+```
+
+## Test File Map
+
+| File | Covers |
+| --- | --- |
+| `tests/test_server.py` | API route behavior and request validation |
+| `tests/test_server_captioning.py` | caption-related server endpoints |
+| `tests/test_modes.py` | mode selection and mode-specific request handling |
+| `tests/test_generation.py` | heavier generation integration coverage |
+| `tests/test_pipeline.py` | pipeline manager and scheduler behavior |
+| `tests/test_prompt_conditioning.py` | SDXL prompt conditioning and long-prompt logic |
+| `tests/test_embedding_loading.py` | embedding discovery and loading behavior |
+| `tests/test_captioning.py` | captioning integration helpers |
+| `tests/test_runtime.py` | runtime/device profile behavior |
+| `tests/test_thumbnails.py` | thumbnail generation and serving |
+| `tests/test_ui_sanity.py` | UI contract and markup sanity checks |
+| `tests/test_outpaint_pyramid_regression.py` | smart-extend/outpaint regression coverage |
+
+Shared fixtures and helpers live in `tests/conftest.py`.
+
+## Choosing The Right Tests
+
+### API or request payload change
+
+Run:
+
+```bash
+pytest tests/test_server.py -v
+```
+
+### Prompt or conditioning change
+
+Run:
+
+```bash
+pytest tests/test_prompt_conditioning.py -v
+pytest tests/test_modes.py -v
+```
+
+### Pipeline, runtime, or device behavior change
+
+Run:
+
+```bash
+pytest tests/test_pipeline.py -v
+pytest tests/test_runtime.py -v
+```
+
+### Gallery or thumbnail change
+
+Run:
+
+```bash
+pytest tests/test_thumbnails.py -v
+pytest tests/test_server.py -v
+```
+
+### Frontend contract change
+
+Run:
+
+```bash
+pytest tests/test_ui_sanity.py -v
+pytest tests/test_server.py -v
+```
 
 ## Markers
 
-- `slow`: GPU-heavy/integration tests.
+- `slow`: heavier integration or GPU-oriented checks
 
 Examples:
 
@@ -37,7 +96,9 @@ pytest -m "slow"
 
 ## Adding Tests
 
-1. Mode logic: `tests/test_modes.py`
-2. API routes: `tests/test_server.py`
-3. Generation behavior: `tests/test_generation.py`
-4. Shared fixtures: `tests/conftest.py`
+- Add server coverage to `tests/test_server.py` unless the feature has a clearer dedicated test file.
+- Add UI contract checks to `tests/test_ui_sanity.py` when markup or payload expectations change.
+- Add prompt logic tests to `tests/test_prompt_conditioning.py`.
+- Add runtime or pipeline checks to the focused runtime/pipeline files instead of growing unrelated modules.
+
+Keep tests close to the subsystem they validate so future contributors can find them quickly.
