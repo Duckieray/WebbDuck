@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@OpenCode'
 created_date: '2026-04-03 17:46'
-updated_date: '2026-04-03 17:46'
+updated_date: '2026-04-03 17:53'
 labels:
   - documentation
   - agents
@@ -23,6 +23,12 @@ references:
   - ui/README.md
   - tests/README.md
   - plugins/README.md
+  - .agents/README.md
+  - .agents/repo-overview.md
+  - .agents/backend-runtime.md
+  - .agents/frontend.md
+  - .agents/plugins-tests-docs.md
+  - plugins/captioners/joycaption/README.md
 priority: high
 ---
 
@@ -34,10 +40,10 @@ Update the tracked documentation so it matches the current WebbDuck codebase, ad
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Tracked documentation reflects the current repo structure, runtime entrypoints, and documented commands.
-- [ ] #2 AGENTS.md points to the new `.agents/` reference docs and explicitly instructs agents to update documentation when behavior or structure changes.
-- [ ] #3 A committed `.agents/` documentation set exists and provides full-repo orientation covering backend, frontend, plugins, tests, and key workflows.
-- [ ] #4 Cross-links between AGENTS.md, `.agents/`, and the main docs are internally consistent and do not point to stale files or behaviors.
+- [x] #1 Tracked documentation reflects the current repo structure, runtime entrypoints, and documented commands.
+- [x] #2 AGENTS.md points to the new `.agents/` reference docs and explicitly instructs agents to update documentation when behavior or structure changes.
+- [x] #3 A committed `.agents/` documentation set exists and provides full-repo orientation covering backend, frontend, plugins, tests, and key workflows.
+- [x] #4 Cross-links between AGENTS.md, `.agents/`, and the main docs are internally consistent and do not point to stale files or behaviors.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,6 +55,18 @@ Update the tracked documentation so it matches the current WebbDuck codebase, ad
 4. Refresh the main tracked docs where they drift from current code or commands.
 5. Run focused verification for markdown links and referenced paths, then record results.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added a committed `.agents/` reference set with repo overview, backend/runtime, frontend, and plugins/tests/docs guidance so agents have a stable in-repo orientation path.
+
+Updated `AGENTS.md` to point to the `.agents/` docs first, expanded the source-of-truth doc list, and made documentation updates a same-task requirement when behavior, routes, commands, or structure change.
+
+Refreshed contributor-facing docs to match the current codebase and removed the stale implication that WebbDuck bundles `tools/install_webbduck_plugin.py`.
+
+Updated test and UI docs to reflect current structure and expectations, including the browser/runtime requirements for `tests/test_ui_sanity.py` and the role of `ui/core/utils.js`.
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
