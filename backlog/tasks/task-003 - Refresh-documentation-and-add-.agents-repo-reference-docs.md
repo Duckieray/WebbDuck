@@ -1,10 +1,11 @@
 ---
 id: TASK-003
 title: Refresh documentation and add .agents repo reference docs
-status: To Do
+status: In Progress
 assignee:
   - '@OpenCode'
 created_date: '2026-04-03 17:46'
+updated_date: '2026-04-03 17:46'
 labels:
   - documentation
   - agents
@@ -38,6 +39,16 @@ Update the tracked documentation so it matches the current WebbDuck codebase, ad
 - [ ] #3 A committed `.agents/` documentation set exists and provides full-repo orientation covering backend, frontend, plugins, tests, and key workflows.
 - [ ] #4 Cross-links between AGENTS.md, `.agents/`, and the main docs are internally consistent and do not point to stale files or behaviors.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Compare current docs against the live codebase and note stale references or missing subsystems.
+2. Add `.agents/` reference docs covering repo overview, backend/runtime, frontend, plugins, and tests/docs workflows.
+3. Update `AGENTS.md` to point to `.agents/` and require docs to be kept current.
+4. Refresh the main tracked docs where they drift from current code or commands.
+5. Run focused verification for markdown links and referenced paths, then record results.
+<!-- SECTION:PLAN:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
