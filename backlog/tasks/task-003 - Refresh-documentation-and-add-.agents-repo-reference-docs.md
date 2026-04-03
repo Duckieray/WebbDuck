@@ -1,7 +1,7 @@
 ---
 id: TASK-003
 title: Refresh documentation and add .agents repo reference docs
-status: In Progress
+status: Done
 assignee:
   - '@OpenCode'
 created_date: '2026-04-03 17:46'
@@ -56,17 +56,18 @@ Update the tracked documentation so it matches the current WebbDuck codebase, ad
 5. Run focused verification for markdown links and referenced paths, then record results.
 <!-- SECTION:PLAN:END -->
 
-## Implementation Notes
+## Final Summary
 
-<!-- SECTION:NOTES:BEGIN -->
-Added a committed `.agents/` reference set with repo overview, backend/runtime, frontend, and plugins/tests/docs guidance so agents have a stable in-repo orientation path.
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a committed `.agents/` documentation set for repo orientation, updated `AGENTS.md` to point to it first, and tightened the standing rule that documentation must be updated in the same task when code or workflows change.
 
-Updated `AGENTS.md` to point to the `.agents/` docs first, expanded the source-of-truth doc list, and made documentation updates a same-task requirement when behavior, routes, commands, or structure change.
+Refreshed the main contributor-facing docs to match the current codebase, clarified current UI/test expectations, and removed the stale implication that WebbDuck bundles a generic `tools/install_webbduck_plugin.py` helper.
 
-Refreshed contributor-facing docs to match the current codebase and removed the stale implication that WebbDuck bundles `tools/install_webbduck_plugin.py`.
-
-Updated test and UI docs to reflect current structure and expectations, including the browser/runtime requirements for `tests/test_ui_sanity.py` and the role of `ui/core/utils.js`.
-<!-- SECTION:NOTES:END -->
+Verification:
+- Repo-aware referenced-path validation across the updated docs (`python` script run from the repo root) passed.
+- Grep verification confirmed there are no remaining `Webbduck` casing mistakes in markdown docs.
+- Checked remaining `tools/install_webbduck_plugin.py` reference and confirmed it is now only a clarifying note in `docs/PLUGINS.md`, not a stale bundled-script instruction.
+<!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
