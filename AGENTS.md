@@ -19,13 +19,18 @@ Use it as the first-stop reference for architecture, workflows, project rules, a
 
 When you need repo orientation, read these in order:
 
-1. `docs/ARCHITECTURE.md` - top-level repo map and file ownership.
-2. `docs/DEVELOPMENT.md` - contributor workflows and common update recipes.
-3. `ui/README.md` - frontend structure and editing guidance.
-4. `tests/README.md` - test suite map and focused verification.
-5. `docs/PLUGINS.md` - captioner and web-app plugin contracts.
+1. `.agents/README.md` - agent-specific index for the committed repo reference set.
+2. `.agents/repo-overview.md` - runtime flow, subsystem map, and where to start editing.
+3. `.agents/backend-runtime.md` - backend, worker, pipeline, model, and prompt internals.
+4. `.agents/frontend.md` - UI structure, state flow, modules, and styles.
+5. `.agents/plugins-tests-docs.md` - plugin contracts, test map, and doc-maintenance rules.
+6. `docs/ARCHITECTURE.md` - top-level repo map and file ownership.
+7. `docs/DEVELOPMENT.md` - contributor workflows and common update recipes.
+8. `ui/README.md` - frontend structure and editing guidance.
+9. `tests/README.md` - test suite map and focused verification.
+10. `docs/PLUGINS.md` - captioner and web-app plugin contracts.
 
-If repo layout or ownership changes, update `docs/ARCHITECTURE.md` before or alongside code changes.
+If repo layout or ownership changes, update `docs/ARCHITECTURE.md` and the affected `.agents/*.md` references before or alongside code changes.
 
 ## 2. Tech Stack
 
@@ -87,7 +92,8 @@ Key folders:
 - Maintain backward-compatible defaults when changing UI controls.
 - Keep server errors actionable; fail fast with clear messages where possible.
 - Add/update tests for behavior changes when practical.
-- Update docs when behavior or setup changes.
+- Update docs when behavior, setup, commands, contracts, or repo structure changes.
+- Treat documentation maintenance as part of the same task, not follow-up cleanup.
 
 ## 4.1 Agent Operating Rules
 
@@ -253,8 +259,7 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 
 4. Integrate/update optional web plugins
 - Follow plugin search precedence: `WEBBDUCK_PLUGINS_DIR` -> `webbduck/plugins` -> `~/.webbduck/plugins`.
-- For local plugin installs, prefer installer commands that target WebbDuck repo root:
-  - `python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite`
+- If an external plugin repo ships its own installer, target the WebbDuck repo root when running it.
 - Keep plugin integration optional and non-blocking for core generation flow.
 
 ## 11. Troubleshooting Quick Reference
@@ -280,6 +285,11 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 ## 12. Source-of-Truth Docs
 
 - `README.md`
+- `.agents/README.md`
+- `.agents/repo-overview.md`
+- `.agents/backend-runtime.md`
+- `.agents/frontend.md`
+- `.agents/plugins-tests-docs.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DEVELOPMENT.md`
 - `docs/WINDOWS_TESTING.md`
@@ -291,10 +301,12 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - `ui/README.md`
 
 When behavior changes, keep these docs in sync.
+If code, commands, routes, file ownership, plugin contracts, or test workflow changes, update the relevant docs in the same task before stopping.
 
 Doc ownership notes:
 
 - Update `README.md` for install/startup/top-level capability changes.
+- Update `.agents/*.md` when repo navigation guidance, subsystem ownership, or agent workflow details change.
 - Update `docs/ARCHITECTURE.md` when folder ownership or file responsibilities change.
 - Update `docs/DEVELOPMENT.md` when contributor workflows or common recipes change.
 - Update `docs/USER_GUIDE.md` or `docs/SIMPLE_GUIDE.md` when user-visible workflows change.

@@ -1,17 +1,17 @@
 # JoyCaption Plugin
 
-Image captioning plugin for Webbduck using the [JoyCaption Alpha 2](https://huggingface.co/fancyfeast/llama-joycaption-alpha-two-hf-llava) model.
+Image captioning plugin for WebbDuck using the [JoyCaption Alpha 2](https://huggingface.co/fancyfeast/llama-joycaption-alpha-two-hf-llava) model.
 
 ## Requirements
 
-- **VRAM**: ~22GB (automatically managed/offloaded by WebbDuck to fit alongside generation)
-- **Dependencies**: Already included in webbduck's requirements (transformers, torch, PIL)
+- **VRAM**: Large captioning workloads can use substantial GPU memory; WebbDuck unloads generation models before captioning to make room.
+- **Dependencies**: Uses dependencies already present in the main WebbDuck environment, including `transformers`, `torch`, and Pillow.
 
 ## How It Works
 
-1. When you upload an image and click "🔍 Caption", this plugin generates a description
-2. The model downloads automatically from HuggingFace on first use (~15GB download)
-3. The caption populates your prompt field, which you can then edit
+1. When you upload an image and click `Caption`, this plugin generates a description.
+2. The model downloads automatically from Hugging Face on first use.
+3. The caption populates your prompt field, which you can then edit.
 
 ## Caption Styles
 
@@ -21,7 +21,7 @@ Image captioning plugin for Webbduck using the [JoyCaption Alpha 2](https://hugg
 | SD Prompt | Stable Diffusion-optimized prompts |
 | Short | Quick summaries |
 | MidJourney | MidJourney-style prompts |
-| Tags | Booru-style tag lists |
+| Booru | Booru-style tag lists |
 
 ## Credits
 

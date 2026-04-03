@@ -37,6 +37,8 @@ conda run -n webbduck pytest -v -m "not slow"
 
 Shared fixtures and helpers live in `tests/conftest.py`.
 
+`tests/test_ui_sanity.py` is a browser check, not a pure unit test. It expects a running WebbDuck server and Playwright/browser dependencies.
+
 ## Choosing The Right Tests
 
 ### API or request payload change
@@ -86,6 +88,7 @@ pytest tests/test_server.py -v
 ## Markers
 
 - `slow`: heavier integration or GPU-oriented checks
+- `unit`: fast unit tests
 
 Examples:
 

@@ -55,11 +55,7 @@ webapps/
 
 `dnaduck/` and `duckmotion/` are integration targets for separately managed plugin projects. Do not make WebbDuck core depend on those repos being installed locally.
 
-When a plugin repo provides an installer, point it at the WebbDuck repo root, for example:
-
-```bash
-python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
-```
+If an external plugin repo provides its own installer, point it at the WebbDuck repo root. This repository does not currently bundle a generic plugin installer script.
 
 ## Related Docs
 

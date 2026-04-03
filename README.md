@@ -77,6 +77,7 @@ For a more detailed file-by-file map, read `docs/ARCHITECTURE.md`.
 
 ## Documentation Guide
 
+- `.agents/README.md`: agent-specific reference index for the committed repo guide set.
 - `docs/ARCHITECTURE.md`: where everything is and which file owns what.
 - `docs/DEVELOPMENT.md`: how to add features, run tests, and keep frontend/backend changes aligned.
 - `docs/USER_GUIDE.md`: end-user features and workflows.
@@ -92,7 +93,7 @@ For a more detailed file-by-file map, read `docs/ARCHITECTURE.md`.
 - GPU-heavy work should go through `core/worker.py`, not request handlers.
 - Keep backend request fields aligned with `ui/core/api.js`, `ui/app.js`, and `ui/core/state.js`.
 - Optional plugins must stay optional; WebbDuck core should still work when they are missing.
-- When behavior changes, update the relevant doc in `docs/`, `ui/README.md`, or `tests/README.md`.
+- When behavior changes, update the relevant doc in `.agents/`, `docs/`, `ui/README.md`, `tests/README.md`, or `plugins/README.md` in the same task.
 
 ## Tests
 

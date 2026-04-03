@@ -2,10 +2,25 @@
 
 import sys
 import types
+import os
 import torch
 from pathlib import Path
 
 _UPSAMPLERS = {}
+
+APP_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_weights_root() -> Path:
+    explicit = str(os.getenv("WEBBDUCK_WEIGHTS_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    models_root = str(os.getenv("WEBBDUCK_MODELS_DIR") or "").strip()
+    if models_root:
+        return (Path(models_root).expanduser() / "weights")
+
+    return APP_ROOT / "weights"
 
 
 def _ensure_torchvision_compat() -> None:
@@ -52,7 +67,8 @@ def get_upsampler(scale: int = 2):
 
     RRDBNet, RealESRGANer = _import_upscaler_components()
 
-    model_path = Path(f"weights/RealESRGAN_x{scale}plus.pth")
+    weights_root = _resolve_weights_root()
+    model_path = weights_root / f"RealESRGAN_x{scale}plus.pth"
     if not model_path.exists():
         raise FileNotFoundError(f"Missing ESRGAN weights: {model_path}")
 

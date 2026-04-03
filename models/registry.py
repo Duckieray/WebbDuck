@@ -7,18 +7,79 @@ import os
 import threading
 
 # Paths
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent
+MODELS_ROOT = Path(os.getenv("WEBBDUCK_MODELS_DIR", str(ROOT))).expanduser()
 
-HF_CACHE = Path.home() / ".cache/huggingface/hub"
-CHECKPOINT_ROOT = ROOT / "checkpoint/sdxl"
-LORA_ROOT = Path(os.getenv("WEBBDUCK_LORA_DIR", str(ROOT / "lora"))).expanduser()
+
+def _first_existing(candidates: list[Path]) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_hf_cache_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_HF_CACHE_DIR")
+    if explicit:
+        value = Path(explicit).expanduser()
+        if value.name.lower() == "hub":
+            return value
+        return value / "hub"
+
+    for key in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE"):
+        raw = os.getenv(key)
+        if raw:
+            value = Path(raw).expanduser()
+            if value.name.lower() == "hub":
+                return value
+            return value / "hub"
+
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return Path(hf_home).expanduser() / "hub"
+
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _resolve_checkpoint_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_CHECKPOINT_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+
+    models_root = MODELS_ROOT
+    candidates = [
+        models_root / "checkpoint" / "sdxl",
+        models_root / "checkpoints" / "sdxl",
+        models_root / "checkpoint",
+        models_root / "checkpoints",
+        models_root / "sdxl",
+    ]
+    return _first_existing(candidates)
+
+
+def _resolve_lora_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_LORA_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    models_root = MODELS_ROOT
+    candidates = [models_root / "lora", models_root / "loras"]
+    return _first_existing(candidates)
+
+
+def _resolve_embedding_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_EMBEDDING_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    models_root = MODELS_ROOT
+    candidates = [models_root / "embeddings", models_root / "embedding"]
+    return _first_existing(candidates)
+
+
+HF_CACHE = _resolve_hf_cache_root()
+CHECKPOINT_ROOT = _resolve_checkpoint_root()
+LORA_ROOT = _resolve_lora_root()
 LORA_FILE = LORA_ROOT / "loras.json"
-EMBEDDING_ROOT = Path(
-    os.getenv(
-        "WEBBDUCK_EMBEDDING_DIR",
-        str(ROOT / "embeddings"),
-    )
-).expanduser()
+EMBEDDING_ROOT = _resolve_embedding_root()
 EMBEDDING_FILE = EMBEDDING_ROOT / "embeddings.json"
 MODELS_FILE = CHECKPOINT_ROOT / "models.json"
 
@@ -120,12 +181,25 @@ def scan_hf_cache():
 
     for repo in HF_CACHE.glob("models--*"):
         snap_root = repo / "snapshots"
-        if not snap_root.exists():
+        try:
+            has_snapshots = snap_root.exists()
+        except OSError:
+            continue
+        if not has_snapshots:
             continue
 
-        for snap in snap_root.iterdir():
+        try:
+            snapshots = list(snap_root.iterdir())
+        except OSError:
+            continue
+
+        for snap in snapshots:
             # Diffusers checkpoint
-            if (snap / "unet").exists():
+            try:
+                is_diffusers = (snap / "unet").exists()
+            except OSError:
+                is_diffusers = False
+            if is_diffusers:
                 arch = detect_arch(snap)
                 if arch:
                     name = repo.name.replace("models--", "").replace("--", "/")
@@ -137,8 +211,18 @@ def scan_hf_cache():
                     }
 
             # LoRAs
-            for f in snap.glob("*.safetensors"):
-                if f.stat().st_size < 1.5 * 1024**3 and not (f.parent / "unet").exists():
+            try:
+                safetensors_files = list(snap.glob("*.safetensors"))
+            except OSError:
+                safetensors_files = []
+
+            for f in safetensors_files:
+                try:
+                    size_ok = f.stat().st_size < 1.5 * 1024**3
+                    is_unet_dir = (f.parent / "unet").exists()
+                except OSError:
+                    continue
+                if size_ok and not is_unet_dir:
                     arch = detect_lora_arch(f)
                     if arch:
                         loras[f.stem] = {
@@ -396,6 +480,7 @@ def merge_model_registry(disk_models: dict, hf_models: dict, persist: bool = Tru
             except Exception:
                 existing_save = {}
         if to_save != existing_save:
+            MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
             MODELS_FILE.write_text(json.dumps(to_save, indent=2))
 
     return final_registry

@@ -7,6 +7,8 @@ cd "$SCRIPT_DIR"
 
 CONDA_ENV="${WEBBDUCK_CONDA_ENV:-webbduck}"
 OUTPUT_DIR="${WEBBDUCK_OUTPUT_DIR:-$SCRIPT_DIR/outputs}"
+MODELS_DIR="${WEBBDUCK_MODELS_DIR:-}"
+HF_CACHE_DIR="${WEBBDUCK_HF_CACHE_DIR:-}"
 PORT="${WEBBDUCK_PORT:-8010}"
 USE_CONDA=1
 EXTRA_ARGS=()
@@ -20,6 +22,8 @@ Starts WebbDuck from this repository directory.
 Options:
   -e, --env NAME        Conda environment name (default: $CONDA_ENV)
   -o, --output DIR      Output directory (default: $OUTPUT_DIR)
+  -m, --models DIR      Models root directory (sets --models for run.py)
+      --hf-cache DIR    Hugging Face cache root or hub directory override
   -p, --port PORT       Server port (default: $PORT)
       --dtype DTYPE     Set WEBBDUCK_DTYPE (float16|bfloat16|float32)
       --device DEVICE   Set WEBBDUCK_DEVICE (cuda|cpu)
@@ -29,6 +33,8 @@ Options:
 Examples:
   ./startup.sh
   ./startup.sh --env webbduck --output ./outputs --port 8020
+  ./startup.sh --models /mnt/f/models --port 8020
+  ./startup.sh --hf-cache /mnt/f/.cache/huggingface --port 8020
   ./startup.sh --dtype float16 --port 8020
 USAGE
 }
@@ -52,6 +58,16 @@ while [[ $# -gt 0 ]]; do
     -o|--output)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    -m|--models)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      MODELS_DIR="$2"
+      shift 2
+      ;;
+    --hf-cache|--hf_cache)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      HF_CACHE_DIR="$2"
       shift 2
       ;;
     -p|--port)
@@ -115,6 +131,12 @@ command -v python >/dev/null 2>&1 || fail "python not found after environment se
 info "Repository: $SCRIPT_DIR"
 info "Conda env: ${CONDA_DEFAULT_ENV:-<current shell>}"
 info "Output: $OUTPUT_DIR"
+if [[ -n "$MODELS_DIR" ]]; then
+  info "Models root: $MODELS_DIR"
+fi
+if [[ -n "$HF_CACHE_DIR" ]]; then
+  info "HF cache root: $HF_CACHE_DIR"
+fi
 info "Port: $PORT"
 if [[ -n "${WEBBDUCK_DTYPE:-}" ]]; then
   info "WEBBDUCK_DTYPE=$WEBBDUCK_DTYPE"
@@ -123,4 +145,13 @@ if [[ -n "${WEBBDUCK_DEVICE:-}" ]]; then
   info "WEBBDUCK_DEVICE=$WEBBDUCK_DEVICE"
 fi
 
-exec python run.py --output "$OUTPUT_DIR" --port "$PORT" "${EXTRA_ARGS[@]}"
+RUN_ARGS=(--output "$OUTPUT_DIR" --port "$PORT")
+if [[ -n "$MODELS_DIR" ]]; then
+  RUN_ARGS+=(--models "$MODELS_DIR")
+fi
+if [[ -n "$HF_CACHE_DIR" ]]; then
+  RUN_ARGS+=(--hf-cache "$HF_CACHE_DIR")
+fi
+RUN_ARGS+=("${EXTRA_ARGS[@]}")
+
+exec python run.py "${RUN_ARGS[@]}"

@@ -139,11 +139,7 @@ When plugin contracts change, update this file and `plugins/README.md` together.
 
 `plugins/webapps/dnaduck/` and `plugins/webapps/duckmotion/` are integration points for separately managed plugin projects. WebbDuck should not require those repos to be present for core functionality.
 
-Install a plugin repo into WebbDuck with its installer script when provided, for example:
-
-```bash
-python tools/install_webbduck_plugin.py --webbduck-dir /path/to/webbduck --overwrite
-```
+Some external plugin repos may ship their own installer scripts. When they do, point them at the WebbDuck repo root. WebbDuck itself does not currently bundle a generic `tools/install_webbduck_plugin.py` helper.
 
 ## Troubleshooting
 

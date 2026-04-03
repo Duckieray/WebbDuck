@@ -52,6 +52,7 @@ WebbDuck is a local-first SDXL studio:
 | `core/pipeline.py` | Diffusers pipeline load/unload and LoRA application |
 | `core/runtime.py` | runtime profile helpers and device/dtype detection |
 | `core/gpu_lease.py` | shared in-process GPU ownership across core and plugins |
+| `core/captioning_config.py` | captioner plugin discovery and plugin root resolution |
 | `core/web_plugins.py` | local/remote web-app plugin discovery and mounting |
 | `core/captioner.py` | optional captioner loading and caption execution |
 | `models/registry.py` | discovered checkpoints, LoRAs, embeddings, and catalog refresh |
@@ -66,6 +67,7 @@ WebbDuck is a local-first SDXL studio:
 | `ui/core/api.js` | fetch wrappers for backend endpoints |
 | `ui/core/events.js` | local event bus fed by WebSocket updates |
 | `ui/core/state.js` | persisted Studio state and DOM sync helpers |
+| `ui/core/utils.js` | DOM helpers, form-data helpers, downloads, and toast utilities |
 | `ui/modules/GalleryManager.js` | gallery loading, search, filters, infinite scroll |
 | `ui/modules/LightboxManager.js` | viewer interactions and metadata rendering |
 | `ui/modules/LoraManager.js` | LoRA picker, weights, persistence |
@@ -73,6 +75,7 @@ WebbDuck is a local-first SDXL studio:
 | `ui/modules/MaskEditor.js` | inpaint mask editing |
 | `ui/modules/ProgressManager.js` | progress card and cancel flow |
 | `ui/styles/` | design tokens, resets, layout, and theme styling |
+| `ui/planning/` | scratch area for UI planning notes; currently empty in the tracked repo |
 
 ## Common Change Recipes
 

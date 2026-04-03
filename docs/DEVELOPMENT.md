@@ -8,7 +8,8 @@ Read these docs in order when you are new to the repo:
 
 1. `docs/ARCHITECTURE.md` for the repo map and ownership.
 2. `AGENTS.md` for project rules, guardrails, and standard commands.
-3. `ui/README.md`, `tests/README.md`, or `docs/PLUGINS.md` if you are working in those areas.
+3. `.agents/README.md` for the committed agent reference set.
+4. `ui/README.md`, `tests/README.md`, or `docs/PLUGINS.md` if you are working in those areas.
 
 ## Setup
 
@@ -83,6 +84,7 @@ python run.py --output ./outputs --port 8010
 - `ui/index.html`: markup for Studio, Gallery, dialogs, and controls.
 - `ui/app.js`: main page wiring and screen-level behaviors.
 - `ui/core/api.js`: client request wrappers.
+- `ui/core/utils.js`: shared DOM, download, form-data, and toast helpers.
 - `ui/core/state.js`: persisted Studio state.
 - `ui/core/events.js`: local event bus.
 - `ui/modules/*.js`: feature modules like Gallery, Lightbox, LoRAs, embeddings, masks, and progress.
@@ -175,6 +177,7 @@ Use `tests/README.md` to pick the narrowest suite that still covers your change.
 When a change ships, update the smallest set of docs that now differ from reality:
 
 - `README.md` for install, startup, or top-level capability changes.
+- `.agents/*.md` when agent-facing repo orientation or workflow guidance changes.
 - `docs/ARCHITECTURE.md` if file ownership or repo layout changes.
 - `docs/DEVELOPMENT.md` if contributor workflows change.
 - `docs/USER_GUIDE.md` or `docs/SIMPLE_GUIDE.md` if the user workflow changes.

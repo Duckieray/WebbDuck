@@ -38,6 +38,7 @@ ui/
 - `ui/core/api.js`: fetch helpers for backend endpoints.
 - `ui/core/events.js`: local event bus fed by the WebSocket stream.
 - `ui/core/state.js`: persisted Studio state and DOM sync.
+- `ui/core/utils.js`: DOM, toast, async, and form-data helpers used across the app.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, and thumbnail sizing.
 - `ui/modules/LightboxManager.js`: full-screen viewer and metadata display.
 - `ui/modules/LoraManager.js`: LoRA list, weights, and compatibility filtering.
@@ -81,6 +82,7 @@ Persisted state includes prompt fields, dimensions, scheduler, second-pass optio
 - Update `ui/styles/design-tokens.css` for reusable colors, spacing, or typography tokens.
 - Update `ui/styles/theme-nova.css` for WebbDuck-specific theming and component presentation.
 - Update files in `ui/styles/components/` or `ui/styles/layouts/` for reusable CSS organization.
+- `ui/planning/` is available for tracked planning notes, but it is currently empty.
 
 ### Change API contracts
 
@@ -98,6 +100,7 @@ Persisted state includes prompt fields, dimensions, scheduler, second-pass optio
 - Inpaint mask editor and smart extend controls.
 - Lightbox metadata panel and image actions.
 - Settings modal, in-app help modal, and remote plugin connection UI.
+- Queue detail cards, compare view, and plugin iframe tabs.
 
 ## Verification
 
@@ -108,4 +111,4 @@ pytest tests/test_ui_sanity.py -v
 pytest tests/test_server.py -v
 ```
 
-If you changed data contracts, add the relevant backend or integration tests too.
+`tests/test_ui_sanity.py` expects a running server and browser automation support. If you changed data contracts, add the relevant backend or integration tests too.
