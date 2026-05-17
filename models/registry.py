@@ -244,26 +244,31 @@ def discover_local_models():
     if not CHECKPOINT_ROOT.exists():
         return models
 
-    for item in CHECKPOINT_ROOT.iterdir():
-        # Single-file checkpoint
-        if item.is_file() and item.suffix == ".safetensors":
-            models[item.stem] = {
-                "type": "single",
-                "arch": "sdxl",
-                "path": item,
-                "source": "local",
-            }
-
-        # Diffusers folder
-        elif item.is_dir():
-            unet = item / "unet"
-            if (unet / "config.json").exists():
-                models[item.name] = {
-                    "type": "diffusers",
-                    "arch": detect_arch(item),
+    def _walk_checkpoints(current_dir: Path):
+        for item in current_dir.iterdir():
+            # Single-file checkpoint
+            if item.is_file() and item.suffix == ".safetensors":
+                models[item.stem] = {
+                    "type": "single",
+                    "arch": "sdxl",
                     "path": item,
                     "source": "local",
                 }
+
+            # Diffusers folder
+            elif item.is_dir():
+                unet = item / "unet"
+                if (unet / "config.json").exists():
+                    models[item.name] = {
+                        "type": "diffusers",
+                        "arch": detect_arch(item),
+                        "path": item,
+                        "source": "local",
+                    }
+                else:
+                    _walk_checkpoints(item)
+
+    _walk_checkpoints(CHECKPOINT_ROOT)
 
     return models
 
@@ -277,11 +282,11 @@ def ensure_lora_registry():
 
     registry = {}
 
-    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(LORA_ROOT.rglob("*"), key=lambda p: p.name.lower()):
         if not _is_lora_file(f):
             continue
         registry[f.stem] = {
-            "file": f.name,
+            "file": f.relative_to(LORA_ROOT).as_posix(),
             "trigger": None,
             "weight": 1.0,
             "description": "",
@@ -299,14 +304,14 @@ def ensure_embedding_registry():
         return
 
     registry = {}
-    for f in sorted(EMBEDDING_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(EMBEDDING_ROOT.rglob("*"), key=lambda p: p.name.lower()):
         if not _is_embedding_file(f):
             continue
         arch = detect_embedding_arch(f)
         if not arch:
             continue
         registry[f.stem] = {
-            "file": f.name,
+            "file": f.relative_to(EMBEDDING_ROOT).as_posix(),
             "token": f.stem,
             "description": "",
         }
@@ -327,14 +332,14 @@ def sync_lora_registry_file():
         data = {}
 
     changed = False
-    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(LORA_ROOT.rglob("*"), key=lambda p: p.name.lower()):
         if not _is_lora_file(f):
             continue
         key = f.stem
         if key in data:
             continue
         data[key] = {
-            "file": f.name,
+            "file": f.relative_to(LORA_ROOT).as_posix(),
             "trigger": None,
             "weight": 1.0,
             "description": "",
@@ -357,7 +362,7 @@ def sync_embedding_registry_file():
         data = {}
 
     changed = False
-    for f in sorted(EMBEDDING_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(EMBEDDING_ROOT.rglob("*"), key=lambda p: p.name.lower()):
         if not _is_embedding_file(f):
             continue
         key = f.stem
@@ -367,7 +372,7 @@ def sync_embedding_registry_file():
         if not arch:
             continue
         data[key] = {
-            "file": f.name,
+            "file": f.relative_to(EMBEDDING_ROOT).as_posix(),
             "token": key,
             "description": "",
         }

@@ -489,12 +489,23 @@ def _path_stamp(path: Path):
     stamp = [("self", path.name, stat.st_mtime_ns, stat.st_size)]
 
     if path.is_dir():
-        for child in sorted(path.iterdir(), key=lambda p: p.name):
+        to_visit = [path]
+        while to_visit:
+            current = to_visit.pop()
             try:
-                cstat = child.stat()
-                stamp.append((child.name, cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
+                for child in sorted(current.iterdir(), key=lambda p: p.name):
+                    # Skip descending into diffusers subfolders or internal caches to keep scanning fast
+                    if child.name in {".git", "__pycache__", "unet", "text_encoder", "text_encoder_2", "vae", "scheduler", "feature_extractor", "tokenizer", "tokenizer_2"}:
+                        continue
+                    try:
+                        cstat = child.stat()
+                        stamp.append((child.relative_to(path).as_posix(), cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
+                        if child.is_dir():
+                            to_visit.append(child)
+                    except Exception:
+                        stamp.append((child.name, "err"))
             except Exception:
-                stamp.append((child.name, "err"))
+                pass
 
     return tuple(stamp)
 
