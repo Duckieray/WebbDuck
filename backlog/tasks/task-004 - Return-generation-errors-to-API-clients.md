@@ -2,8 +2,10 @@
 id: TASK-004
 title: Return generation errors to API clients
 status: In Progress
-assignee: []
+assignee:
+  - OpenCode
 created_date: '2026-05-17 21:38'
+updated_date: '2026-05-17 21:42'
 labels:
   - api
   - error-handling
@@ -28,10 +30,30 @@ Ensure third-party clients calling the generation API receive actionable error d
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 When an API generation request fails before work is queued the HTTP response includes a clear error message.
-- [ ] #2 When a queued API generation job fails the API client can retrieve the failure status and error details from the API response path used for third-party generation workflows.
+- [x] #2 When a queued API generation job fails the API client can retrieve the failure status and error details from the API response path used for third-party generation workflows.
 - [ ] #3 Existing successful generation responses remain unchanged.
 - [ ] #4 Focused tests cover the error response behavior for third-party API clients.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Inspect the generation enqueue/worker failure path to find where API responses lose error details.
+2. Return normalized JSON error payloads for waited generation requests when the queued job future fails.
+3. Add a per-job queue status endpoint so third-party async clients can poll by job_id and read failed status/error details.
+4. Add focused server tests for both synchronous failure responses and async failed-job lookup.
+5. Run targeted verification and record any environment limitations.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented JSON failure responses from queued generation/upscale/test endpoints by catching failed futures in enqueue and returning status/job_id/error payloads.
+
+Added GET /queue/{job_id} so async API clients can poll a specific job and retrieve failed status plus stored error details.
+
+Added focused tests for synchronous worker failure reporting and failed-job lookup; py_compile passed, but focused pytest via conda could not run because the local 'webbduck' conda environment was unavailable.
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
