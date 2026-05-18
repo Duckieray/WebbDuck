@@ -453,6 +453,36 @@ def queue_position_for(job_id: str) -> int | None:
     return None
 
 
+def _build_job_status_payload(job_id: str) -> dict | None:
+    meta = job_registry.get(job_id)
+    if not meta:
+        return None
+
+    item = dict(meta)
+    item["queue_position"] = queue_position_for(job_id)
+    return item
+
+
+def _job_error_response(job_id: str, exc: Exception, prefix: str = "Generation failed") -> JSONResponse:
+    error = str(exc).strip() or prefix
+    meta = job_registry.get(job_id)
+    if meta:
+        meta.setdefault("status", "failed")
+        if meta.get("status") not in {"failed", "cancelled", "completed"}:
+            meta["status"] = "failed"
+        meta.setdefault("finished_at", time.time())
+        meta["error"] = error
+    schedule_queue_update()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "failed",
+            "job_id": job_id,
+            "error": error,
+        },
+    )
+
+
 async def enqueue(job, wait_for_result: bool = True):
     """Enqueue job. Optionally wait for result."""
     if "cancel_event" not in job or job.get("cancel_event") is None:
@@ -471,7 +501,10 @@ async def enqueue(job, wait_for_result: bool = True):
             "queue_position": queue_position_for(job_id),
         }
 
-    return await job["future"]
+    try:
+        return await job["future"]
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 async def vram_sampler():
@@ -795,7 +828,10 @@ async def test(
             "type": "validation_error"
         }
 
-    return await enqueue(job, wait_for_result=wait_for_result)
+    try:
+        return await enqueue(job, wait_for_result=wait_for_result)
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 @app.post("/generate")
@@ -939,14 +975,8 @@ async def generate(
             "error": str(e),
             "type": "validation_error"
         }
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        print(trace) # Ensure it shows in server log
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Generation failed: {str(e)}", "trace": trace}
-        )
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 def _unlink_file(path: Path) -> bool:
@@ -1300,13 +1330,25 @@ async def upscale(
         "settings": {"image": image, "scale": scale},
     }
 
-    return await enqueue(job, wait_for_result=wait_for_result)
+    try:
+        return await enqueue(job, wait_for_result=wait_for_result)
+    except Exception as exc:
+        return _job_error_response(job_id, exc, prefix="Upscale failed")
 
 
 @app.get("/queue")
 def get_queue():
     """List active queue jobs and recent completions."""
     return build_queue_payload()
+
+
+@app.get("/queue/{job_id}")
+def get_queue_job(job_id: str):
+    """Return status for a single queued/running/completed/failed job."""
+    payload = _build_job_status_payload(job_id)
+    if payload is None:
+        return JSONResponse(status_code=404, content={"error": "Job not found"})
+    return payload
 
 
 @app.get("/gpu/lease")

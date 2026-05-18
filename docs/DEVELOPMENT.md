@@ -58,7 +58,7 @@ python run.py --output ./outputs --port 8010
 
 ### Backend and API
 
-- `server/app.py`: routes, payload parsing, queue entrypoints, plugin endpoints.
+- `server/app.py`: routes, payload parsing, queue entrypoints, plugin endpoints, and API-facing job/error responses.
 - `server/events.py`: WebSocket broadcasts.
 - `server/state.py`: shared runtime status snapshot.
 - `server/storage.py`: output metadata and gallery manifest.

@@ -113,6 +113,73 @@ class TestQueueControls:
             appmod.active_job = None
 
 
+class TestApiJobErrors:
+    """Tests for third-party API error reporting."""
+
+    def test_generate_returns_json_error_when_worker_fails(self, client, first_available_model, monkeypatch):
+        from webbduck.server import app as appmod
+
+        async def fail_put(job):
+            job["future"].set_exception(RuntimeError("model load exploded"))
+
+        monkeypatch.setattr(appmod.generation_queue, "put", fail_put)
+
+        response = client.post("/generate", data={
+            "prompt": "a cat",
+            "base_model": first_available_model,
+            "steps": 5,
+            "num_images": 1,
+            "width": 512,
+            "height": 512,
+        })
+
+        assert response.status_code == 500
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert payload["error"] == "model load exploded"
+        assert isinstance(payload["job_id"], str)
+
+        meta = appmod.job_registry[payload["job_id"]]
+        assert meta["status"] == "failed"
+        assert meta["error"] == "model load exploded"
+
+        appmod.job_registry.pop(payload["job_id"], None)
+
+    def test_queue_job_endpoint_returns_failed_job_error(self, client, first_available_model, monkeypatch):
+        from webbduck.server import app as appmod
+
+        async def hold_put(job):
+            return None
+
+        monkeypatch.setattr(appmod.generation_queue, "put", hold_put)
+
+        response = client.post("/generate", data={
+            "prompt": "a cat",
+            "base_model": first_available_model,
+            "steps": 5,
+            "num_images": 1,
+            "width": 512,
+            "height": 512,
+            "wait_for_result": "false",
+        })
+
+        assert response.status_code == 200
+        payload = response.json()
+        job_id = payload["job_id"]
+
+        appmod.job_registry[job_id]["status"] = "failed"
+        appmod.job_registry[job_id]["error"] = "scheduler mismatch"
+
+        status_response = client.get(f"/queue/{job_id}")
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert status_payload["job_id"] == job_id
+        assert status_payload["status"] == "failed"
+        assert status_payload["error"] == "scheduler mismatch"
+
+        appmod.job_registry.pop(job_id, None)
+
+
 class TestResolutionNormalization:
     """Tests for width/height normalization helpers."""
 
