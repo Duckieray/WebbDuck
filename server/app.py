@@ -42,7 +42,7 @@ from webbduck.models.registry import (
     LORA_FILE,
     EMBEDDING_ROOT,
     EMBEDDING_FILE,
-    MODELS_FILE,
+    CHECKPOINTS_FILE,
     refresh_registries,
 )
 from webbduck.core.schedulers import SCHEDULERS
@@ -505,7 +505,7 @@ def compute_catalog_signature():
         _path_stamp(LORA_FILE),
         _path_stamp(EMBEDDING_ROOT),
         _path_stamp(EMBEDDING_FILE),
-        _path_stamp(MODELS_FILE),
+        _path_stamp(CHECKPOINTS_FILE),
     )
 
 

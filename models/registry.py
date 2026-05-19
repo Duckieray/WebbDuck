@@ -20,7 +20,7 @@ EMBEDDING_ROOT = Path(
     )
 ).expanduser()
 EMBEDDING_FILE = EMBEDDING_ROOT / "embeddings.json"
-MODELS_FILE = CHECKPOINT_ROOT / "models.json"
+CHECKPOINTS_FILE = CHECKPOINT_ROOT / "checkpoints.json"
 
 KNOWN_DEFAULTS = {
     "RealVisXL_V5.0": {"steps": 30, "cfg": 6.0},
@@ -365,8 +365,8 @@ def merge_model_registry(disk_models: dict, hf_models: dict, persist: bool = Tru
     """Merge discovered models with persisted defaults."""
     all_discovered = {**disk_models, **hf_models}
 
-    if MODELS_FILE.exists():
-        saved_data = json.loads(MODELS_FILE.read_text())
+    if CHECKPOINTS_FILE.exists():
+        saved_data = json.loads(CHECKPOINTS_FILE.read_text())
     else:
         saved_data = {}
 
@@ -390,13 +390,13 @@ def merge_model_registry(disk_models: dict, hf_models: dict, persist: bool = Tru
             for name, info in final_registry.items()
         }
         existing_save = {}
-        if MODELS_FILE.exists():
+        if CHECKPOINTS_FILE.exists():
             try:
-                existing_save = json.loads(MODELS_FILE.read_text())
+                existing_save = json.loads(CHECKPOINTS_FILE.read_text())
             except Exception:
                 existing_save = {}
         if to_save != existing_save:
-            MODELS_FILE.write_text(json.dumps(to_save, indent=2))
+            CHECKPOINTS_FILE.write_text(json.dumps(to_save, indent=2))
 
     return final_registry
 
