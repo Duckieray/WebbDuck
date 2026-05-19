@@ -156,7 +156,17 @@ def load_unet_auto(unet_dir) -> UNet2DConditionModel:
     unet_dir = Path(unet_dir)
     config_path = unet_dir / "config.json"
     
-    if not config_path.exists():
+    try:
+        config_exists = config_path.exists()
+    except OSError as exc:
+        raise FileNotFoundError(
+            f"Cannot access UNet config at {config_path}. "
+            f"This may be a Windows symlink/permission issue with the HuggingFace cache. "
+            f"Try enabling Windows Developer Mode or clearing the HF cache. "
+            f"Original error: {exc}"
+        ) from exc
+
+    if not config_exists:
         raise FileNotFoundError(f"Missing UNet config: {config_path}")
 
     with open(config_path) as f:
@@ -168,17 +178,32 @@ def load_unet_auto(unet_dir) -> UNet2DConditionModel:
     safe_file = unet_dir / "diffusion_pytorch_model.safetensors"
     bin_file = unet_dir / "diffusion_pytorch_model.bin"
 
-    if safe_index.exists():
+    try:
+        has_safe_index = safe_index.exists()
+    except OSError:
+        has_safe_index = False
+
+    try:
+        has_safe_file = safe_file.exists()
+    except OSError:
+        has_safe_file = False
+
+    try:
+        has_bin_file = bin_file.exists()
+    except OSError:
+        has_bin_file = False
+
+    if has_safe_index:
         state_dict = {}
         with open(safe_index) as f:
             index = json.load(f)
         for shard in set(index["weight_map"].values()):
             state_dict.update(load_file(unet_dir / shard, device=DEVICE))
 
-    elif safe_file.exists():
+    elif has_safe_file:
         state_dict = load_file(safe_file, device=DEVICE)
 
-    elif bin_file.exists():
+    elif has_bin_file:
         state_dict = torch.load(bin_file, map_location="cpu")
 
     else:
@@ -348,11 +373,27 @@ def get_tokenizer(base_path: Path):
     tokenizer_2_path = base_path / "tokenizer_2"
     
     # Check if folder structure exists (Diffusers format)
-    if tokenizer_path.exists() and tokenizer_2_path.exists():
-        tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path)
-        tokenizer_2 = CLIPTokenizer.from_pretrained(tokenizer_2_path)
-    else:
-        # Fallback for single-file checkpoints or missing folders: use standard SDXL tokenizers
+    use_local_tokenizers = False
+    try:
+        use_local_tokenizers = tokenizer_path.exists() and tokenizer_2_path.exists()
+    except OSError:
+        # Windows cache access issues
+        use_local_tokenizers = False
+    
+    if use_local_tokenizers:
+        try:
+            tokenizer = CLIPTokenizer.from_pretrained(tokenizer_path)
+            tokenizer_2 = CLIPTokenizer.from_pretrained(tokenizer_2_path)
+        except (TypeError, OSError, ValueError) as exc:
+            # Tokenizer folder exists but is broken (e.g., missing vocab_file, symlink issues)
+            log.warning(
+                "Failed to load model tokenizers from %s (%s), falling back to standard SDXL tokenizers",
+                base_path, exc,
+            )
+            use_local_tokenizers = False
+    
+    if not use_local_tokenizers:
+        # Fallback for single-file checkpoints, missing folders, or broken tokenizers: use standard SDXL tokenizers
         # These are small downloads and cached
         tokenizer = CLIPTokenizer.from_pretrained(
             "openai/clip-vit-large-patch14",
@@ -374,21 +415,29 @@ def get_text_components(base_path: Path):
     if key in _TEXT_COMPONENT_CACHE:
         return _TEXT_COMPONENT_CACHE[key]
 
-    tokenizer = CLIPTokenizer.from_pretrained(base_path / "tokenizer")
-    tokenizer_2 = CLIPTokenizer.from_pretrained(base_path / "tokenizer_2")
+    try:
+        tokenizer = CLIPTokenizer.from_pretrained(base_path / "tokenizer")
+        tokenizer_2 = CLIPTokenizer.from_pretrained(base_path / "tokenizer_2")
 
-    text_encoder = CLIPTextModel.from_pretrained(
-        base_path / "text_encoder",
-        torch_dtype=DTYPE,
-    ).to(DEVICE)
-    text_encoder.config.output_hidden_states = True
-    text_encoder.eval()
+        text_encoder = CLIPTextModel.from_pretrained(
+            base_path / "text_encoder",
+            torch_dtype=DTYPE,
+        ).to(DEVICE)
+        text_encoder.config.output_hidden_states = True
+        text_encoder.eval()
 
-    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-        base_path / "text_encoder_2",
-        torch_dtype=DTYPE,
-    ).to(DEVICE)
-    text_encoder_2.eval()
+        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
+            base_path / "text_encoder_2",
+            torch_dtype=DTYPE,
+        ).to(DEVICE)
+        text_encoder_2.eval()
+    except (TypeError, OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Failed to load text components from {base_path}. "
+            f"This may be due to a corrupted HuggingFace cache or Windows symlink issues. "
+            f"Try enabling Windows Developer Mode or clearing the HF cache. "
+            f"Original error: {exc}"
+        ) from exc
 
     manage_cache(_TEXT_COMPONENT_CACHE, key)
     _TEXT_COMPONENT_CACHE[key] = (tokenizer, tokenizer_2, text_encoder, text_encoder_2)
@@ -417,9 +466,16 @@ def get_scheduler(base_path: Path):
     key = str(base_path.resolve())
 
     if key not in _SCHEDULER_CACHE:
-        scheduler = UniPCMultistepScheduler.from_pretrained(
-            base_path / "scheduler"
-        )
+        try:
+            scheduler = UniPCMultistepScheduler.from_pretrained(
+                base_path / "scheduler"
+            )
+        except (TypeError, OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Failed to load scheduler from {base_path / 'scheduler'}. "
+                f"This may be due to a corrupted HuggingFace cache or Windows symlink issues. "
+                f"Original error: {exc}"
+            ) from exc
         scheduler.config.sigma_min = 0.029
         scheduler.config.use_karras_sigmas = True
         _SCHEDULER_CACHE[key] = scheduler

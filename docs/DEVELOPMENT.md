@@ -66,6 +66,12 @@ python run.py --output ./outputs --port 8010
 
 ### Runtime and Generation
 
+`server/app.py` runs a background watcher that checks:
+- `checkpoint/sdxl/`
+- `lora/`
+- `lora/loras.json`
+- `checkpoint/sdxl/checkpoints.json`
+
 - `core/worker.py`: queued execution.
 - `core/generation.py`: normalized generation flow and mode selection.
 - `core/pipeline.py`: Diffusers lifecycle, model load/unload, LoRA application.
