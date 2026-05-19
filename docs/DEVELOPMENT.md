@@ -79,7 +79,7 @@ job = {
 - `checkpoint/sdxl/`
 - `lora/`
 - `lora/loras.json`
-- `checkpoint/sdxl/models.json`
+- `checkpoint/sdxl/checkpoints.json`
 
 If signatures change, `refresh_registries()` runs and `catalog` is broadcast.
 
