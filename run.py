@@ -83,7 +83,7 @@ if __name__ == "__main__":
         os.environ["TRANSFORMERS_CACHE"] = str(hf_hub)
 
     uvicorn.run(
-        "webbduck.server.app:app",
+        "server.app:app",
         host="0.0.0.0",
         port=max(1, min(65535, int(args.port))),
         reload=False,
