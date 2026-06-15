@@ -1,5 +1,5 @@
 # Install PyTorch first (pick the wheel index for your CUDA/CPU setup):
-#   pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio
+#   pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision torchaudio
 # Then:
 #   pip install -r requirements.txt
 
@@ -112,7 +112,7 @@ scipy==1.15.2
 sentencepiece==0.2.0
 six==1.17.0
 starlette==0.50.0
-sympy==1.14.0
+sympy>=1.13.3
 tb-nightly==2.20.0a20250318
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2
