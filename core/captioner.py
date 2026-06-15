@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, Callable
 import torch
 
-from webbduck.core.captioning_config import (
+from core.captioning_config import (
     list_available_captioners,
     get_captioner_module_path,
 )

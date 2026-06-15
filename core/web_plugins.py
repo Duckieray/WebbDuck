@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 
-from webbduck.core.captioning_config import get_plugins_dirs
+from core.captioning_config import get_plugins_dirs
 
 PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 REMOTE_STATE_DIR = Path.home() / ".webbduck" / "plugin_state"

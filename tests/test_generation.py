@@ -11,7 +11,7 @@ class TestText2ImgGeneration:
 
     def test_text2img_basic(self, basic_settings, first_available_model):
         """Test basic text2img generation."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -26,7 +26,7 @@ class TestText2ImgGeneration:
 
     def test_text2img_multiple_images(self, basic_settings, first_available_model):
         """Test generating multiple images."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -38,7 +38,7 @@ class TestText2ImgGeneration:
 
     def test_text2img_custom_size(self, basic_settings, first_available_model):
         """Test custom output dimensions."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -51,7 +51,7 @@ class TestText2ImgGeneration:
 
     def test_text2img_seed_reproducibility(self, basic_settings, first_available_model):
         """Test that same seed produces same result."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         import numpy as np
         
         settings = basic_settings.copy()
@@ -74,7 +74,7 @@ class TestImg2ImgGeneration:
 
     def test_img2img_basic(self, basic_settings, first_available_model, test_image):
         """Test basic img2img generation."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -89,7 +89,7 @@ class TestImg2ImgGeneration:
 
     def test_img2img_preserves_size(self, basic_settings, first_available_model, test_image):
         """Img2img should use the specified dimensions."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -105,7 +105,7 @@ class TestImg2ImgGeneration:
 
     def test_img2img_low_strength(self, basic_settings, first_available_model, test_image):
         """Low strength should preserve more of original."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -117,7 +117,7 @@ class TestImg2ImgGeneration:
 
     def test_img2img_high_strength(self, basic_settings, first_available_model, test_image):
         """High strength should allow more changes."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = basic_settings.copy()
         settings["base_model"] = first_available_model
@@ -134,7 +134,7 @@ class TestInpaintGeneration:
 
     def test_inpaint_basic(self, inpaint_settings, first_available_model):
         """Test basic inpainting."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = inpaint_settings.copy()
         settings["base_model"] = first_available_model
@@ -146,7 +146,7 @@ class TestInpaintGeneration:
 
     def test_inpaint_replace_mode(self, inpaint_settings, first_available_model):
         """Test inpainting with replace mode."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = inpaint_settings.copy()
         settings["base_model"] = first_available_model
@@ -157,7 +157,7 @@ class TestInpaintGeneration:
 
     def test_inpaint_keep_mode(self, inpaint_settings, first_available_model):
         """Test inpainting with keep mode (inverted mask)."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = inpaint_settings.copy()
         settings["base_model"] = first_available_model
@@ -168,7 +168,7 @@ class TestInpaintGeneration:
 
     def test_inpaint_with_mask_blur(self, inpaint_settings, first_available_model):
         """Test inpainting with mask blur."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = inpaint_settings.copy()
         settings["base_model"] = first_available_model
@@ -198,7 +198,7 @@ class TestTwoPassGeneration:
         self, two_pass_settings, first_available_model, second_pass_model
     ):
         """Test two-pass generation."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = two_pass_settings.copy()
         settings["base_model"] = first_available_model
@@ -213,7 +213,7 @@ class TestTwoPassGeneration:
         self, two_pass_settings, first_available_model, second_pass_model
     ):
         """Test two-pass with auto mode selection."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = two_pass_settings.copy()
         settings["base_model"] = first_available_model
@@ -227,7 +227,7 @@ class TestTwoPassGeneration:
         self, two_pass_settings, first_available_model, second_pass_model
     ):
         """Test two-pass with explicit img2img mode."""
-        from webbduck.core.generation import run_generation
+        from core.generation import run_generation
         
         settings = two_pass_settings.copy()
         settings["base_model"] = first_available_model

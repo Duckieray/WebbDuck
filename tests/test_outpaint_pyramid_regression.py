@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw
 
-from webbduck.modes import outpaint as pyramid_outpaint
+from modes import outpaint as pyramid_outpaint
 
 
 class _FakeResult:

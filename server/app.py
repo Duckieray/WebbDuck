@@ -14,9 +14,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from webbduck.server.state import snapshot, update_stage, update_progress
-from webbduck.server.events import broadcast, broadcast_state, active_sockets
-from webbduck.server.storage import (
+from server.state import snapshot, update_stage, update_progress
+from server.events import broadcast, broadcast_state, active_sockets
+from server.storage import (
     save_images,
     BASE,
     to_web_path,
@@ -31,9 +31,9 @@ from webbduck.server.storage import (
     remove_favorite_image,
     remove_favorite_run,
 )
-from webbduck.server.thumbnails import ensure_thumbnail, get_thumbnail_path
-from webbduck.core.worker import gpu_worker
-from webbduck.models.registry import (
+from server.thumbnails import ensure_thumbnail, get_thumbnail_path
+from core.worker import gpu_worker
+from models.registry import (
     MODEL_REGISTRY,
     LORA_REGISTRY,
     EMBEDDING_REGISTRY,
@@ -45,14 +45,14 @@ from webbduck.models.registry import (
     CHECKPOINTS_FILE,
     refresh_registries,
 )
-from webbduck.core.schedulers import SCHEDULERS
-from webbduck.core.captioner import (
+from core.schedulers import SCHEDULERS
+from core.captioner import (
     list_captioners,
     get_caption_styles,
     is_captioning_available,
     generate_caption,
 )
-from webbduck.core.web_plugins import (
+from core.web_plugins import (
     build_public_web_plugin_list,
     connect_remote_web_plugin,
     discover_web_plugins,
@@ -631,7 +631,7 @@ def disconnect_remote_plugin_route(plugin_id: str):
 app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
 
 # Mount dynamic output directory
-from webbduck.server.storage import BASE
+from server.storage import BASE
 app.mount("/outputs", StaticFiles(directory=str(BASE)), name="outputs")
 app.mount("/inputs", StaticFiles(directory=str(INPUTS_DIR)), name="inputs")
 
@@ -1347,8 +1347,8 @@ async def unload_all_models():
             content={"error": "Cannot unload while a job is running"},
         )
 
-    from webbduck.core.pipeline import pipeline_manager, get_runtime_profile_dict
-    from webbduck.core.captioner import unload_captioners
+    from core.pipeline import pipeline_manager, get_runtime_profile_dict
+    from core.captioner import unload_captioners
 
     update_stage("Unloading models")
     update_progress(0.05)
@@ -1387,8 +1387,8 @@ async def shutdown_app():
 def health():
     """System health check."""
     import torch
-    from webbduck.core.pipeline import pipeline_manager, get_runtime_profile_dict
-    from webbduck.server.state import snapshot
+    from core.pipeline import pipeline_manager, get_runtime_profile_dict
+    from server.state import snapshot
 
     cuda_ok = torch.cuda.is_available()
     vram = None
@@ -1442,8 +1442,8 @@ async def tokenize_prompt(
     which: str = Form("prompt"),
 ):
     """Count tokens in prompt."""
-    from webbduck.core.pipeline import get_tokenizer
-    from webbduck.models.registry import MODEL_REGISTRY
+    from core.pipeline import get_tokenizer
+    from models.registry import MODEL_REGISTRY
     
     # Get model path directly
     base_entry = MODEL_REGISTRY[base_model]
@@ -1528,7 +1528,7 @@ async def caption_image(
             
             # Only offload if there's actually a pipeline loaded on GPU
             try:
-                from webbduck.core.pipeline import pipeline_manager
+                from core.pipeline import pipeline_manager
                 if pipeline_manager.pipe is not None and hasattr(pipeline_manager.pipe, 'unet'):
                     # Check if UNet is actually on CUDA before offloading
                     unet_device = next(pipeline_manager.pipe.unet.parameters()).device

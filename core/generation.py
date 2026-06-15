@@ -6,13 +6,13 @@ import random
 import logging
 from PIL import Image, ImageOps, ImageStat, ImageFilter
 
-from webbduck.core.pipeline import pipeline_manager
-from webbduck.core.captioner import unload_captioners
-from webbduck.core.exceptions import GenerationCancelledError
-from webbduck.core.perf import reset_metrics, snapshot_metrics, stage_timer
-from webbduck.modes import select_mode
-from webbduck.modes.inpaint import _build_step_fractions, _auto_repeat_passes
-from webbduck.server.state import update_progress
+from core.pipeline import pipeline_manager
+from core.captioner import unload_captioners
+from core.exceptions import GenerationCancelledError
+from core.perf import reset_metrics, snapshot_metrics, stage_timer
+from modes import select_mode
+from modes.inpaint import _build_step_fractions, _auto_repeat_passes
+from server.state import update_progress
 
 log = logging.getLogger(__name__)
 

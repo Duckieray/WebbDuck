@@ -13,7 +13,7 @@ class TestCaptioningConfig:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_get_plugins_dirs_default(self):
         """Test default plugins directory path."""
-        from webbduck.core.captioning_config import get_plugins_dirs
+        from core.captioning_config import get_plugins_dirs
         
         # Without env var, should use home directory (and skip local if mocked to non-exist)
         with patch.dict(os.environ, {}, clear=True):
@@ -28,7 +28,7 @@ class TestCaptioningConfig:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_get_plugins_dirs_env(self):
         """Test plugins directory from environment variable."""
-        from webbduck.core.captioning_config import get_plugins_dirs
+        from core.captioning_config import get_plugins_dirs
         
         custom_path = "/custom/plugins/path"
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": custom_path}):
@@ -40,7 +40,7 @@ class TestCaptioningConfig:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_get_captioners_dirs(self):
         """Test captioners subdirectory path."""
-        from webbduck.core.captioning_config import get_captioners_dirs, get_plugins_dirs
+        from core.captioning_config import get_captioners_dirs, get_plugins_dirs
         
         captioners_dirs = get_captioners_dirs()
         plugins_dirs = get_plugins_dirs()
@@ -52,7 +52,7 @@ class TestCaptioningConfig:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_list_available_captioners_empty(self):
         """Test listing captioners when directory doesn't exist."""
-        from webbduck.core.captioning_config import list_available_captioners
+        from core.captioning_config import list_available_captioners
         
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": "/nonexistent/path"}):
             result = list_available_captioners()
@@ -60,7 +60,7 @@ class TestCaptioningConfig:
 
     def test_list_available_captioners_with_plugins(self):
         """Test listing captioners when valid plugins exist."""
-        from webbduck.core.captioning_config import list_available_captioners
+        from core.captioning_config import list_available_captioners
         
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create captioners directory structure
@@ -88,7 +88,7 @@ class TestCaptionerModule:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_is_captioning_available_no_plugins(self):
         """Test availability check with no plugins."""
-        from webbduck.core.captioner import is_captioning_available
+        from core.captioner import is_captioning_available
         
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": "/nonexistent/path"}):
             result = is_captioning_available()
@@ -97,7 +97,7 @@ class TestCaptionerModule:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_list_captioners_empty(self):
         """Test list_captioners returns empty list when no plugins."""
-        from webbduck.core.captioner import list_captioners
+        from core.captioner import list_captioners
         
         with patch.dict(os.environ, {"WEBBDUCK_PLUGINS_DIR": "/nonexistent/path"}):
             result = list_captioners()
@@ -105,7 +105,7 @@ class TestCaptionerModule:
 
     def test_get_caption_styles(self):
         """Test that caption styles are returned correctly."""
-        from webbduck.core.captioner import get_caption_styles
+        from core.captioner import get_caption_styles
         
         styles = get_caption_styles()
         
@@ -116,7 +116,7 @@ class TestCaptionerModule:
 
     def test_caption_prompts_content(self):
         """Test that caption prompts have meaningful content."""
-        from webbduck.core.captioner import CAPTION_PROMPTS
+        from core.captioner import CAPTION_PROMPTS
         
         for style, prompt in CAPTION_PROMPTS.items():
             assert len(prompt) > 10, f"Prompt for {style} is too short"
@@ -129,7 +129,7 @@ class TestCaptionerManager:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_get_available_empty(self):
         """Test get_available returns empty list with no plugins."""
-        from webbduck.core.captioner import CaptionerManager
+        from core.captioner import CaptionerManager
         
         manager = CaptionerManager()
         
@@ -140,7 +140,7 @@ class TestCaptionerManager:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_is_available_false(self):
         """Test is_available returns False when no plugins."""
-        from webbduck.core.captioner import CaptionerManager
+        from core.captioner import CaptionerManager
         
         manager = CaptionerManager()
         
@@ -150,7 +150,7 @@ class TestCaptionerManager:
     @patch("webbduck.core.captioning_config.LOCAL_PLUGINS_DIR", Path("/nonexistent/local"))
     def test_generate_caption_no_captioner(self):
         """Test generate_caption raises error when no captioner available."""
-        from webbduck.core.captioner import CaptionerManager
+        from core.captioner import CaptionerManager
         
         manager = CaptionerManager()
         

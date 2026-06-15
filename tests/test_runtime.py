@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from webbduck.core.runtime import resolve_runtime_profile, runtime_error_hint
+from core.runtime import resolve_runtime_profile, runtime_error_hint
 
 
 def test_forced_cpu_overrides_dtype_to_float32(monkeypatch):

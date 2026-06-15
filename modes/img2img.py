@@ -1,11 +1,11 @@
 """Image-to-image generation mode."""
 
 import torch
-from webbduck.modes.base import GenerationMode
-from webbduck.core.pipeline import pipeline_manager
-from webbduck.core.perf import stage_timer
-from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
-from webbduck.prompt.conditioning import should_use_native_prompt_path
+from modes.base import GenerationMode
+from core.pipeline import pipeline_manager
+from core.perf import stage_timer
+from prompt.experimental import build_sdxl_conditioning_dispatch
+from prompt.conditioning import should_use_native_prompt_path
 
 
 class Img2ImgMode(GenerationMode):

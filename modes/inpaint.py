@@ -11,9 +11,9 @@ from PIL import Image, ImageOps, ImageFilter
 import torch
 from .base import GenerationMode
 from . import outpaint as pyramid_outpaint
-from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
-from webbduck.prompt.conditioning import inject_prompt_conditioning_kwargs
-from webbduck.server.state import update_stage
+from prompt.experimental import build_sdxl_conditioning_dispatch
+from prompt.conditioning import inject_prompt_conditioning_kwargs
+from server.state import update_stage
 
 log = logging.getLogger(__name__)
 

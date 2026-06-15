@@ -83,7 +83,7 @@ def two_pass_settings(basic_settings):
 def available_models():
     """Get list of available models from registry."""
     try:
-        from webbduck.models.registry import MODEL_REGISTRY
+        from models.registry import MODEL_REGISTRY
         return MODEL_REGISTRY
     except Exception:
         return {}
@@ -101,6 +101,6 @@ def first_available_model(available_models):
 def client():
     """Create test client for FastAPI app (shared fixture)."""
     from fastapi.testclient import TestClient
-    from webbduck.server.app import app
+    from server.app import app
     with TestClient(app) as test_client:
         yield test_client

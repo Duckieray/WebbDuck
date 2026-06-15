@@ -27,12 +27,12 @@ from transformers import (
 from huggingface_hub import snapshot_download
 
 from safetensors.torch import load_file
-from webbduck.models.registry import MODEL_REGISTRY, LORA_REGISTRY, EMBEDDING_REGISTRY
-from webbduck.core.exceptions import GenerationCancelledError
-from webbduck.core.perf import stage_timer
-from webbduck.core.runtime import resolve_runtime_profile
+from models.registry import MODEL_REGISTRY, LORA_REGISTRY, EMBEDDING_REGISTRY
+from core.exceptions import GenerationCancelledError
+from core.perf import stage_timer
+from core.runtime import resolve_runtime_profile
 
-from webbduck.core.schedulers import create_scheduler
+from core.schedulers import create_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -890,7 +890,7 @@ class PipelineManager:
         """Get or create pipeline with specified configuration."""
         with self.lock:
             if self.key != base_model:
-                from webbduck.server.state import update_stage, update_progress
+                from server.state import update_stage, update_progress
                 load_total_steps = 7
 
                 def mark_load(stage: str, step: int):
@@ -944,7 +944,7 @@ class PipelineManager:
             # Switch scheduler if needed
             if scheduler_name and scheduler_name != self.scheduler_name:
                 self._ensure_not_cancelled(cancel_event)
-                from webbduck.server.state import update_stage # Redundant if already imported but safe
+                from server.state import update_stage # Redundant if already imported but safe
                 update_stage(f"Switching scheduler to {scheduler_name}")
                 
                 # Always use the base config to prevent drift
@@ -958,7 +958,7 @@ class PipelineManager:
                     self.img2img.scheduler = new_scheduler
                 self.scheduler_name = scheduler_name
 
-            from webbduck.server.state import update_stage, update_progress
+            from server.state import update_stage, update_progress
             update_stage("Attaching second pass model")
             update_progress(0.15)
             self._ensure_not_cancelled(cancel_event)

@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from PIL import Image
 
-from webbduck.server.storage import BASE, resolve_web_path
+from server.storage import BASE, resolve_web_path
 
 THUMB_SUFFIX = ".thumb.jpg"
 THUMB_SIZE = (512, 512)

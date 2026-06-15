@@ -11,13 +11,13 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-from webbduck.core.generation import run_generation
-from webbduck.core.exceptions import GenerationCancelledError
-from webbduck.core.runtime import runtime_error_hint
-from webbduck.server.storage import save_images, append_session_entry
-from webbduck.server.events import broadcast_state
-from webbduck.server.state import update_stage, update_progress, snapshot
-from webbduck.models.upscaler import get_upsampler
+from core.generation import run_generation
+from core.exceptions import GenerationCancelledError
+from core.runtime import runtime_error_hint
+from server.storage import save_images, append_session_entry
+from server.events import broadcast_state
+from server.state import update_stage, update_progress, snapshot
+from models.upscaler import get_upsampler
 
 log = logging.getLogger(__name__)
 

@@ -2,8 +2,8 @@
 
 import torch
 
-from webbduck.core.perf import stage_timer
-from webbduck.prompt.conditioning import (
+from core.perf import stage_timer
+from prompt.conditioning import (
     build_sdxl_conditioning,
     encode_long_prompt,
     _expand_textual_inversion_prompt,

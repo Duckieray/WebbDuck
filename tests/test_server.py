@@ -91,7 +91,7 @@ class TestQueueControls:
     """Tests for queue cancellation behavior."""
 
     def test_cancel_running_job_requests_cancellation(self, client):
-        from webbduck.server import app as appmod
+        from server import app as appmod
 
         job_id = "test-running-job"
         cancel_event = threading.Event()
@@ -117,7 +117,7 @@ class TestResolutionNormalization:
     """Tests for width/height normalization helpers."""
 
     def test_normalize_dimensions_rounds_to_multiple_of_8(self):
-        from webbduck.server.app import normalize_dimensions
+        from server.app import normalize_dimensions
 
         width, height = normalize_dimensions(724, 1060)
         assert width % 8 == 0

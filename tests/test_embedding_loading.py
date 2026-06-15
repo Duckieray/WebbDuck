@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from webbduck.core import pipeline as pipeline_mod
+from core import pipeline as pipeline_mod
 
 
 class _FakePipe:

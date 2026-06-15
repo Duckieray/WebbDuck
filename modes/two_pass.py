@@ -2,12 +2,12 @@
 
 import torch
 import logging
-from webbduck.prompt.experimental import (
+from prompt.experimental import (
     build_sdxl_conditioning_dispatch,
     build_sdxl_refiner_conditioning,
 )
-from webbduck.core.pipeline import pipeline_manager
-from webbduck.modes.base import GenerationMode
+from core.pipeline import pipeline_manager
+from modes.base import GenerationMode
 
 log = logging.getLogger(__name__)
 

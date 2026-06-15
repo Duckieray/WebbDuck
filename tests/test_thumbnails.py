@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from webbduck.server import thumbnails
+from server import thumbnails
 
 
 def test_ensure_thumbnail_is_thread_safe(tmp_path, monkeypatch):

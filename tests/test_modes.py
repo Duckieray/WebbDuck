@@ -9,21 +9,21 @@ class TestModeSelection:
 
     def test_mode_classes_can_be_imported(self):
         """Verify all mode classes can be imported directly."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         
         assert all([Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode])
 
     def test_select_mode_can_be_imported(self):
         """Verify select_mode can be imported."""
-        from webbduck.modes import select_mode
+        from modes import select_mode
         assert callable(select_mode)
 
     def test_text2img_can_run_no_image(self, basic_settings):
         """Text2Img should run when no input_image is set."""
-        from webbduck.modes.text2img import Text2ImgMode
+        from modes.text2img import Text2ImgMode
         mode = Text2ImgMode()
         
         settings = basic_settings.copy()
@@ -33,7 +33,7 @@ class TestModeSelection:
 
     def test_text2img_cannot_run_with_image(self, basic_settings):
         """Text2Img should not run when input_image is present."""
-        from webbduck.modes.text2img import Text2ImgMode
+        from modes.text2img import Text2ImgMode
         mode = Text2ImgMode()
         
         settings = basic_settings.copy()
@@ -43,7 +43,7 @@ class TestModeSelection:
 
     def test_img2img_can_run_with_image(self, basic_settings):
         """Img2Img should run when input_image is present."""
-        from webbduck.modes.img2img import Img2ImgMode
+        from modes.img2img import Img2ImgMode
         mode = Img2ImgMode()
         
         settings = basic_settings.copy()
@@ -53,7 +53,7 @@ class TestModeSelection:
 
     def test_img2img_cannot_run_without_image(self, basic_settings):
         """Img2Img should not run when no input_image."""
-        from webbduck.modes.img2img import Img2ImgMode
+        from modes.img2img import Img2ImgMode
         mode = Img2ImgMode()
         
         settings = basic_settings.copy()
@@ -63,7 +63,7 @@ class TestModeSelection:
 
     def test_inpaint_requires_mask_and_image(self, basic_settings):
         """Inpaint mode should require both mask and input image."""
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.inpaint import InpaintMode
         mode = InpaintMode()
         
         # Neither mask nor image
@@ -88,7 +88,7 @@ class TestModeSelection:
 
     def test_two_pass_requires_second_pass_model(self, basic_settings):
         """TwoPass mode should require a second_pass_model."""
-        from webbduck.modes.two_pass import TwoPassMode
+        from modes.two_pass import TwoPassMode
         mode = TwoPassMode()
         
         settings = basic_settings.copy()
@@ -115,8 +115,8 @@ class TestModeSelection:
 
     def test_mode_priority_inpaint_over_img2img(self, basic_settings):
         """Inpaint should be selected over Img2Img when mask is present."""
-        from webbduck.modes import select_mode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes import select_mode
+        from modes.inpaint import InpaintMode
         
         settings = basic_settings.copy()
         settings["input_image"] = Mock()
@@ -127,8 +127,8 @@ class TestModeSelection:
 
     def test_mode_priority_img2img_without_mask(self, basic_settings):
         """Img2Img should be selected when image but no mask."""
-        from webbduck.modes import select_mode
-        from webbduck.modes.img2img import Img2ImgMode
+        from modes import select_mode
+        from modes.img2img import Img2ImgMode
         
         settings = basic_settings.copy()
         settings["input_image"] = Mock()
@@ -139,8 +139,8 @@ class TestModeSelection:
 
     def test_mode_priority_text2img_fallback(self, basic_settings):
         """Text2Img should be fallback when no image."""
-        from webbduck.modes import select_mode
-        from webbduck.modes.text2img import Text2ImgMode
+        from modes import select_mode
+        from modes.text2img import Text2ImgMode
         
         settings = basic_settings.copy()
         settings["input_image"] = None
@@ -154,10 +154,10 @@ class TestModeSignatures:
 
     def test_all_modes_have_can_run(self):
         """All modes should have can_run method."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         
         for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:
             mode = cls()
@@ -166,10 +166,10 @@ class TestModeSignatures:
 
     def test_all_modes_have_run(self):
         """All modes should have run method."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         
         for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:
             mode = cls()
@@ -178,10 +178,10 @@ class TestModeSignatures:
 
     def test_can_run_accepts_base_inpaint(self):
         """All can_run methods should accept base_inpaint parameter."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         import inspect
         
         for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:
@@ -192,10 +192,10 @@ class TestModeSignatures:
 
     def test_run_accepts_base_inpaint(self):
         """All run methods should accept base_inpaint parameter."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         import inspect
         
         for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:
@@ -206,10 +206,10 @@ class TestModeSignatures:
 
     def test_run_accepts_callback(self):
         """All run methods should accept optional callback parameter."""
-        from webbduck.modes.text2img import Text2ImgMode
-        from webbduck.modes.img2img import Img2ImgMode
-        from webbduck.modes.two_pass import TwoPassMode
-        from webbduck.modes.inpaint import InpaintMode
+        from modes.text2img import Text2ImgMode
+        from modes.img2img import Img2ImgMode
+        from modes.two_pass import TwoPassMode
+        from modes.inpaint import InpaintMode
         import inspect
 
         for cls in [Text2ImgMode, Img2ImgMode, TwoPassMode, InpaintMode]:

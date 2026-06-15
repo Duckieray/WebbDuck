@@ -1,11 +1,11 @@
 """Text-to-image generation mode."""
 
 import logging
-from webbduck.core.pipeline import pipeline_manager
-from webbduck.core.perf import stage_timer
-from webbduck.modes.base import GenerationMode
-from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
-from webbduck.prompt.conditioning import should_use_native_prompt_path
+from core.pipeline import pipeline_manager
+from core.perf import stage_timer
+from modes.base import GenerationMode
+from prompt.experimental import build_sdxl_conditioning_dispatch
+from prompt.conditioning import should_use_native_prompt_path
 
 log = logging.getLogger(__name__)
 

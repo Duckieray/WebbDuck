@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import torch
 
-from webbduck.prompt.conditioning import (
+from prompt.conditioning import (
     build_sdxl_conditioning,
     _chunk_token_ids,
     should_use_native_prompt_path,

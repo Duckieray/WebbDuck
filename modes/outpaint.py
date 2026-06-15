@@ -11,8 +11,8 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageStat
 import torch
-from webbduck.prompt.experimental import build_sdxl_conditioning_dispatch
-from webbduck.prompt.conditioning import inject_prompt_conditioning_kwargs
+from prompt.experimental import build_sdxl_conditioning_dispatch
+from prompt.conditioning import inject_prompt_conditioning_kwargs
 
 log = logging.getLogger(__name__)
 
