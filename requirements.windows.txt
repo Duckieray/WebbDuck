@@ -1,6 +1,6 @@
 # Windows-specific dependency set for WebbDuck.
 # Install PyTorch separately first (pick the wheel index for your CUDA/CPU setup), then:
-#   pip install -r requirements.windows.txt
+#   pip install -r requirements.txt
 #
 # Example (CUDA 12.4):
 #   pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision

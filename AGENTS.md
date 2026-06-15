@@ -94,6 +94,7 @@ Recommended environment name: `webbduck` (legacy envs like `web_img` may still e
 cd <path-to-webbduck-repo>
 conda create -n webbduck python=3.10 -y
 conda activate webbduck
+pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio
 pip install -r requirements.txt
 mkdir -p checkpoint/sdxl lora embeddings outputs weights
 ```
@@ -130,7 +131,7 @@ cd <path-to-webbduck-repo>
 conda create -n webbduck python=3.10 -y
 conda activate webbduck
 pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
-pip install -r requirements.windows.txt
+pip install -r requirements.txt
 mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
 ```
 
