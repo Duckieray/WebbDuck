@@ -35,6 +35,7 @@ Examples:
   ./startup.sh --env webbduck --output ./outputs --port 8020
   ./startup.sh --models /mnt/f/models --port 8020
   ./startup.sh --hf-cache /mnt/f/.cache/huggingface --port 8020
+  ./startup.sh --models /run/media/duckie/Leia/models --hf-cache /run/media/duckie/Leia/huggingface
   ./startup.sh --dtype float16 --port 8020
 USAGE
 }
