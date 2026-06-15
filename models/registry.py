@@ -7,18 +7,79 @@ import os
 import threading
 
 # Paths
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent
+MODELS_ROOT = Path(os.getenv("WEBBDUCK_MODELS_DIR", str(ROOT))).expanduser()
 
-HF_CACHE = Path.home() / ".cache/huggingface/hub"
-CHECKPOINT_ROOT = ROOT / "checkpoint/sdxl"
-LORA_ROOT = Path(os.getenv("WEBBDUCK_LORA_DIR", str(ROOT / "lora"))).expanduser()
+
+def _first_existing(candidates: list[Path]) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_hf_cache_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_HF_CACHE_DIR")
+    if explicit:
+        value = Path(explicit).expanduser()
+        if value.name.lower() == "hub":
+            return value
+        return value / "hub"
+
+    for key in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE"):
+        raw = os.getenv(key)
+        if raw:
+            value = Path(raw).expanduser()
+            if value.name.lower() == "hub":
+                return value
+            return value / "hub"
+
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return Path(hf_home).expanduser() / "hub"
+
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _resolve_checkpoint_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_CHECKPOINT_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+
+    models_root = MODELS_ROOT
+    candidates = [
+        models_root / "checkpoint" / "sdxl",
+        models_root / "checkpoints" / "sdxl",
+        models_root / "checkpoint",
+        models_root / "checkpoints",
+        models_root / "sdxl",
+    ]
+    return _first_existing(candidates)
+
+
+def _resolve_lora_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_LORA_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    models_root = MODELS_ROOT
+    candidates = [models_root / "lora", models_root / "loras"]
+    return _first_existing(candidates)
+
+
+def _resolve_embedding_root() -> Path:
+    explicit = os.getenv("WEBBDUCK_EMBEDDING_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    models_root = MODELS_ROOT
+    candidates = [models_root / "embeddings", models_root / "embedding"]
+    return _first_existing(candidates)
+
+
+HF_CACHE = _resolve_hf_cache_root()
+CHECKPOINT_ROOT = _resolve_checkpoint_root()
+LORA_ROOT = _resolve_lora_root()
 LORA_FILE = LORA_ROOT / "loras.json"
-EMBEDDING_ROOT = Path(
-    os.getenv(
-        "WEBBDUCK_EMBEDDING_DIR",
-        str(ROOT / "embeddings"),
-    )
-).expanduser()
+EMBEDDING_ROOT = _resolve_embedding_root()
 EMBEDDING_FILE = EMBEDDING_ROOT / "embeddings.json"
 CHECKPOINTS_FILE = CHECKPOINT_ROOT / "checkpoints.json"
 

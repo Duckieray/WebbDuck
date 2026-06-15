@@ -33,6 +33,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebbDuck SDXL Server")
     parser.add_argument("--output", type=str, help="Custom output directory for generated images")
     parser.add_argument(
+        "--models",
+        type=str,
+        help=(
+            "Model library root directory. WebbDuck will resolve checkpoints/loras/embeddings from this root "
+            "(for example: <root>/checkpoint or <root>/checkpoints, <root>/lora, <root>/embeddings)."
+        ),
+    )
+    parser.add_argument(
+        "--hf-cache",
+        "--hf_cache",
+        dest="hf_cache",
+        type=str,
+        help=(
+            "Hugging Face cache root override (for example /mnt/f/.cache/huggingface). "
+            "WebbDuck will set HF_HOME and HF_HUB_CACHE accordingly."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=8010,
@@ -44,6 +62,25 @@ if __name__ == "__main__":
         out_path = Path(args.output).resolve()
         logging.info(f"Setting output directory to: {out_path}")
         os.environ["WEBBDUCK_OUTPUT_DIR"] = str(out_path)
+    if args.models:
+        models_path = Path(args.models).expanduser().resolve()
+        logging.info(f"Setting models root directory to: {models_path}")
+        os.environ["WEBBDUCK_MODELS_DIR"] = str(models_path)
+    if args.hf_cache:
+        hf_raw = Path(args.hf_cache).expanduser().resolve()
+        if hf_raw.name.lower() == "hub":
+            hf_home = hf_raw.parent
+            hf_hub = hf_raw
+        else:
+            hf_home = hf_raw
+            hf_hub = hf_raw / "hub"
+        logging.info(f"Setting Hugging Face cache root to: {hf_home}")
+        logging.info(f"Setting Hugging Face hub cache to: {hf_hub}")
+        os.environ["WEBBDUCK_HF_CACHE_DIR"] = str(hf_hub)
+        os.environ["HF_HOME"] = str(hf_home)
+        os.environ["HF_HUB_CACHE"] = str(hf_hub)
+        os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
+        os.environ["TRANSFORMERS_CACHE"] = str(hf_hub)
 
     uvicorn.run(
         "webbduck.server.app:app",
