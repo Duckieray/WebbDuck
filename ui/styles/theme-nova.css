@@ -151,6 +151,11 @@ body::before {
   font-size: 12px;
 }
 
+.nova-status-pill.has-error-detail {
+  cursor: pointer;
+  text-decoration: underline dotted var(--danger, #ff4444);
+}
+
 .status-percent {
   padding-left: 8px;
   border-left: 1px solid var(--nova-stroke-soft);

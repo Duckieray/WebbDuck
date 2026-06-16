@@ -41,11 +41,25 @@ export class ProgressManager {
                 emit(Events.GENERATION_CANCEL);
             });
         }
+
+        // Click on error status to see details
+        this._errorDetail = null;
+        const statusPill = document.querySelector('.nova-status-pill');
+        if (statusPill) {
+            statusPill.addEventListener('click', () => this._showErrorDetail());
+        }
     }
 
     handleUpdate(data) {
         // Data format: { stage: "Denoising", progress: 0.45, step: 5, total_steps: 30, vram: {...} }
         const { stage, progress, vram, step, total_steps } = data;
+
+        // Store error detail if present
+        if (data.error_detail) {
+            this._errorDetail = data.error_detail;
+        } else if (stage !== 'Error') {
+            this._errorDetail = null;
+        }
 
         // Update main progress UI if active
         if (stage && stage !== 'Idle' && stage !== 'Error') {
@@ -56,6 +70,23 @@ export class ProgressManager {
 
         // Update status bar (always visible)
         this.updateStatusBar(stage, progress, vram);
+    }
+
+    _showErrorDetail() {
+        if (!this._errorDetail) return;
+        const modal = byId('app-confirm-modal');
+        const titleEl = byId('app-confirm-title');
+        const msgEl = byId('app-confirm-message');
+        const btnOk = byId('app-confirm-ok');
+        const btnCancel = byId('app-confirm-cancel');
+        if (!modal || !titleEl || !msgEl || !btnOk) return;
+        titleEl.textContent = 'Generation Error';
+        msgEl.textContent = this._errorDetail;
+        btnOk.textContent = 'OK';
+        if (btnCancel) btnCancel.classList.add('hidden');
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => modal.classList.add('active'));
     }
 
     showProgress(stage, progress, step, totalSteps) {
@@ -138,6 +169,12 @@ export class ProgressManager {
             if (stage === 'Idle') this.statusBar.classList.add('ready');
             else if (stage === 'Error') this.statusBar.classList.add('error');
             else this.statusBar.classList.add('busy');
+        }
+
+        // Toggle clickability hint on the status pill when error detail is available
+        const pill = document.querySelector('.nova-status-pill');
+        if (pill) {
+            pill.classList.toggle('has-error-detail', !!(stage === 'Error' && this._errorDetail));
         }
 
         // Optional: show VRAM usage in status text or separate element?

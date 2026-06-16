@@ -46,14 +46,40 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 
 # Torch settings
 torch._dynamo.disable()
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.benchmark = False
-torch.backends.cuda.enable_cudnn_sdp(False)
 torch.set_float32_matmul_precision("high")
 
 RUNTIME_PROFILE = resolve_runtime_profile(logger=log)
 DEVICE = RUNTIME_PROFILE.device
 DTYPE = RUNTIME_PROFILE.dtype
+
+# ── GPU-aware backend tuning ──────────────────────────────────────────────
+_ATTENTION_SLICING = None   # set after GPU detection below
+
+def _configure_torch_backends():
+    global _ATTENTION_SLICING
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
+    cc = torch.cuda.get_device_capability(0)
+    sdp = getattr(torch.backends.cuda, "cudnn_sdp_enabled", None)
+    if sdp is not None:
+        enable_sdp = getattr(torch.backends.cuda, "enable_cudnn_sdp", None)
+        if enable_sdp is not None and cc >= (8, 0):
+            enable_sdp(True)
+        elif enable_sdp is not None:
+            enable_sdp(False)
+
+    # Choose attention slicing based on VRAM
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+    if vram_gb < 8:
+        _ATTENTION_SLICING = "max"       # very conservative
+    elif vram_gb < 12:
+        _ATTENTION_SLICING = "auto"       # diffuser picks slice size
+    else:
+        _ATTENTION_SLICING = None         # disable – plenty of VRAM
+
+if torch.cuda.is_available():
+    _configure_torch_backends()
 
 # Component caches
 _UNET_CACHE = {}
@@ -577,7 +603,8 @@ def build_pipeline(
     )
 
     pipe.to(DEVICE)
-    pipe.enable_attention_slicing("max")
+    if _ATTENTION_SLICING:
+        pipe.enable_attention_slicing(_ATTENTION_SLICING)
     set_inference_mode(pipe)
 
     trigger_phrase = ""

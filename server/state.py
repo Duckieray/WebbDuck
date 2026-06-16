@@ -13,11 +13,14 @@ state = {
     "step": 0,
     "total_steps": 0,
     "last_update": time.time(),
+    "error_detail": None,
 }
 
 
 def update_stage(stage: str):
     """Update current processing stage."""
+    if stage != "Error":
+        state["error_detail"] = None
     state["stage"] = stage
     state["last_update"] = time.time()
 
@@ -27,6 +30,12 @@ def update_progress(p: float, step: int = 0, total_steps: int = 0):
     state["progress"] = float(p)
     state["step"] = step
     state["total_steps"] = total_steps
+    state["last_update"] = time.time()
+
+
+def update_error_detail(detail: str | None):
+    """Set or clear the error_detail field."""
+    state["error_detail"] = detail
     state["last_update"] = time.time()
 
 

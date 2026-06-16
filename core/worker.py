@@ -16,7 +16,7 @@ from core.exceptions import GenerationCancelledError
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry
 from server.events import broadcast_state
-from server.state import update_stage, update_progress, snapshot
+from server.state import update_stage, update_progress, update_error_detail, snapshot
 from models.upscaler import get_upsampler
 
 log = logging.getLogger(__name__)
@@ -271,23 +271,28 @@ async def gpu_worker(queue):
                         pass
                 continue
 
+            err_msg = str(e)
+            update_error_detail(err_msg)
             update_stage("Error")
+            update_progress(0.0)
             await broadcast_state(snapshot())
             if _is_kernel_compat_error(e):
                 msg = _build_kernel_compat_message(e)
+                update_error_detail(msg)
                 update_stage("GPU Compatibility Error")
-                update_progress(0.0)
                 await broadcast_state(snapshot())
                 log.exception("GPU compatibility error during generation job %s", job.get("job_id"))
                 job["future"].set_exception(RuntimeError(msg))
             elif _is_oom_error(e):
                 msg = _build_oom_message(e)
+                update_error_detail(msg)
                 update_stage("OOM (Memory)")
-                update_progress(0.0)
                 await broadcast_state(snapshot())
                 log.exception("OOM during generation job %s", job.get("job_id"))
                 job["future"].set_exception(RuntimeError(msg))
             else:
+                err_type = type(e).__name__
+                log.exception("Generation job %s failed: %s: %s", job.get("job_id"), err_type, err_msg)
                 job["future"].set_exception(e)
             if callable(on_finish):
                 try:

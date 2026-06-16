@@ -354,6 +354,9 @@ def build_queue_payload() -> dict:
             recent_completed.append(item)
             continue
         if status in {"failed", "cancelled"}:
+            item = dict(meta)
+            item["queue_position"] = None
+            recent_completed.append(item)
             continue
         item = dict(meta)
         item["queue_position"] = queued_positions.get(item["job_id"])
