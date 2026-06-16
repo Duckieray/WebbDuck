@@ -224,10 +224,10 @@ def load_unet_auto(unet_dir) -> UNet2DConditionModel:
         with open(safe_index) as f:
             index = json.load(f)
         for shard in set(index["weight_map"].values()):
-            state_dict.update(load_file(unet_dir / shard, device=DEVICE))
+            state_dict.update(load_file(unet_dir / shard, device="cpu"))
 
     elif has_safe_file:
-        state_dict = load_file(safe_file, device=DEVICE)
+        state_dict = load_file(safe_file, device="cpu")
 
     elif has_bin_file:
         state_dict = torch.load(bin_file, map_location="cpu")
