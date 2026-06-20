@@ -772,13 +772,27 @@ class PipelineManager:
         self.current_loras = {}
         self.trigger_phrase = ""
 
+    def _expand_multivector_tokens(self, tokens: list[str]) -> list[str]:
+        """Expand multi-vector embedding tokens to include sub-tokens."""
+        if not tokens:
+            return tokens
+        expanded = list(tokens)
+        for tok in list(tokens):
+            for i in range(1, 32):
+                sub = f"{tok}_{i}"
+                if sub not in expanded:
+                    expanded.append(sub)
+        return expanded
+
     def clear_embeddings(self):
         """Remove all loaded textual-inversion embeddings."""
-        tokens = []
+        base_tokens = []
         for value in self.current_embeddings.values():
             tok = str(value or "").strip()
-            if tok and tok not in tokens:
-                tokens.append(tok)
+            if tok and tok not in base_tokens:
+                base_tokens.append(tok)
+
+        tokens = self._expand_multivector_tokens(base_tokens)
 
         try:
             if self.pipe is not None and hasattr(self.pipe, "unload_textual_inversion"):
@@ -879,6 +893,7 @@ class PipelineManager:
             if self.pipe is None or not hasattr(self.pipe, "load_textual_inversion"):
                 return
 
+            failed: list[str] = []
             for name, token in desired.items():
                 reg = EMBEDDING_REGISTRY[name]
                 path = Path(reg["path"])
@@ -891,9 +906,10 @@ class PipelineManager:
                             **load_kwargs,
                         )
                 except Exception as exc:
-                    raise ValueError(f"Failed to load embedding '{name}' from {path}: {exc}") from exc
+                    log.warning("Skipping embedding '%s' — %s", name, exc)
+                    failed.append(name)
 
-            self.current_embeddings = desired
+            self.current_embeddings = {k: v for k, v in desired.items() if k not in failed}
 
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""
