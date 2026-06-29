@@ -19,6 +19,7 @@ webbduck/
 |  |- schedulers.py     # scheduler registry
 |- models/
 |  |- registry.py       # model/LoRA discovery and registry sync
+|  |- metastore.py      # canonical rich-metadata store (tags, families, modes)
 |- ui/
 |  |- app.js
 |  |- core/
@@ -72,6 +73,7 @@ job = {
 - `state`: progress/stage/VRAM runtime info.
 - `queue`: queue/running/recent-completed metadata.
 - `catalog`: model/LoRA catalog changed; UI should refresh model lists.
+- `meta`: rich metadata (tags, families, recommendations) updated; consumers should refresh.
 
 ## Catalog Refresh
 
@@ -81,7 +83,7 @@ job = {
 - `lora/loras.json`
 - `checkpoint/sdxl/checkpoints.json`
 
-If signatures change, `refresh_registries()` runs and `catalog` is broadcast.
+If signatures change, `refresh_registries()` and `meta_store.reload_meta()` run, and `catalog` is broadcast.
 
 Env var:
 - `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`).
@@ -161,6 +163,27 @@ Use the project conda environment if you run tests through WSL.
 - `GET /caption_styles`
 - `GET /health`
 - `GET /ws` (WebSocket)
+- `GET /meta/assets`
+- `GET /meta/assets/{type}`
+- `GET /meta/assets/{type}/{name}`
+- `GET /meta/compatible/{checkpoint}`
+- `GET /meta/recommended/{checkpoint}`
+- `GET /meta/categories`
+- `GET /meta/export`
+- `GET /meta/stats`
+- `POST /meta/reload`
+
+## GPU Idle Unloading
+
+The model is automatically unloaded from VRAM after a period of inactivity. A background task (`idle_model_monitor()`) checks every 30 seconds: if no job is running and the pipeline hasn't been used for `IDLE_UNLOAD_SECONDS`, it calls `pipeline_manager.unload_all()`.
+
+## Metadata Store
+
+Rich metadata (tags, families, descriptions, recommendations) lives in `webbduck_meta/` (configurable via `WEBBDUCK_META_DIR`). The `MetaStore` class in `models/metastore.py` owns this store — it loads/saves JSON files, merges with runtime registries, and provides search/categories/recommendations/write helpers.
+
+- Auto-reloads alongside the catalog watcher.
+- External tools (e.g. PhoenixDraw) read via `/meta/*` API instead of maintaining their own copy.
+- To force a reload: `POST /meta/reload` or call `meta_store.reload_meta()` from Python.
 
 ## Runtime Environment Knobs
 
@@ -168,7 +191,9 @@ Use the project conda environment if you run tests through WSL.
 - `WEBBDUCK_PORT`
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
+- `WEBBDUCK_META_DIR` (default: `webbduck_meta/` in project root)
 - `WEBBDUCK_CATALOG_POLL_SECONDS`
+- `WEBBDUCK_IDLE_UNLOAD_SECONDS` (default `300.0`, min `30.0`)
 - `WEBBDUCK_THUMB_CONCURRENCY`
 - `WEBBDUCK_DEVICE`
 - `WEBBDUCK_DTYPE`

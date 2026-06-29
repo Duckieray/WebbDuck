@@ -105,3 +105,7 @@ Open `Settings` from the top bar to configure:
 ## State Persistence
 
 Most Studio settings are persisted in `localStorage` and restored on refresh, including prompt fields, dimensions, scheduler, second-pass settings, denoise strength, selected LoRAs, and selected embeddings.
+
+## GPU Idle Unload
+
+The model is automatically unloaded from VRAM after 5 minutes of inactivity to free resources. Generation will reload it on the next job (adds a few seconds of startup time). This is configurable via the `WEBBDUCK_IDLE_UNLOAD_SECONDS` environment variable.
