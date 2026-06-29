@@ -86,6 +86,7 @@ Key folders:
 - `WEBBDUCK_EMBEDDING_DIR`
 - `WEBBDUCK_META_DIR` (default: `webbduck_meta/` in project root)
 - `WEBBDUCK_CATALOG_POLL_SECONDS` (default: `3.0`)
+- `WEBBDUCK_IDLE_UNLOAD_SECONDS` (default: `300.0`)
 - `WEBBDUCK_THUMB_CONCURRENCY` (default: `2`)
 - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
 - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)

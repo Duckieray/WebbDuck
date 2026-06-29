@@ -80,6 +80,7 @@ job_registry = {}
 active_job_id = None
 active_job = None
 CATALOG_POLL_SECONDS = max(1.0, float(os.getenv("WEBBDUCK_CATALOG_POLL_SECONDS", "3.0")))
+IDLE_UNLOAD_SECONDS = max(30.0, float(os.getenv("WEBBDUCK_IDLE_UNLOAD_SECONDS", "300.0")))
 SMART_EXTEND_FEATHER_DEFAULT = 12
 SMART_EXTEND_STEP_GROWTH_DEFAULT = 1.25
 SMART_EXTEND_AUTO_STEP_DEFAULT = False
@@ -513,6 +514,26 @@ def compute_catalog_signature():
     )
 
 
+async def idle_model_monitor():
+    """Unload the GPU model after a period of inactivity."""
+    while True:
+        await asyncio.sleep(30.0)
+        if active_job_id is not None:
+            continue
+        try:
+            from core.pipeline import pipeline_manager
+            if pipeline_manager.pipe is None:
+                continue
+            idle_secs = time.time() - pipeline_manager.last_used
+            if idle_secs >= IDLE_UNLOAD_SECONDS:
+                print(f"[Idle Monitor] unloading model after {idle_secs:.0f}s idle")
+                update_stage("Idle")
+                pipeline_manager.unload_all()
+                await broadcast_state()
+        except Exception:
+            pass
+
+
 async def catalog_watcher():
     """Watch model/LoRA folders and hot-refresh registries."""
     last_signature = compute_catalog_signature()
@@ -576,6 +597,7 @@ async def startup():
     asyncio.create_task(gpu_worker(generation_queue))
     asyncio.create_task(vram_sampler())
     asyncio.create_task(catalog_watcher())
+    asyncio.create_task(idle_model_monitor())
     # Build search manifest lazily in background if missing.
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, ensure_manifest)
