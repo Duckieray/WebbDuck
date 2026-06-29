@@ -45,6 +45,7 @@ from models.registry import (
     CHECKPOINTS_FILE,
     refresh_registries,
 )
+from models.metastore import meta_store, reload_meta, AssetInfo
 from core.schedulers import SCHEDULERS
 from core.captioner import (
     list_captioners,
@@ -526,6 +527,9 @@ async def catalog_watcher():
             changed = refresh_registries()
             if not changed:
                 continue
+
+            reload_meta()
+
             await broadcast({
                 "type": "catalog",
                 "payload": {
@@ -1260,6 +1264,118 @@ def list_model_embeddings(base_model: str):
         if cfg.get("arch") == model_arch
     ]
 
+
+# ---------------------------------------------------------------------------
+#  Metadata endpoints — unified view of all assets with rich metadata
+# ---------------------------------------------------------------------------
+
+
+@app.get("/meta/assets")
+def list_meta_assets(
+    type: str = "",
+    tag: str = "",
+    mode: str = "",
+    family: str = "",
+    q: str = "",
+    compatible_with: str = "",
+):
+    """List all assets with rich metadata, with optional filters.
+
+    Parameters
+    ----------
+    type : str
+        Filter by asset type: ``checkpoint``, ``lora``, ``embedding``.
+    tag : str
+        Filter by tag (exact match).
+    mode : str
+        Filter by mode (anime, realistic, hentai, etc. — includes synonyms).
+    family : str
+        Filter by family (illustrious, pony, realistic, etc.).
+    q : str
+        Full-text search over name, description, aliases, and tags.
+    compatible_with : str
+        Checkpoint name — return only assets whose arch/families match.
+    """
+    if any([type, tag, mode, family, q, compatible_with]):
+        return meta_store.search(
+            asset_type=type or None,
+            tag=tag or None,
+            mode=mode or None,
+            family=family or None,
+            query=q or None,
+            compatible_with=compatible_with or None,
+        )
+    return meta_store.all_assets()
+
+
+@app.get("/meta/assets/{asset_type}")
+def list_meta_assets_by_type(asset_type: str):
+    """List all assets of a given type (checkpoint, lora, embedding)."""
+    valid = {"checkpoint", "lora", "embedding"}
+    if asset_type not in valid:
+        return JSONResponse(status_code=400, content={"error": f"Invalid type '{asset_type}'. Must be one of {valid}"})
+    return getattr(meta_store, f"{asset_type}s")()
+
+
+@app.get("/meta/assets/{asset_type}/{name:path}")
+def get_meta_asset(asset_type: str, name: str):
+    """Get rich metadata for a single asset."""
+    valid = {"checkpoint", "lora", "embedding"}
+    if asset_type not in valid:
+        return JSONResponse(status_code=400, content={"error": f"Invalid type '{asset_type}'. Must be one of {valid}"})
+    asset = meta_store.get(name, asset_type=asset_type)
+    if not asset:
+        return JSONResponse(status_code=404, content={"error": f"Unknown {asset_type}: {name!r}"})
+    return asset
+
+
+@app.get("/meta/compatible/{checkpoint_name:path}")
+def get_compatible_assets(checkpoint_name: str):
+    """Return compatible LoRAs and embeddings for a checkpoint."""
+    result = meta_store.compatible(checkpoint_name)
+    if not result["loras"] and not result["embeddings"]:
+        if not meta_store.get(checkpoint_name, asset_type="checkpoint"):
+            return JSONResponse(status_code=404, content={"error": f"Unknown checkpoint: {checkpoint_name!r}"})
+    return result
+
+
+@app.get("/meta/recommended/{checkpoint_name:path}")
+def get_recommendations(checkpoint_name: str, mode: str = ""):
+    """Return scored recommendations (LoRAs, embeddings, similar checkpoints)
+    for the given checkpoint and optional mode."""
+    result = meta_store.recommended(checkpoint_name, mode=mode)
+    if not any(result.values()):
+        if not meta_store.get(checkpoint_name, asset_type="checkpoint"):
+            return JSONResponse(status_code=404, content={"error": f"Unknown checkpoint: {checkpoint_name!r}"})
+    return result
+
+
+@app.get("/meta/categories")
+def get_meta_categories():
+    """Return aggregate tag/mode/family lists for UI filtering."""
+    return meta_store.categories()
+
+
+@app.post("/meta/reload")
+def reload_meta_endpoint():
+    """Reload metadata files from disk."""
+    reload_meta()
+    return {"status": "ok", "meta_dir": str(meta_store._meta_dir) if meta_store._meta_dir else None}
+
+
+@app.get("/meta/export")
+def export_meta():
+    """Export the full metadata store as JSON (for external consumers)."""
+    return meta_store.export_json()
+
+
+@app.get("/meta/stats")
+def get_meta_stats():
+    """Return summary statistics about the metadata store."""
+    return meta_store.stats()
+
+
+# ---------------------------------------------------------------------------
 
 @app.post("/upscale")
 async def upscale(

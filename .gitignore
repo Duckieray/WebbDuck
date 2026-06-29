@@ -16,6 +16,7 @@ checkpoint/
 lora/
 weights/
 plugins/webapps/
+webbduck_meta/
 *.pth
 *.ckpt
 *.safetensors

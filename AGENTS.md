@@ -29,7 +29,7 @@ Key folders:
 
 - `server/` API + websocket + gallery/thumb serving
 - `core/` worker, generation orchestration, pipeline lifecycle
-- `models/` registry/discovery for models, LoRAs, embeddings
+- `models/` registry/discovery for models, LoRAs, embeddings; includes `metastore.py` — the canonical rich-metadata store
 - `modes/` txt2img, img2img, inpaint, outpaint, two-pass mode logic
 - `prompt/` SDXL conditioning + long-prompt chunking
 - `tests/` pytest suite
@@ -46,12 +46,18 @@ Key folders:
 
 3. Catalog auto-refresh is expected behavior
 - Model/LoRA/embedding changes should flow through registry refresh + websocket `catalog` updates.
+- The metadata store (`models/metastore.py`) is auto-reloaded alongside registries.
 
-4. Long-prompt behavior
+4. WebbDuck is the canonical metadata owner
+- Rich metadata (tags, families, descriptions, recommendations) lives in `webbduck_meta/`.
+- External tools like PhoenixDraw read it via the `/meta/*` API instead of maintaining their own copy.
+- The store auto-refreshes alongside the catalog watcher; call `reload_meta()` or hit `POST /meta/reload` to force re-read from disk.
+
+5. Long-prompt behavior
 - SDXL long prompts use chunked conditioning.
 - Avoid reintroducing legacy experimental compression paths unless explicitly requested.
 
-5. Modal UX over browser popups
+6. Modal UX over browser popups
 - Prefer app modal components over native `alert/confirm/prompt`.
 
 ## 4. Coding Guidelines (Project-Specific)
@@ -78,6 +84,7 @@ Key folders:
 - `WEBBDUCK_PORT`
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
+- `WEBBDUCK_META_DIR` (default: `webbduck_meta/` in project root)
 - `WEBBDUCK_CATALOG_POLL_SECONDS` (default: `3.0`)
 - `WEBBDUCK_THUMB_CONCURRENCY` (default: `2`)
 - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
@@ -182,7 +189,16 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Ensure watcher refresh paths/signature include necessary files.
 - Ensure API endpoints return compatible metadata for frontend managers.
 
-3. Touch gallery behavior
+3. Add/edit rich metadata
+- Edit files directly in `webbduck_meta/` (the metadata store) — this is the canonical source.
+- Use the `MetaStore` API from Python: `meta_store.update_checkpoint_meta(name, tags=[...], ...)`.
+- External consumers (including PhoenixDraw) should read from the `/meta/*` HTTP endpoints.
+- The store auto-refreshes alongside the catalog watcher; call `reload_meta()` or hit `POST /meta/reload` to force re-read from disk.
+- Extend `models/registry.py`.
+- Ensure watcher refresh paths/signature include necessary files.
+- Ensure API endpoints return compatible metadata for frontend managers.
+
+4. Touch gallery behavior
 - Keep infinite scroll + search + selection interactions compatible.
 - Validate lightbox actions and metadata rendering.
 
