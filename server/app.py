@@ -1005,6 +1005,11 @@ def _cleanup_run_if_empty(run_dir: Path):
     remove_manifest_run(run_dir.name)
     remove_favorite_run(run_dir.name)
 
+    try:
+        run_dir.rmdir()
+    except OSError:
+        pass
+
 
 def _delete_image_artifacts(target: Path) -> list[str]:
     """Delete image + sidecars and return deleted web paths."""
