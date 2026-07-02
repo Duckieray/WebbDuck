@@ -2288,6 +2288,7 @@ async function startUpscale(imageSrc, onSuccess) {
 
         if (upscaledUrl) {
             toast('Upscale complete', 'success');
+            window.galleryManager?.invalidateFilterCache?.();
             if (onSuccess) {
                 onSuccess(upscaledUrl);
             } else {
@@ -2319,7 +2320,6 @@ function normalizeUpscaledUrl(pathOrUrl) {
     if (!pathOrUrl) return null;
 
     if (typeof pathOrUrl !== 'string') return null;
-    if (pathOrUrl.startsWith('/')) return pathOrUrl;
     if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
 
     const normalized = pathOrUrl.replace(/\\/g, '/');
@@ -2330,6 +2330,8 @@ function normalizeUpscaledUrl(pathOrUrl) {
     const lower = normalized.toLowerCase();
     const fallbackIdx = lower.lastIndexOf('outputs/');
     if (fallbackIdx >= 0) return `/${normalized.slice(fallbackIdx)}`;
+
+    if (pathOrUrl.startsWith('/')) return pathOrUrl;
 
     return pathOrUrl;
 }

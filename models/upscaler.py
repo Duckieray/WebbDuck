@@ -1,5 +1,6 @@
 """Real-ESRGAN upscaling integration."""
 
+import os
 import sys
 import types
 import torch
@@ -52,7 +53,11 @@ def get_upsampler(scale: int = 2):
 
     RRDBNet, RealESRGANer = _import_upscaler_components()
 
-    model_path = Path(f"weights/RealESRGAN_x{scale}plus.pth")
+    models_root = Path(os.getenv("WEBBDUCK_MODELS_DIR", "")).expanduser()
+    if models_root and (models_root / f"weights/RealESRGAN_x{scale}plus.pth").exists():
+        model_path = models_root / f"weights/RealESRGAN_x{scale}plus.pth"
+    else:
+        model_path = Path(f"weights/RealESRGAN_x{scale}plus.pth")
     if not model_path.exists():
         raise FileNotFoundError(f"Missing ESRGAN weights: {model_path}")
 

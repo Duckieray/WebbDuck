@@ -26,6 +26,7 @@ from server.storage import (
     filter_manifest_sessions,
     remove_manifest_image,
     remove_manifest_run,
+    update_manifest_variant,
     favorite_map,
     set_favorite,
     remove_favorite_image,
@@ -61,6 +62,7 @@ from core.web_plugins import (
     include_web_plugin_routers,
     list_remote_web_plugins,
     mount_web_plugin_assets,
+    reload_web_plugin,
 )
 
 INPUTS_DIR = Path("inpaint_input")
@@ -492,7 +494,7 @@ def _path_stamp(path: Path):
     stamp = [("self", path.name, stat.st_mtime_ns, stat.st_size)]
 
     if path.is_dir():
-        for child in sorted(path.iterdir(), key=lambda p: p.name):
+        for child in sorted(path.rglob("*"), key=lambda p: p.name):
             try:
                 cstat = child.stat()
                 stamp.append((child.name, cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
@@ -655,6 +657,20 @@ def disconnect_remote_plugin_route(plugin_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="Remote plugin not found.")
     return {"removed": True, "id": str(plugin_id).strip().lower()}
+
+
+@app.post("/plugins/web/{plugin_id}/reload")
+def reload_plugin_route(plugin_id: str):
+    """Hot-reload a local web plugin without restarting the server."""
+    from core.web_plugins import reload_web_plugin as _do_reload
+
+    try:
+        plugin = _do_reload(plugin_id, app)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Plugin reload failed: {exc}")
+    if plugin is None:
+        raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' not found.")
+    return {"reloaded": True, "id": plugin.plugin_id, "name": plugin.name}
 
 
 app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
@@ -1428,7 +1444,14 @@ async def upscale(
         "settings": {"image": image, "scale": scale},
     }
 
-    return await enqueue(job, wait_for_result=wait_for_result)
+    result = await enqueue(job, wait_for_result=wait_for_result)
+
+    if isinstance(result, dict) and result.get("image"):
+        image_web = to_web_path(resolve_web_path(image))
+        variant_web = result["image"]
+        update_manifest_variant(image_web, variant_web)
+
+    return result
 
 
 @app.get("/queue")

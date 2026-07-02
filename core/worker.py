@@ -14,7 +14,7 @@ from datetime import datetime
 from core.generation import run_generation
 from core.exceptions import GenerationCancelledError
 from core.runtime import runtime_error_hint
-from server.storage import save_images, append_session_entry
+from server.storage import save_images, append_session_entry, to_web_path
 from server.events import broadcast_state
 from server.state import update_stage, update_progress, update_error_detail, snapshot
 from models.upscaler import get_upsampler
@@ -108,7 +108,7 @@ async def run_upscale(job, cancel_event=None):
     update_stage("Idle")
     await broadcast_state(snapshot())
 
-    return str(out_path)
+    return to_web_path(out_path)
 
 
 async def gpu_worker(queue):

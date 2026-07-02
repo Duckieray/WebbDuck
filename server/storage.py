@@ -387,6 +387,21 @@ def append_manifest_entries(image_paths: list[Path], run_dir: Path, meta: dict):
         _set_manifest_cache(cached)
 
 
+def update_manifest_variant(image_web_path: str, variant_web_path: str):
+    """Update the manifest entry for an image to set its HD variant."""
+    with _manifest_lock:
+        entries = _load_manifest_entries_cached()
+        changed = False
+        for entry in entries:
+            if entry.get("image") != image_web_path:
+                continue
+            if entry.get("variant") != variant_web_path:
+                entry["variant"] = variant_web_path
+                changed = True
+        if changed:
+            _write_manifest_entries(entries)
+
+
 def remove_manifest_image(path_str: str):
     """Remove a single image (or variant) from manifest."""
     ensure_manifest()

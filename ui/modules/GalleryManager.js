@@ -563,6 +563,10 @@ export class GalleryManager {
         return this.filterData || [];
     }
 
+    invalidateFilterCache() {
+        this.filterCache.clear();
+    }
+
     async ensureFilterData(filter) {
         if (filter === 'all') {
             this.filterData = null;
