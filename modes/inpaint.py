@@ -489,8 +489,16 @@ class InpaintMode(GenerationMode):
             and settings.get("input_image") is not None
         )
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None, faceid_kwargs=None):
         log.info("Running Inpaint Mode")
+
+        # Wrap base_inpaint to inject faceid_kwargs into every call automatically
+        original_base_inpaint = base_inpaint
+        def wrapped_base_inpaint(**kwargs):
+            if faceid_kwargs:
+                kwargs.update(faceid_kwargs)
+            return original_base_inpaint(**kwargs)
+        base_inpaint = wrapped_base_inpaint
 
         prompt = settings["prompt"]
         prompt_2 = settings.get("prompt_2", "")

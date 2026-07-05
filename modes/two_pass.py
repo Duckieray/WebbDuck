@@ -68,7 +68,7 @@ class TwoPassMode(GenerationMode):
         has_second_pass = second_pass not in (None, "", "None")
         return has_second_pass and img2img is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None, faceid_kwargs=None):
         log.info("Entering two-pass generation")
         
         pipeline_manager.set_active_unet("base")
@@ -106,7 +106,9 @@ class TwoPassMode(GenerationMode):
 
             pipeline_manager.set_active_unet("base")
 
-            base_latents = pipe(
+            kwargs = {}
+            if faceid_kwargs: kwargs.update(faceid_kwargs)
+            base_latents = pipe(**kwargs, 
                 prompt_embeds=prompt_embeds,
                 pooled_prompt_embeds=pooled_prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,

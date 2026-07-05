@@ -317,13 +317,14 @@ def run_generation(settings, cancel_event=None):
     unload_captioners()
 
     with stage_timer("pipeline_get_seconds"):
-        pipe, img2img, base_img2img, base_inpaint, trigger_phrase = pipeline_manager.get(
+        pipe, img2img, base_img2img, base_inpaint, trigger_phrase, faceid_kwargs = pipeline_manager.get(
             base_model=settings["base_model"],
             second_pass_model=second_pass_model,
             loras=settings.get("loras", []),
             embeddings=settings.get("embeddings", []),
             scheduler_name=settings.get("scheduler"),
             cancel_event=cancel_event,
+            identity_adapter=settings.get("identity_adapter"),
         )
 
     # Always inject LoRA trigger phrases into active prompts.
@@ -433,6 +434,7 @@ def run_generation(settings, cancel_event=None):
             base_inpaint=base_inpaint,
             generator=generator,
             callback=progress_tracker,
+            faceid_kwargs=faceid_kwargs,
         )
 
     settings["performance_timing"] = snapshot_metrics()

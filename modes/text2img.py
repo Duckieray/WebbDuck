@@ -14,7 +14,7 @@ class Text2ImgMode(GenerationMode):
     def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         return settings.get("input_image") is None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None, faceid_kwargs=None):
         num_images = settings["num_images"]
         prompt = settings["prompt"]
         prompt_2 = settings.get("prompt_2")
@@ -43,6 +43,8 @@ class Text2ImgMode(GenerationMode):
             "callback_on_step_end_tensor_inputs": ['latents'],
             "clip_skip": clip_skip,
         }
+        if faceid_kwargs:
+            kwargs.update(faceid_kwargs)
         if use_native_prompt:
             kwargs["prompt"] = prompt
             kwargs["prompt_2"] = prompt_2

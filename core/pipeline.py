@@ -911,6 +911,81 @@ class PipelineManager:
 
             self.current_embeddings = {k: v for k, v in desired.items() if k not in failed}
 
+    def apply_identity_adapter(self, adapter_cfg: dict | None) -> dict:
+        """Load and apply IP-Adapter FaceID configuration."""
+        if not adapter_cfg or str(adapter_cfg.get("enabled", "false")).lower() != "true":
+            if hasattr(self.pipe, "unload_ip_adapter"):
+                self.pipe.unload_ip_adapter()
+            if hasattr(self.pipe, "peft_config") and "faceid_lora" in getattr(self.pipe, "peft_config", {}):
+                self.pipe.delete_adapters(["faceid_lora"])
+            return {}
+
+        repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
+        weight = str(adapter_cfg.get("adapter_weight", "ip-adapter-faceid-plusv2_sdxl.bin"))
+        lora_weight = adapter_cfg.get("lora_weight")
+        if lora_weight:
+            lora_weight = str(lora_weight)
+        adapter_scale = float(adapter_cfg.get("adapter_scale", 0.55))
+        lora_scale = float(adapter_cfg.get("lora_scale", 0.60))
+        refs = adapter_cfg.get("reference_images", [])
+
+        if not refs:
+            return {}
+
+        # 1. Diffusers IP-Adapter loading
+        self.pipe.load_ip_adapter(repo, subfolder=None, weight_name=weight)
+        self.pipe.set_ip_adapter_scale(adapter_scale)
+
+        if lora_weight:
+            self.pipe.load_lora_weights(repo, weight_name=lora_weight, adapter_name="faceid_lora")
+            # Must re-set all adapters since load_lora_weights activates only the new one by default
+            current_adapters = [sanitize_adapter_name(n) for n in self.current_loras.keys()]
+            current_weights = list(self.current_loras.values())
+            current_adapters.append("faceid_lora")
+            current_weights.append(lora_scale)
+            self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
+
+        # 2. Extract Face Embeddings using InsightFace
+        import cv2
+        import torch
+        from insightface.app import FaceAnalysis
+        from insightface.utils import face_align
+        
+        embedder_name = str(adapter_cfg.get("embedder", "buffalo_l"))
+        app = FaceAnalysis(name=embedder_name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app.prepare(ctx_id=0, det_size=(640, 640))
+
+        face_images = []
+        face_embeds = []
+
+        for ref_path in refs:
+            img = cv2.imread(str(ref_path))
+            if img is None:
+                continue
+            faces = app.get(img)
+            if not faces:
+                continue
+            # Select the largest face bounding box
+            face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))[-1]
+
+            embed = torch.from_numpy(face.normed_embedding).unsqueeze(0)
+            face_embeds.append(embed)
+
+            face_img = face_align.norm_crop(img, landmark=face.kps, image_size=256)
+            face_images.append(face_img)
+
+        if not face_images:
+            return {}
+
+        # 3. Calculate mean embedding for multiple reference images
+        avg_embed = torch.mean(torch.stack(face_embeds), dim=0)
+
+        # 4. For FaceID Plus v2, diffusers expects ip_adapter_image and ip_adapter_embeds
+        return {
+            "ip_adapter_image": [face_images], # Diffusers sometimes expects nested lists for multiple scale conditions
+            "ip_adapter_embeds": [avg_embed],
+        }
+
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""
         assert which in ("base", "second_pass"), f"Invalid UNet target: {which}"
@@ -929,7 +1004,7 @@ class PipelineManager:
             self.img2img.unet.to(DEVICE)
             self.img2img.vae.to(DEVICE)
 
-    def get(self, base_model, second_pass_model=None, loras=None, embeddings=None, scheduler_name="UniPC", cancel_event=None):
+    def get(self, base_model, second_pass_model=None, loras=None, embeddings=None, scheduler_name="UniPC", cancel_event=None, identity_adapter=None):
         """Get or create pipeline with specified configuration."""
         with self.lock:
             if self.key != base_model:
@@ -1017,6 +1092,10 @@ class PipelineManager:
             self._ensure_not_cancelled(cancel_event)
             self.apply_embeddings(embeddings or [])
 
+            update_stage("Loading identity adapter")
+            self._ensure_not_cancelled(cancel_event)
+            faceid_kwargs = self.apply_identity_adapter(identity_adapter)
+
             update_stage("Generating")
             update_progress(0.35)
 
@@ -1028,7 +1107,7 @@ class PipelineManager:
                 torch.cuda.synchronize()
             self.last_used = time.time()
 
-            return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase
+            return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase, faceid_kwargs
 
 
 pipeline_manager = PipelineManager()

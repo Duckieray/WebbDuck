@@ -12,7 +12,7 @@ class Img2ImgMode(GenerationMode):
     def can_run(self, settings, pipe, img2img, base_img2img, base_inpaint=None):
         return settings.get("input_image") is not None
 
-    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None):
+    def run(self, *, settings, pipe, img2img, base_img2img, base_inpaint, generator, callback=None, faceid_kwargs=None):
         # Prefer second pass model (refiner) if available, per user request
         if img2img is not None:
             active_pipe = img2img
@@ -48,6 +48,8 @@ class Img2ImgMode(GenerationMode):
             "callback_on_step_end_tensor_inputs": ['latents'],
             "clip_skip": clip_skip,
         }
+        if faceid_kwargs:
+            kwargs.update(faceid_kwargs)
         if use_native_prompt:
             kwargs["prompt"] = prompt
             kwargs["prompt_2"] = prompt_2

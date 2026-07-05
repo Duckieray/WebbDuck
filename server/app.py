@@ -735,12 +735,18 @@ async def test(
     smart_extend_pyramid_enable: bool = Form(False),
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     clip_skip: int = Form(None),
+    identity_adapter: str = Form("{}"),
     wait_for_result: bool = Form(True),
 ):
     """Generate single test image."""
     width, height = normalize_dimensions(width, height)
     lora_list = _parse_json_list(loras, "loras")
     embedding_list = _parse_json_list(embeddings, "embeddings")
+    try:
+        identity_adapter_dict = json.loads(identity_adapter)
+    except Exception:
+        identity_adapter_dict = {}
+
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
@@ -760,6 +766,7 @@ async def test(
         "scheduler": scheduler,
         "loras": lora_list,
         "embeddings": embedding_list,
+        "identity_adapter": identity_adapter_dict,
         "strength": strength,
         "inpainting_fill": inpainting_fill,
         "mask_blur": mask_blur,
@@ -872,12 +879,19 @@ async def generate(
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     smart_extend_pyramid_initializer: str = Form("edge_strips"),
     clip_skip: int = Form(None),
+    identity_adapter: str = Form("{}"),
     wait_for_result: bool = Form(True),
 ):
     """Generate batch of images."""
     width, height = normalize_dimensions(width, height)
+    num_images = max(1, min(num_images, MAX_BATCH_SIZE))
     lora_list = _parse_json_list(loras, "loras")
     embedding_list = _parse_json_list(embeddings, "embeddings")
+    try:
+        identity_adapter_dict = json.loads(identity_adapter)
+    except Exception:
+        identity_adapter_dict = {}
+
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
@@ -894,8 +908,10 @@ async def generate(
         "height": height,
         "num_images": num_images,
         "seed": resolve_seed(seed),
+        "scheduler": scheduler,
         "loras": lora_list,
         "embeddings": embedding_list,
+        "identity_adapter": identity_adapter_dict,
         "scheduler": scheduler,
         "strength": strength,
         "refinement_strength": refinement_strength,
