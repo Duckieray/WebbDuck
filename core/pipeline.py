@@ -28,6 +28,7 @@ from huggingface_hub import snapshot_download
 
 from safetensors.torch import load_file
 from models.registry import MODEL_REGISTRY, LORA_REGISTRY, EMBEDDING_REGISTRY
+from server.storage import resolve_web_path
 from core.exceptions import GenerationCancelledError
 from core.perf import stage_timer
 from core.runtime import resolve_runtime_profile
@@ -913,18 +914,20 @@ class PipelineManager:
 
     def apply_identity_adapter(self, adapter_cfg: dict | None) -> dict:
         """Load and apply IP-Adapter FaceID configuration."""
+        import torch
+
+        # Cleanup when FaceID is disabled
         if not adapter_cfg or str(adapter_cfg.get("enabled", "false")).lower() != "true":
             if hasattr(self.pipe, "unload_ip_adapter"):
                 self.pipe.unload_ip_adapter()
-            if hasattr(self.pipe, "peft_config") and "faceid_lora" in getattr(self.pipe, "peft_config", {}):
-                self.pipe.delete_adapters(["faceid_lora"])
+            if hasattr(self.pipe, "peft_config"):
+                faceid_adapters = [n for n in self.pipe.peft_config if n.startswith("faceid_")]
+                if faceid_adapters:
+                    self.pipe.delete_adapters(faceid_adapters)
             return {}
 
         repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
         weight = str(adapter_cfg.get("adapter_weight", "ip-adapter-faceid-plusv2_sdxl.bin"))
-        lora_weight = adapter_cfg.get("lora_weight")
-        if lora_weight:
-            lora_weight = str(lora_weight)
         adapter_scale = float(adapter_cfg.get("adapter_scale", 0.55))
         lora_scale = float(adapter_cfg.get("lora_scale", 0.60))
         refs = adapter_cfg.get("reference_images", [])
@@ -932,58 +935,61 @@ class PipelineManager:
         if not refs:
             return {}
 
-        # 1. Diffusers IP-Adapter loading
-        self.pipe.load_ip_adapter(repo, subfolder=None, weight_name=weight)
+        # 1. Diffusers IP-Adapter loading (also loads FaceID LoRA internally as "faceid_0")
+        self.pipe.load_ip_adapter(repo, subfolder="", weight_name=weight, image_encoder_folder=None)
         self.pipe.set_ip_adapter_scale(adapter_scale)
 
-        if lora_weight:
-            self.pipe.load_lora_weights(repo, weight_name=lora_weight, adapter_name="faceid_lora")
-            # Must re-set all adapters since load_lora_weights activates only the new one by default
-            current_adapters = [sanitize_adapter_name(n) for n in self.current_loras.keys()]
-            current_weights = list(self.current_loras.values())
-            current_adapters.append("faceid_lora")
-            current_weights.append(lora_scale)
-            self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
+        # IPAdapterFaceIDPlusImageProjection needs clip_embeds set (diffusers bug: never set after init)
+        # Use batch=2 (CFG: neg+pos) to match ip_adapter_image_embeds pre-doubled format
+        proj_layers = self.pipe.unet.encoder_hid_proj.image_projection_layers
+        for layer in proj_layers:
+            if hasattr(layer, "clip_embeds") and layer.clip_embeds is None:
+                dummy = torch.zeros(2, 1, 257, layer.proj_in.in_features,
+                                    dtype=layer.proj_in.weight.dtype,
+                                    device=layer.proj_in.weight.device)
+                layer.clip_embeds = dummy
+
+        # Integrate FaceID LoRA ("faceid_0" loaded internally) with existing adapters
+        current_adapters = [sanitize_adapter_name(n) for n in self.current_loras.keys()]
+        current_weights = list(self.current_loras.values())
+        current_adapters.append("faceid_0")
+        current_weights.append(lora_scale)
+        self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
 
         # 2. Extract Face Embeddings using InsightFace
         import cv2
-        import torch
         from insightface.app import FaceAnalysis
         from insightface.utils import face_align
-        
+
         embedder_name = str(adapter_cfg.get("embedder", "buffalo_l"))
         app = FaceAnalysis(name=embedder_name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
 
-        face_images = []
         face_embeds = []
 
         for ref_path in refs:
-            img = cv2.imread(str(ref_path))
+            fs_path = resolve_web_path(ref_path)
+            img = cv2.imread(str(fs_path))
             if img is None:
                 continue
             faces = app.get(img)
             if not faces:
                 continue
-            # Select the largest face bounding box
             face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))[-1]
-
             embed = torch.from_numpy(face.normed_embedding).unsqueeze(0)
             face_embeds.append(embed)
 
-            face_img = face_align.norm_crop(img, landmark=face.kps, image_size=256)
-            face_images.append(face_img)
-
-        if not face_images:
+        if not face_embeds:
             return {}
 
         # 3. Calculate mean embedding for multiple reference images
         avg_embed = torch.mean(torch.stack(face_embeds), dim=0)
 
-        # 4. For FaceID Plus v2, diffusers expects ip_adapter_image and ip_adapter_embeds
+        # 4. For FaceID Plus v2, diffusers expects ip_adapter_image_embeds
+        # Shape [2, 1, 512]: [zeros(uncond, 1, 512), face_embeds(cond, 1, 512)] for CFG handling
+        combined = torch.cat([torch.zeros_like(avg_embed), avg_embed], dim=0).unsqueeze(1)
         return {
-            "ip_adapter_image": [face_images], # Diffusers sometimes expects nested lists for multiple scale conditions
-            "ip_adapter_embeds": [avg_embed],
+            "ip_adapter_image_embeds": [combined],
         }
 
     def set_active_unet(self, which: str):

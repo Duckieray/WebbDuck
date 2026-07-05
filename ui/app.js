@@ -634,6 +634,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupQueuePanel();
         setupRealtimeGalleryRefresh();
         setupCatalogWatcher();
+        setupIpAdapterManager();
 
         await Promise.all([loadModels(), loadSchedulers(), window.galleryManager.load()]);
 
@@ -835,7 +836,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -868,6 +869,28 @@ function setupFormHandlers() {
         syncFromDOM();
     });
     updateSmartExtendAdvancedVisibility();
+
+    const updateIPAdapterVisibility = () => {
+        const enabled = Boolean(byId('ip-adapter-enabled')?.checked);
+        toggleClass(byId('ip-adapter-controls'), 'hidden', !enabled);
+    };
+    listen(byId('ip-adapter-enabled'), 'change', () => {
+        updateIPAdapterVisibility();
+        syncFromDOM();
+    });
+    updateIPAdapterVisibility();
+
+    const updateSliderDisplay = (sliderId, displayId) => {
+        const slider = byId(sliderId);
+        const display = byId(displayId);
+        if (slider && display) {
+            const update = () => { display.textContent = parseFloat(slider.value).toFixed(2); };
+            listen(slider, 'input', update);
+            update();
+        }
+    };
+    updateSliderDisplay('ip-adapter-scale', 'ip-adapter-scale-value');
+    updateSliderDisplay('ip-adapter-lora-scale', 'ip-adapter-lora-scale-value');
 
     const promptEl = byId('prompt');
     if (promptEl) {
@@ -1075,6 +1098,25 @@ function collectFormData() {
     const embeddings = window.embeddingManager?.getSelected() || [];
     if (embeddings.length > 0) {
         formData.append('embeddings', JSON.stringify(embeddings));
+    }
+
+    if (byId('ip-adapter-enabled')?.checked) {
+        const refsJson = byId('ip-adapter-refs-json')?.value || '[]';
+        let refs = [];
+        try { refs = JSON.parse(refsJson); } catch { refs = []; }
+        if (Array.isArray(refs) && refs.length > 0) {
+            formData.append('identity_adapter', JSON.stringify({
+                enabled: true,
+                type: 'ipadapter_faceid_plusv2_sdxl',
+                repo: 'h94/IP-Adapter-FaceID',
+                adapter_weight: 'ip-adapter-faceid-plusv2_sdxl.bin',
+                lora_weight: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors',
+                embedder: 'buffalo_l',
+                adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 0.55),
+                lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
+                reference_images: refs,
+            }));
+        }
     }
 
     if (window._uploadedImage) {
@@ -2563,6 +2605,234 @@ async function refreshQueuePanel() {
         const summaryEl = byId('queue-summary');
         if (summaryEl) summaryEl.textContent = 'Queue unavailable';
         updateQueueOpenButton(null);
+    }
+}
+
+// ── IP-Adapter FaceID Manager ───────────────────────────────────
+
+let _ipAdapterRefs = [];
+let _ipAdapterPresets = {};
+
+function setupIpAdapterManager() {
+    const grid = byId('ip-adapter-refs-grid');
+    const uploadInput = byId('ip-adapter-refs-upload-input');
+    const uploadBtn = byId('ip-adapter-refs-upload-btn');
+    const presetSelect = byId('ip-adapter-preset-select');
+    const saveBtn = byId('ip-adapter-preset-save-btn');
+    const deleteBtn = byId('ip-adapter-preset-delete-btn');
+    const nameRow = byId('ip-adapter-preset-name-row');
+    const nameInput = byId('ip-adapter-preset-name-input');
+    const confirmSave = byId('ip-adapter-preset-confirm-save');
+
+    // Load from saved state
+    try {
+        const saved = JSON.parse(byId('ip-adapter-refs-json')?.value || '[]');
+        if (Array.isArray(saved)) _ipAdapterRefs = saved;
+    } catch {}
+
+    function renderGrid() {
+        grid.innerHTML = '';
+        const selectedPaths = new Set(_ipAdapterRefs);
+
+        // Fetch server-side refs and render all
+        fetch('/ip-adapter/refs').then(res => res.json()).then(data => {
+            const serverImages = data.images || [];
+            const allUrls = new Set();
+
+            // Render server images as selectable thumbnails
+            for (const img of serverImages) {
+                allUrls.add(img.url);
+                const isSelected = selectedPaths.has(img.url);
+                const thumb = document.createElement('div');
+                thumb.className = 'ip-adapter-ref-thumb' + (isSelected ? ' selected' : '');
+                thumb.title = img.name;
+                thumb.innerHTML = `<img src="${img.url}" />${isSelected ? '<button class="remove-ref">x</button>' : ''}`;
+                thumb.addEventListener('click', () => {
+                    const url = img.url;
+                    const idx = _ipAdapterRefs.indexOf(url);
+                    if (idx >= 0) {
+                        _ipAdapterRefs.splice(idx, 1);
+                    } else {
+                        _ipAdapterRefs.push(url);
+                    }
+                    syncRefsState();
+                    renderGrid();
+                });
+                if (isSelected) {
+                    const rmBtn = thumb.querySelector('.remove-ref');
+                    rmBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        _ipAdapterRefs = _ipAdapterRefs.filter(p => p !== img.url);
+                        syncRefsState();
+                        renderGrid();
+                        try {
+                            await fetch(`/ip-adapter/refs/${encodeURIComponent(img.name)}`, { method: 'DELETE' });
+                        } catch {}
+                    });
+                }
+                grid.appendChild(thumb);
+            }
+
+            // Also show any selected refs not on server (e.g., external paths)
+            for (const p of _ipAdapterRefs) {
+                if (!allUrls.has(p)) {
+                    const isSelected = true;
+                    const thumb = document.createElement('div');
+                    thumb.className = 'ip-adapter-ref-thumb selected';
+                    thumb.innerHTML = `<img src="${p}" onerror="this.parentElement.remove()" /><button class="remove-ref">x</button>`;
+                    const rmBtn = thumb.querySelector('.remove-ref');
+                    rmBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        _ipAdapterRefs = _ipAdapterRefs.filter(x => x !== p);
+                        syncRefsState();
+                        renderGrid();
+                    });
+                    grid.appendChild(thumb);
+                }
+            }
+
+            if (grid.children.length === 0) {
+                grid.innerHTML = '<span style="color:var(--text-muted);font-size:12px;align-self:center;">No reference images. Upload face photos below.</span>';
+            }
+        }).catch(() => {
+            grid.innerHTML = '<span style="color:var(--text-muted);font-size:12px;align-self:center;">Could not load ref images.</span>';
+        });
+    }
+
+    function syncRefsState() {
+        byId('ip-adapter-refs-json').value = JSON.stringify(_ipAdapterRefs);
+        setState({ identityAdapterRefs: _ipAdapterRefs });
+    }
+
+    // Upload button
+    uploadBtn.addEventListener('click', () => uploadInput.click());
+
+    uploadInput.addEventListener('change', async () => {
+        const files = uploadInput.files;
+        if (!files || files.length === 0) return;
+        toast(`Uploading ${files.length} image(s)...`, 'info');
+        let uploaded = 0;
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetch('/ip-adapter/refs/upload', { method: 'POST', body: formData });
+                if (!res.ok) {
+                    console.warn('Upload returned', res.status, await res.text());
+                    continue;
+                }
+                const data = await res.json();
+                if (data.url) {
+                    _ipAdapterRefs.push(data.url);
+                    uploaded++;
+                }
+            } catch (err) {
+                console.error('Upload failed:', err);
+                toast(`Upload failed: ${err.message}`, 'error');
+            }
+        }
+        uploadInput.value = '';
+        syncRefsState();
+        renderGrid();
+        if (uploaded > 0) toast(`${uploaded} image(s) uploaded`, 'success');
+        else toast('Upload failed — check console', 'error');
+    });
+
+    // Presets
+    async function loadPresets() {
+        try {
+            const res = await fetch('/ip-adapter/presets');
+            const data = await res.json();
+            _ipAdapterPresets = data.presets || {};
+            renderPresetSelect();
+        } catch (err) {
+            console.error('Load presets failed:', err);
+        }
+    }
+
+    function renderPresetSelect() {
+        presetSelect.innerHTML = '<option value="">-- Load Preset --</option>';
+        for (const name of Object.keys(_ipAdapterPresets).sort()) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            presetSelect.appendChild(opt);
+        }
+    }
+
+    presetSelect.addEventListener('change', () => {
+        const name = presetSelect.value;
+        if (!name || !_ipAdapterPresets[name]) return;
+        const preset = _ipAdapterPresets[name];
+        _ipAdapterRefs = Array.isArray(preset.refs) ? [...preset.refs] : [];
+        syncRefsState();
+        renderGrid();
+        if (preset.adapter_scale != null) {
+            byId('ip-adapter-scale').value = preset.adapter_scale;
+            byId('ip-adapter-scale-value').textContent = preset.adapter_scale;
+        }
+        if (preset.lora_scale != null) {
+            byId('ip-adapter-lora-scale').value = preset.lora_scale;
+            byId('ip-adapter-lora-scale-value').textContent = preset.lora_scale;
+        }
+    });
+
+    saveBtn.addEventListener('click', () => {
+        nameRow.classList.toggle('hidden');
+        nameInput.value = '';
+        nameInput.focus();
+    });
+
+    confirmSave.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) return;
+        const payload = {
+            name,
+            refs: _ipAdapterRefs,
+            adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 0.55),
+            lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
+        };
+        try {
+            const res = await fetch('/ip-adapter/presets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                nameRow.classList.add('hidden');
+                await loadPresets();
+                presetSelect.value = name;
+            }
+        } catch (err) {
+            console.error('Save preset failed:', err);
+        }
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+        const name = presetSelect.value;
+        if (!name) return;
+        try {
+            await fetch(`/ip-adapter/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            await loadPresets();
+        } catch (err) {
+            console.error('Delete preset failed:', err);
+        }
+    });
+
+    // Load initial data
+    loadPresets();
+    renderGrid();
+
+    // Also reload when section becomes visible (user opens it)
+    const section = byId('section-ip-adapter');
+    if (section) {
+        const observer = new MutationObserver(() => {
+            if (!section.classList.contains('collapsed')) {
+                loadPresets();
+                renderGrid();
+            }
+        });
+        observer.observe(section, { attributes: true, attributeFilter: ['class'] });
     }
 }
 

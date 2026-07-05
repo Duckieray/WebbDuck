@@ -254,11 +254,14 @@ def ensure_lora_registry():
 
     registry = {}
 
-    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(LORA_ROOT.rglob("*.safetensors"), key=lambda p: p.name.lower()):
         if not _is_lora_file(f):
             continue
-        registry[f.stem] = {
-            "file": f.name,
+        key = f.stem
+        if key in registry:
+            continue
+        registry[key] = {
+            "file": str(f.relative_to(LORA_ROOT)),
             "trigger": None,
             "weight": 1.0,
             "description": "",
@@ -304,14 +307,14 @@ def sync_lora_registry_file():
         data = {}
 
     changed = False
-    for f in sorted(LORA_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for f in sorted(LORA_ROOT.rglob("*.safetensors"), key=lambda p: p.name.lower()):
         if not _is_lora_file(f):
             continue
         key = f.stem
         if key in data:
             continue
         data[key] = {
-            "file": f.name,
+            "file": str(f.relative_to(LORA_ROOT)),
             "trigger": None,
             "weight": 1.0,
             "description": "",

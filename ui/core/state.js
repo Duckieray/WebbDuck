@@ -47,6 +47,10 @@ const DEFAULT_STATE = {
     selectedEmbeddings: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
+    identityAdapterEnabled: false,
+    identityAdapterRefs: [],
+    identityAdapterScale: 0.55,
+    identityAdapterLoraScale: 0.60,
 };
 
 // Current state
@@ -83,6 +87,14 @@ function normalizeDenoisingStrength(rawValue, opts = {}) {
     }
     const range = denoiseRangeForMode(mode);
     return Math.max(range.min, Math.min(range.max, raw));
+}
+
+function parseRefsJson(raw) {
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
 }
 
 // Subscribers for state changes
@@ -304,6 +316,10 @@ export function syncFromDOM() {
         smartExtendOffsetX: state.smartExtendOffsetX ?? null,
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
         clipSkip2: getChecked('clip-skip-2-enabled'),
+        identityAdapterEnabled: getChecked('ip-adapter-enabled'),
+        identityAdapterRefs: parseRefsJson(getValue('ip-adapter-refs-json')),
+        identityAdapterScale: parseFloat(getValue('ip-adapter-scale')) || 0.55,
+        identityAdapterLoraScale: parseFloat(getValue('ip-adapter-lora-scale')) || 0.60,
     });
 }
 
@@ -362,6 +378,15 @@ export function syncToDOM() {
     setValue('smart-extend-refine-width', state.smartExtendRefineWidth ?? 64);
     setValue('smart-extend-refine-strength', state.smartExtendRefineStrength ?? 0.32);
     setValue('smart-extend-pyramid-trigger-ratio', state.smartExtendPyramidTriggerRatio ?? 2.4);
+
+    setChecked('ip-adapter-enabled', Boolean(state.identityAdapterEnabled));
+    setValue('ip-adapter-refs-json', JSON.stringify(state.identityAdapterRefs ?? []));
+    setValue('ip-adapter-scale', state.identityAdapterScale ?? 0.55);
+    setValue('ip-adapter-lora-scale', state.identityAdapterLoraScale ?? 0.60);
+    const ipControls = document.getElementById('ip-adapter-controls');
+    if (ipControls) {
+        ipControls.classList.toggle('hidden', !Boolean(state.identityAdapterEnabled));
+    }
 
     // Sync Inpaint Mode Buttons
     const replaceBtn = document.getElementById('inpaint-replace');

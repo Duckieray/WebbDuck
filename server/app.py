@@ -884,7 +884,6 @@ async def generate(
 ):
     """Generate batch of images."""
     width, height = normalize_dimensions(width, height)
-    num_images = max(1, min(num_images, MAX_BATCH_SIZE))
     lora_list = _parse_json_list(loras, "loras")
     embedding_list = _parse_json_list(embeddings, "embeddings")
     try:
@@ -912,7 +911,6 @@ async def generate(
         "loras": lora_list,
         "embeddings": embedding_list,
         "identity_adapter": identity_adapter_dict,
-        "scheduler": scheduler,
         "strength": strength,
         "refinement_strength": refinement_strength,
         "inpainting_fill": inpainting_fill,
@@ -1766,7 +1764,6 @@ async def get_thumbnail(path: str):
     """Serve a thumbnail, generating it on demand if needed."""
     try:
         async with thumb_semaphore:
-            # Run resizing in thread pool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             thumb_path = await loop.run_in_executor(None, ensure_thumbnail, path)
         data = thumb_path.read_bytes()
@@ -1779,3 +1776,80 @@ async def get_thumbnail(path: str):
         return JSONResponse(status_code=404, content={"error": "Image not found"})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Thumbnail error: {e}"})
+
+# ── IP-Adapter FaceID: Reference Images ──────────────────────────
+
+REFS_DIR = BASE / "refs"
+REFS_DIR.mkdir(exist_ok=True)
+PRESETS_FILE = BASE / ".faceid_presets.json"
+
+@app.get("/ip-adapter/refs")
+async def list_refs():
+    if not REFS_DIR.exists():
+        return {"images": []}
+    images = []
+    for f in sorted(REFS_DIR.iterdir()):
+        if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+            images.append({
+                "name": f.name,
+                "path": str(f),
+                "url": f"/outputs/refs/{f.name}",
+            })
+    return {"images": images}
+
+@app.post("/ip-adapter/refs/upload")
+async def upload_ref(file: UploadFile = File(...)):
+    REFS_DIR.mkdir(exist_ok=True, parents=True)
+    dest = REFS_DIR / file.filename
+    content = await file.read()
+    dest.write_bytes(content)
+    return {
+        "name": file.filename,
+        "path": str(dest),
+        "url": f"/outputs/refs/{file.filename}",
+    }
+
+@app.delete("/ip-adapter/refs/{filename}")
+async def delete_ref(filename: str):
+    f = REFS_DIR / filename
+    if f.exists():
+        f.unlink()
+    return {"ok": True}
+
+# ── IP-Adapter FaceID: Presets ───────────────────────────────────
+
+@app.get("/ip-adapter/presets")
+async def list_presets():
+    if not PRESETS_FILE.exists():
+        return {"presets": {}}
+    return {"presets": json.loads(PRESETS_FILE.read_text())}
+
+class PresetData(BaseModel):
+    name: str
+    refs: list[str] = []
+    adapter_scale: float = 0.55
+    lora_scale: float = 0.60
+
+@app.post("/ip-adapter/presets")
+async def save_preset(data: PresetData):
+    presets = {}
+    if PRESETS_FILE.exists():
+        presets = json.loads(PRESETS_FILE.read_text())
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    presets[name] = {
+        "refs": data.refs,
+        "adapter_scale": data.adapter_scale,
+        "lora_scale": data.lora_scale,
+    }
+    PRESETS_FILE.write_text(json.dumps(presets, indent=2))
+    return {"ok": True}
+
+@app.delete("/ip-adapter/presets/{name}")
+async def delete_preset(name: str):
+    if PRESETS_FILE.exists():
+        presets = json.loads(PRESETS_FILE.read_text())
+        presets.pop(name, None)
+        PRESETS_FILE.write_text(json.dumps(presets, indent=2))
+    return {"ok": True}

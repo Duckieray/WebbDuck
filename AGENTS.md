@@ -216,7 +216,38 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Slow generation after feature changes:
   - Check whether conditioning path changed, whether extra passes were enabled, and whether dtype/device fallback occurred.
 
-## 12. Source-of-Truth Docs
+## 12. IP-Adapter FaceID Feature Reference
+
+### Backend API
+- `GET /ip-adapter/refs` — list uploaded ref images (name, path, url)
+- `POST /ip-adapter/refs/upload` — upload ref image (multipart); returns `{url: "/outputs/refs/filename.png"}`
+- `DELETE /ip-adapter/refs/{filename}` — delete uploaded ref
+- `GET /ip-adapter/presets` — list saved face presets
+- `POST /ip-adapter/presets` — save preset (JSON body: `{name, refs, adapter_scale, lora_scale}`)
+- `DELETE /ip-adapter/presets/{name}` — delete preset
+
+### Refs storage
+- Uploaded refs: `BASE/refs/` (e.g. `outputs/refs/`)
+- Served via StaticFiles at `/outputs/refs/{filename}`
+- Filesystem resolution: `resolve_web_path()` converts `/outputs/refs/x.png` → `BASE/refs/x.png`
+
+### Presets storage
+- Single JSON file: `BASE/.faceid_presets.json`
+- Stores `{name: {refs: [...], adapter_scale: 0.55, lora_scale: 0.60}}`
+
+### Frontend wiring
+- **IP-Adapter section** (`section-ip-adapter`): collapsible with enable checkbox, ref image grid, upload button, preset save/load/delete, scale sliders
+- **Hidden input** `ip-adapter-refs-json`: stores selected ref paths as JSON array; synced to `state.identityAdapterRefs`
+- **`setupIpAdapterManager()`**: initializes ref grid (fetches server refs, toggles selection), upload handler, preset CRUD, MutationObserver to reload on section expand
+- **`collectFormData()`**: reads `ip-adapter-refs-json`, passes `reference_images` array in `identity_adapter` JSON payload
+- **State keys**: `identityAdapterEnabled`, `identityAdapterRefs` (array), `identityAdapterScale`, `identityAdapterLoraScale`
+
+### Pipeline
+- `apply_identity_adapter()`: resolves ref paths via `resolve_web_path()` before `cv2.imread()`
+- FaceID LoRA loaded internally by `load_ip_adapter()` as adapter `faceid_0`
+- Dummy `clip_embeds` tensor for IPAdapterFaceIDPlusImageProjection (diffusers bug workaround)
+
+## 13. Source-of-Truth Docs
 
 - `README.md`
 - `docs/DEVELOPMENT.md`

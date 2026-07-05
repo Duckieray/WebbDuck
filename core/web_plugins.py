@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -14,10 +15,12 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from fastapi import FastAPI
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.staticfiles import StaticFiles
 
 from core.captioning_config import get_plugins_dirs
+
+log = logging.getLogger("webbduck.web_plugins")
 
 PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 REMOTE_STATE_DIR = Path.home() / ".webbduck" / "plugin_state"
@@ -516,3 +519,54 @@ def _save_remote_records(records: list[dict[str, Any]]) -> None:
         json.dumps(records, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def reload_web_plugin(plugin_id: str, app: FastAPI) -> WebPlugin | None:
+    prefix_api = f"/plugins/web/{plugin_id}/api"
+    prefix_ui = f"/plugins/web/{plugin_id}/ui"
+    module_name = f"webbduck_webplugin_{plugin_id}"
+
+    before = len(app.router.routes)
+
+    kept = []
+    for route in app.router.routes:
+        path = getattr(route, "path", "")
+        if path.startswith(prefix_api) or path.startswith(prefix_ui):
+            log.info("Removing route %s (%s)", path, type(route).__name__)
+            continue
+        kept.append(route)
+    app.router.routes = kept
+
+    removed = before - len(app.router.routes)
+
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+        log.info("Removed cached module %s", module_name)
+
+    plugin = _discover_single_plugin(plugin_id)
+    if plugin is None:
+        log.warning("Plugin %s not found after re-discovery", plugin_id)
+        return None
+
+    mount_web_plugin_assets(app, [plugin])
+    include_web_plugin_routers(app, [plugin])
+
+    log.info(
+        "Reloaded plugin %s: removed %s old routes, re-added %s routes",
+        plugin_id, removed, len(app.router.routes) - before + removed,
+    )
+    return plugin
+
+
+def _discover_single_plugin(plugin_id: str) -> WebPlugin | None:
+    for plugins_root in get_plugins_dirs():
+        webapps_dir = plugins_root / "webapps"
+        if not webapps_dir.exists():
+            continue
+        for item in sorted(webapps_dir.iterdir()):
+            if not item.is_dir():
+                continue
+            candidate = _load_plugin_from_dir(item)
+            if candidate is not None and candidate.plugin_id == plugin_id:
+                return candidate
+    return None
