@@ -836,7 +836,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-type', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -1105,17 +1105,24 @@ function collectFormData() {
         let refs = [];
         try { refs = JSON.parse(refsJson); } catch { refs = []; }
         if (Array.isArray(refs) && refs.length > 0) {
-            formData.append('identity_adapter', JSON.stringify({
+            const adapterType = byId('ip-adapter-type')?.value || 'faceid_sdxl';
+            const isPlusV2 = adapterType === 'faceid_plusv2_sdxl';
+            const payload = {
                 enabled: true,
-                type: 'ipadapter_faceid_plusv2_sdxl',
+                type: adapterType,
                 repo: 'h94/IP-Adapter-FaceID',
-                adapter_weight: 'ip-adapter-faceid-plusv2_sdxl.bin',
-                lora_weight: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors',
+                adapter_weight: isPlusV2 ? 'ip-adapter-faceid-plusv2_sdxl.bin' : 'ip-adapter-faceid_sdxl.bin',
                 embedder: 'buffalo_l',
-                adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 0.55),
+                adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
                 lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
                 reference_images: refs,
-            }));
+                reference_mode: 'primary_only',
+            };
+            if (isPlusV2) {
+                payload.lora_weight = 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors';
+                payload.image_encoder = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K';
+            }
+            formData.append('identity_adapter', JSON.stringify(payload));
         }
     }
 
@@ -2775,6 +2782,9 @@ function setupIpAdapterManager() {
             byId('ip-adapter-lora-scale').value = preset.lora_scale;
             byId('ip-adapter-lora-scale-value').textContent = preset.lora_scale;
         }
+        if (preset.type) {
+            byId('ip-adapter-type').value = preset.type;
+        }
     });
 
     saveBtn.addEventListener('click', () => {
@@ -2788,8 +2798,9 @@ function setupIpAdapterManager() {
         if (!name) return;
         const payload = {
             name,
+            type: byId('ip-adapter-type')?.value || 'faceid_sdxl',
             refs: _ipAdapterRefs,
-            adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 0.55),
+            adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
             lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
         };
         try {

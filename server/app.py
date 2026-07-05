@@ -1826,8 +1826,9 @@ async def list_presets():
 
 class PresetData(BaseModel):
     name: str
+    type: str = "faceid_sdxl"
     refs: list[str] = []
-    adapter_scale: float = 0.55
+    adapter_scale: float = 1.0
     lora_scale: float = 0.60
 
 @app.post("/ip-adapter/presets")
@@ -1839,6 +1840,7 @@ async def save_preset(data: PresetData):
     if not name:
         raise HTTPException(400, "name required")
     presets[name] = {
+        "type": data.type,
         "refs": data.refs,
         "adapter_scale": data.adapter_scale,
         "lora_scale": data.lora_scale,

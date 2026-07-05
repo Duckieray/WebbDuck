@@ -327,6 +327,11 @@ def run_generation(settings, cancel_event=None):
             identity_adapter=settings.get("identity_adapter"),
         )
 
+    # Capture identity adapter debug metadata into settings for persistence.
+    id_debug = getattr(pipeline_manager, "_identity_debug", None)
+    if id_debug:
+        settings["identity_adapter_debug"] = dict(id_debug)
+
     # Always inject LoRA trigger phrases into active prompts.
     settings["prompt"] = inject_lora_trigger(settings.get("prompt"), trigger_phrase)
     if settings.get("prompt_2"):

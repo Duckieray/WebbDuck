@@ -48,8 +48,9 @@ const DEFAULT_STATE = {
     inpaintMode: 'replace', // 'replace' or 'keep'
     view: 'studio',
     identityAdapterEnabled: false,
+    identityAdapterType: 'faceid_sdxl',
     identityAdapterRefs: [],
-    identityAdapterScale: 0.55,
+    identityAdapterScale: 1.0,
     identityAdapterLoraScale: 0.60,
 };
 
@@ -317,8 +318,9 @@ export function syncFromDOM() {
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
         clipSkip2: getChecked('clip-skip-2-enabled'),
         identityAdapterEnabled: getChecked('ip-adapter-enabled'),
+        identityAdapterType: getValue('ip-adapter-type') || 'faceid_sdxl',
         identityAdapterRefs: parseRefsJson(getValue('ip-adapter-refs-json')),
-        identityAdapterScale: parseFloat(getValue('ip-adapter-scale')) || 0.55,
+        identityAdapterScale: parseFloat(getValue('ip-adapter-scale')) || 1.0,
         identityAdapterLoraScale: parseFloat(getValue('ip-adapter-lora-scale')) || 0.60,
     });
 }
@@ -380,8 +382,9 @@ export function syncToDOM() {
     setValue('smart-extend-pyramid-trigger-ratio', state.smartExtendPyramidTriggerRatio ?? 2.4);
 
     setChecked('ip-adapter-enabled', Boolean(state.identityAdapterEnabled));
+    setValue('ip-adapter-type', state.identityAdapterType || 'faceid_sdxl');
     setValue('ip-adapter-refs-json', JSON.stringify(state.identityAdapterRefs ?? []));
-    setValue('ip-adapter-scale', state.identityAdapterScale ?? 0.55);
+    setValue('ip-adapter-scale', state.identityAdapterScale ?? 1.0);
     setValue('ip-adapter-lora-scale', state.identityAdapterLoraScale ?? 0.60);
     const ipControls = document.getElementById('ip-adapter-controls');
     if (ipControls) {

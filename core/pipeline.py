@@ -9,6 +9,7 @@ import time
 import re
 import logging
 from pathlib import Path
+from PIL import Image
 
 from diffusers import (
     StableDiffusionXLPipeline,
@@ -913,84 +914,315 @@ class PipelineManager:
             self.current_embeddings = {k: v for k, v in desired.items() if k not in failed}
 
     def apply_identity_adapter(self, adapter_cfg: dict | None) -> dict:
-        """Load and apply IP-Adapter FaceID configuration."""
+        """Load and apply IP-Adapter FaceID configuration.
+
+        Returns kwargs dict to inject into the pipeline call, and stores debug
+        metadata on ``self._identity_debug`` for the caller to persist.
+
+        Raises ``RuntimeError`` loudly on any failure so the generation is
+        aborted rather than silently producing unconditioned output.
+        """
+        self._cleanup_identity_adapter()
+
+        debug = {
+            "identity_adapter_applied": False,
+            "identity_adapter_type": None,
+            "adapter_weight": None,
+            "adapter_scale": None,
+            "lora_weight": None,
+            "lora_scale": None,
+            "reference_images_requested": 0,
+            "reference_faces_detected": 0,
+            "faceid_kwargs_keys": [],
+            "ip_adapter_loaded": False,
+            "active_adapters": [],
+        }
+        self._identity_debug = debug
+
+        if not adapter_cfg or str(adapter_cfg.get("enabled", "false")).lower() != "true":
+            return {}
+
         import torch
 
-        # Cleanup when FaceID is disabled
-        if not adapter_cfg or str(adapter_cfg.get("enabled", "false")).lower() != "true":
-            if hasattr(self.pipe, "unload_ip_adapter"):
-                self.pipe.unload_ip_adapter()
-            if hasattr(self.pipe, "peft_config"):
-                faceid_adapters = [n for n in self.pipe.peft_config if n.startswith("faceid_")]
-                if faceid_adapters:
-                    self.pipe.delete_adapters(faceid_adapters)
-            return {}
-
-        repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
-        weight = str(adapter_cfg.get("adapter_weight", "ip-adapter-faceid-plusv2_sdxl.bin"))
-        adapter_scale = float(adapter_cfg.get("adapter_scale", 0.55))
-        lora_scale = float(adapter_cfg.get("lora_scale", 0.60))
         refs = adapter_cfg.get("reference_images", [])
-
+        debug["reference_images_requested"] = len(refs)
         if not refs:
-            return {}
+            raise RuntimeError("IP-Adapter FaceID enabled but reference_images is empty")
 
-        # 1. Diffusers IP-Adapter loading (also loads FaceID LoRA internally as "faceid_0")
-        self.pipe.load_ip_adapter(repo, subfolder="", weight_name=weight, image_encoder_folder=None)
+        adapter_type = str(adapter_cfg.get("type", "faceid_sdxl"))
+        adapter_weight = str(adapter_cfg.get("adapter_weight", "ip-adapter-faceid_sdxl.bin"))
+        adapter_scale = float(adapter_cfg.get("adapter_scale", 0.55))
+        lora_weight = adapter_cfg.get("lora_weight")
+        lora_scale = float(adapter_cfg.get("lora_scale", 0.60))
+
+        debug["identity_adapter_type"] = adapter_type
+        debug["adapter_weight"] = adapter_weight
+        debug["adapter_scale"] = adapter_scale
+        if lora_weight:
+            debug["lora_weight"] = str(lora_weight)
+        debug["lora_scale"] = lora_scale
+
+        # --- Load the IP-Adapter weight ------------------------------------
+        repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
+        try:
+            self.pipe.load_ip_adapter(
+                repo,
+                subfolder="",
+                weight_name=adapter_weight,
+                image_encoder_folder=None,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load IP-Adapter weight '{adapter_weight}' from {repo}: {exc}"
+            ) from exc
+
         self.pipe.set_ip_adapter_scale(adapter_scale)
+        debug["ip_adapter_loaded"] = True
 
-        # IPAdapterFaceIDPlusImageProjection needs clip_embeds set (diffusers bug: never set after init)
-        # Use batch=2 (CFG: neg+pos) to match ip_adapter_image_embeds pre-doubled format
-        proj_layers = self.pipe.unet.encoder_hid_proj.image_projection_layers
-        for layer in proj_layers:
-            if hasattr(layer, "clip_embeds") and layer.clip_embeds is None:
-                dummy = torch.zeros(2, 1, 257, layer.proj_in.in_features,
-                                    dtype=layer.proj_in.weight.dtype,
-                                    device=layer.proj_in.weight.device)
-                layer.clip_embeds = dummy
+        # --- Extract face embeddings / aligned crops -----------------------
+        face_embeds, face_crops = self._extract_identity_faces(
+            refs, adapter_cfg.get("embedder", "buffalo_l")
+        )
+        debug["reference_faces_detected"] = len(face_embeds)
 
-        # Integrate FaceID LoRA ("faceid_0" loaded internally) with existing adapters
-        current_adapters = [sanitize_adapter_name(n) for n in self.current_loras.keys()]
-        current_weights = list(self.current_loras.values())
-        current_adapters.append("faceid_0")
-        current_weights.append(lora_scale)
-        self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
+        if not face_embeds:
+            raise RuntimeError(
+                f"No faces detected in {len(refs)} reference image(s) — "
+                "cannot apply identity adapter"
+            )
 
-        # 2. Extract Face Embeddings using InsightFace
+        ref_mode = adapter_cfg.get("reference_mode", "primary_only")
+        if ref_mode == "average":
+            avg_embed = torch.mean(torch.stack(face_embeds), dim=0)
+        else:
+            avg_embed = face_embeds[0]
+        primary_crop = face_crops[0] if face_crops else None
+
+        # --- Build pipeline kwargs per adapter type ------------------------
+        if adapter_type == "faceid_sdxl":
+            kwargs = self._build_faceid_sdxl_kwargs(
+                avg_embed, lora_weight, lora_scale, repo, debug
+            )
+        elif adapter_type == "faceid_plusv2_sdxl":
+            kwargs = self._build_faceid_plusv2_kwargs(
+                avg_embed, primary_crop, lora_weight, lora_scale, repo,
+                adapter_cfg.get("image_encoder",
+                                "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"),
+                debug,
+            )
+        else:
+            raise RuntimeError(f"Unknown identity adapter type: {adapter_type}")
+
+        if kwargs:
+            debug["faceid_kwargs_keys"] = list(kwargs.keys())
+            debug["identity_adapter_applied"] = True
+
+        if hasattr(self.pipe, "peft_config"):
+            debug["active_adapters"] = list(self.pipe.peft_config.keys())
+
+        self._identity_debug = debug
+        return kwargs
+
+    # ── helpers ─────────────────────────────────────────────────────────────
+
+    def _cleanup_identity_adapter(self):
+        """Unload any previously loaded IP-Adapter and FaceID LoRAs."""
+        if hasattr(self.pipe, "unload_ip_adapter"):
+            self.pipe.unload_ip_adapter()
+        if hasattr(self.pipe, "peft_config"):
+            faceid_adapters = [n for n in self.pipe.peft_config if n.startswith("faceid_")]
+            if faceid_adapters:
+                self.pipe.delete_adapters(faceid_adapters)
+
+    def _extract_identity_faces(self, refs, embedder_name="buffalo_l"):
+        """Return ``(list_of_face_embeddings, list_of_aligned_crops)``."""
         import cv2
-        from insightface.app import FaceAnalysis
-        from insightface.utils import face_align
+        try:
+            from insightface.app import FaceAnalysis
+            from insightface.utils import face_align
+        except ImportError as exc:
+            raise RuntimeError(
+                "InsightFace is required for IP-Adapter FaceID.\n"
+                f"Install: pip install insightface\n{exc}"
+            ) from exc
 
-        embedder_name = str(adapter_cfg.get("embedder", "buffalo_l"))
-        app = FaceAnalysis(name=embedder_name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app = FaceAnalysis(
+            name=embedder_name,
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
         app.prepare(ctx_id=0, det_size=(640, 640))
 
         face_embeds = []
+        face_crops = []
 
         for ref_path in refs:
             fs_path = resolve_web_path(ref_path)
             img = cv2.imread(str(fs_path))
             if img is None:
+                log.warning("FaceID: cannot read reference image '%s'", ref_path)
                 continue
             faces = app.get(img)
             if not faces:
+                log.warning("FaceID: no face detected in '%s'", ref_path)
                 continue
-            face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))[-1]
-            embed = torch.from_numpy(face.normed_embedding).unsqueeze(0)
+            face = sorted(
+                faces,
+                key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]),
+            )[-1]
+            embed = torch.from_numpy(face.normed_embedding).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
             face_embeds.append(embed)
+            aligned = face_align.norm_crop(img, face.kps)
+            face_crops.append(aligned)
 
-        if not face_embeds:
-            return {}
+        return face_embeds, face_crops
 
-        # 3. Calculate mean embedding for multiple reference images
-        avg_embed = torch.mean(torch.stack(face_embeds), dim=0)
+    def _load_faceid_lora(self, lora_weight, lora_scale, repo):
+        """Load the FaceID LoRA weight, handling PEFT name conflicts.
 
-        # 4. For FaceID Plus v2, diffusers expects ip_adapter_image_embeds
-        # Shape [2, 1, 512]: [zeros(uncond, 1, 512), face_embeds(cond, 1, 512)] for CFG handling
-        combined = torch.cat([torch.zeros_like(avg_embed), avg_embed], dim=0).unsqueeze(1)
-        return {
-            "ip_adapter_image_embeds": [combined],
-        }
+        Returns the adapter name used.
+        """
+        import torch
+
+        name = "faceid_0"
+
+        # If the name is already taken, remove it first to avoid the
+        # "already in use" error from ``load_lora_weights``.
+        if hasattr(self.pipe, "peft_config") and name in self.pipe.peft_config:
+            self.pipe.delete_adapters([name])
+
+        try:
+            self.pipe.load_lora_weights(
+                repo, weight_name=lora_weight, adapter_name=name
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load FaceID LoRA '{lora_weight}': {exc}"
+            ) from exc
+
+        current_adapters = [
+            sanitize_adapter_name(n) for n in self.current_loras.keys()
+        ]
+        current_weights = list(self.current_loras.values())
+        current_adapters.append(name)
+        current_weights.append(lora_scale)
+        self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
+
+        return name
+
+    def _build_faceid_sdxl_kwargs(
+        self, face_embed, lora_weight, lora_scale, repo, debug
+    ):
+        """Build kwargs for basic FaceID SDXL (identity signal only).
+
+        The standard ``ip-adapter-faceid_sdxl.bin`` projects the 512-dim face
+        embedding into cross-attention.  No CLIP vision encoder, no dummy
+        clip_embeds, no face-structure signal.
+        """
+        import torch
+
+        if lora_weight:
+            faceid_name = self._load_faceid_lora(lora_weight, lora_scale, repo)
+            debug["lora_weight"] = str(lora_weight)
+            debug["lora_scale"] = lora_scale
+
+        # [2, 1, 512]: zeros(uncond), face_embed(cond) – CFG pair
+        combined = torch.cat(
+            [torch.zeros_like(face_embed), face_embed], dim=0
+        ).unsqueeze(1)
+        return {"ip_adapter_image_embeds": [combined]}
+
+    def _build_faceid_plusv2_kwargs(
+        self, face_embed, face_crop, lora_weight, lora_scale,
+        repo, image_encoder_id, debug,
+    ):
+        """Build kwargs for FaceID PlusV2 (identity + face-structure signal).
+
+        PlusV2 needs **both** the InsightFace identity embedding **and** the
+        aligned face crop processed through a CLIP vision encoder to produce
+        the facial-structure (pose/expression) conditioning.
+        """
+        import torch
+
+        # ---------- CLIP vision encoder ---------------------------------
+        try:
+            from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+        except ImportError as exc:
+            raise RuntimeError(
+                "transformers is required for FaceID PlusV2 mode.\n"
+                f"Install: pip install transformers\n{exc}"
+            ) from exc
+
+        if (
+            not hasattr(self, "_clip_vision")
+            or self._clip_vision is None
+        ):
+            log.info("Loading CLIP vision encoder '%s' for FaceID PlusV2 …", image_encoder_id)
+            self._clip_vision = CLIPVisionModelWithProjection.from_pretrained(
+                image_encoder_id,
+                torch_dtype=DTYPE,
+            ).to(DEVICE)
+            self._clip_vision.eval()
+            self._clip_processor = CLIPImageProcessor.from_pretrained(image_encoder_id)
+
+        self.pipe.image_encoder = self._clip_vision
+
+        # ---------- Load FaceID LoRA ------------------------------------
+        if lora_weight:
+            self._load_faceid_lora(lora_weight, lora_scale, repo)
+            debug["lora_weight"] = str(lora_weight)
+            debug["lora_scale"] = lora_scale
+
+        # ---------- Build identity embedding (CFG-paired) ---------------
+        combined_embed = torch.cat(
+            [torch.zeros_like(face_embed), face_embed], dim=0
+        ).unsqueeze(1)
+
+        # ---------- Build face-structure signal -------------------------
+        if face_crop is not None:
+            # Convert BGR->RGB and encode through CLIP vision encoder
+            rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            inputs = self._clip_processor(
+                images=pil_img, return_tensors="pt"
+            ).pixel_values.to(device=DEVICE, dtype=DTYPE)
+
+            with torch.no_grad():
+                clip_out = self._clip_vision(
+                    inputs, output_hidden_states=True
+                )
+            # Use the last hidden state as the CLIP image embedding
+            # shape: [1, 257, 1280] for ViT-H-14
+            clip_image_embeds = clip_out.last_hidden_state.to(
+                device=DEVICE, dtype=DTYPE
+            )
+
+            # Replicate for CFG (uncond + cond, batch=2)
+            clip_image_embeds = torch.cat(
+                [torch.zeros_like(clip_image_embeds), clip_image_embeds], dim=0
+            )
+
+            # Set clip_embeds on the projection layers so PlusV2 forward
+            # does not crash (diffusers expects this attribute when
+            # image_encoder_folder=None)
+            proj_layers = (
+                self.pipe.unet.encoder_hid_proj.image_projection_layers
+            )
+            for layer in proj_layers:
+                if (
+                    hasattr(layer, "clip_embeds")
+                    and layer.clip_embeds is None
+                ):
+                    layer.clip_embeds = clip_image_embeds.unsqueeze(1)
+
+            kwargs = {
+                "ip_adapter_image_embeds": [combined_embed],
+                "ip_adapter_image": [clip_image_embeds],
+            }
+        else:
+            # Fall back to identity-only (no face crop available)
+            kwargs = {"ip_adapter_image_embeds": [combined_embed]}
+
+        return kwargs
 
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""
@@ -1061,20 +1293,19 @@ class PipelineManager:
                 self.current_second_pass_model = None
                 self.current_loras = {}
                 self.current_embeddings = {}
+                self._identity_debug = None
                 self.trigger_phrase = ""
-                self.scheduler_name = None # Reset scheduler tracking
-                self.base_scheduler_config = self.pipe.scheduler.config
-            
+                self.scheduler_name = None
+
             # Switch scheduler if needed
             if scheduler_name and scheduler_name != self.scheduler_name:
                 self._ensure_not_cancelled(cancel_event)
-                from server.state import update_stage # Redundant if already imported but safe
+                from server.state import update_stage
                 update_stage(f"Switching scheduler to {scheduler_name}")
-                
-                # Always use the base config to prevent drift
-                config_source = self.base_scheduler_config or self.pipe.scheduler.config
+
+                config_source = self.pipe.scheduler.config
                 new_scheduler = create_scheduler(scheduler_name, config_source)
-                
+
                 self.pipe.scheduler = new_scheduler
                 self.base_img2img.scheduler = new_scheduler
                 self.base_inpaint.scheduler = new_scheduler
@@ -1105,7 +1336,6 @@ class PipelineManager:
             update_stage("Generating")
             update_progress(0.35)
 
-            # Ensure we start with base model on GPU
             self._ensure_not_cancelled(cancel_event)
             self.set_active_unet("base")
 
