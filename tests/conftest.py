@@ -98,6 +98,13 @@ def first_available_model(available_models):
 
 
 @pytest.fixture
+def pipeline_manager():
+    """Provide a PipelineManager instance (pipe may be None)."""
+    from core.pipeline import PipelineManager
+    return PipelineManager()
+
+
+@pytest.fixture
 def client():
     """Create test client for FastAPI app (shared fixture)."""
     from fastapi.testclient import TestClient

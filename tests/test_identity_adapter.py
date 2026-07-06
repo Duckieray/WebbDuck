@@ -140,8 +140,8 @@ class TestIdentityAdapterPlusV2:
         debug = pm._identity_debug
 
         assert "ip_adapter_image_embeds" in kwargs
-        assert "ip_adapter_image" in kwargs, (
-            f"Expected ip_adapter_image for structure signal, got {list(kwargs.keys())}"
+        assert "ip_adapter_image" not in kwargs, (
+            f"ip_adapter_image is unused when ip_adapter_image_embeds is provided; kwargs={list(kwargs.keys())}"
         )
         assert debug["identity_adapter_applied"] is True
         assert debug["identity_adapter_type"] == "faceid_plusv2_sdxl"

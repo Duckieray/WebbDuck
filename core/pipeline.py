@@ -672,6 +672,7 @@ class PipelineManager:
         self.current_second_pass_model = None
         self.current_loras = {}
         self.current_embeddings = {}
+        self._faceid_lora_name = None
 
     def _ensure_not_cancelled(self, cancel_event):
         if cancel_event is not None and cancel_event.is_set():
@@ -963,6 +964,7 @@ class PipelineManager:
         debug["lora_scale"] = lora_scale
 
         # --- Load the IP-Adapter weight ------------------------------------
+        is_plusv2 = (adapter_type == "faceid_plusv2_sdxl")
         repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
         try:
             self.pipe.load_ip_adapter(
@@ -972,9 +974,28 @@ class PipelineManager:
                 image_encoder_folder=None,
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load IP-Adapter weight '{adapter_weight}' from {repo}: {exc}"
-            ) from exc
+            if is_plusv2:
+                # diffusers 0.36.0 has no FaceID PlusV2 branch in
+                # _convert_ip_adapter_image_proj_to_diffusers — the PlusV2
+                # weight file's Perceiver Resampler state dict causes a crash.
+                # Fall back to FaceID SDXL weights (identity signal only).
+                log.warning("PlusV2: full Perceiver Resampler not supported in diffusers 0.36.0; "
+                            "falling back to FaceID SDXL identity-only signal")
+                self._cleanup_identity_adapter()
+                adapter_weight = "ip-adapter-faceid_sdxl.bin"
+                adapter_type = "faceid_sdxl"
+                is_plusv2 = False
+                debug["adapter_weight"] = adapter_weight
+                debug["identity_adapter_type"] = adapter_type
+                self.pipe.load_ip_adapter(
+                    repo, subfolder="",
+                    weight_name=adapter_weight,
+                    image_encoder_folder=None,
+                )
+            else:
+                raise RuntimeError(
+                    f"Failed to load IP-Adapter weight '{adapter_weight}' from {repo}: {exc}"
+                ) from exc
 
         self.pipe.set_ip_adapter_scale(adapter_scale)
         debug["ip_adapter_loaded"] = True
@@ -1006,9 +1027,10 @@ class PipelineManager:
         elif adapter_type == "faceid_plusv2_sdxl":
             kwargs = self._build_faceid_plusv2_kwargs(
                 avg_embed, primary_crop, lora_weight, lora_scale, repo,
+                adapter_weight,
                 adapter_cfg.get("image_encoder",
                                 "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"),
-                debug,
+                adapter_scale, debug,
             )
         else:
             raise RuntimeError(f"Unknown identity adapter type: {adapter_type}")
@@ -1027,6 +1049,12 @@ class PipelineManager:
 
     def _cleanup_identity_adapter(self):
         """Unload any previously loaded IP-Adapter and FaceID LoRAs."""
+        # Remove FaceID LoRA from the tracked LoRA set so
+        # ``clear_loras()`` / ``apply_loras()`` knows about it.
+        if self._faceid_lora_name and self._faceid_lora_name in self.current_loras:
+            del self.current_loras[self._faceid_lora_name]
+        self._faceid_lora_name = None
+
         if hasattr(self.pipe, "unload_ip_adapter"):
             self.pipe.unload_ip_adapter()
         if hasattr(self.pipe, "peft_config"):
@@ -1081,33 +1109,29 @@ class PipelineManager:
 
         Returns the adapter name used.
         """
-        import torch
+        import time
 
-        name = "faceid_0"
-
-        # If the name is already taken, remove it first to avoid the
-        # "already in use" error from ``load_lora_weights``.
-        if hasattr(self.pipe, "peft_config") and name in self.pipe.peft_config:
-            self.pipe.delete_adapters([name])
+        self._faceid_lora_name = f"faceid_{int(time.time() * 1_000_000)}"
 
         try:
             self.pipe.load_lora_weights(
-                repo, weight_name=lora_weight, adapter_name=name
+                repo, weight_name=lora_weight, adapter_name=self._faceid_lora_name
             )
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to load FaceID LoRA '{lora_weight}': {exc}"
             ) from exc
 
-        current_adapters = [
-            sanitize_adapter_name(n) for n in self.current_loras.keys()
-        ]
+        # Merge with tracked user LoRAs so it participates in the
+        # active adapter set.  The weight is stored in
+        # ``current_loras`` so ``clear_loras()`` / ``apply_loras()``
+        # will properly unload it on the next generation cycle.
+        self.current_loras[self._faceid_lora_name] = lora_scale
+        current_adapters = [sanitize_adapter_name(n) for n in self.current_loras.keys()]
         current_weights = list(self.current_loras.values())
-        current_adapters.append(name)
-        current_weights.append(lora_scale)
         self.pipe.set_adapters(current_adapters, adapter_weights=current_weights)
 
-        return name
+        return self._faceid_lora_name
 
     def _build_faceid_sdxl_kwargs(
         self, face_embed, lora_weight, lora_scale, repo, debug
@@ -1133,7 +1157,7 @@ class PipelineManager:
 
     def _build_faceid_plusv2_kwargs(
         self, face_embed, face_crop, lora_weight, lora_scale,
-        repo, image_encoder_id, debug,
+        repo, adapter_weight, image_encoder_id, adapter_scale, debug,
     ):
         """Build kwargs for FaceID PlusV2 (identity + face-structure signal).
 
@@ -1141,6 +1165,7 @@ class PipelineManager:
         aligned face crop processed through a CLIP vision encoder to produce
         the facial-structure (pose/expression) conditioning.
         """
+        import cv2
         import torch
 
         # ---------- CLIP vision encoder ---------------------------------
@@ -1165,12 +1190,23 @@ class PipelineManager:
             self._clip_processor = CLIPImageProcessor.from_pretrained(image_encoder_id)
 
         self.pipe.image_encoder = self._clip_vision
+        self.pipe.feature_extractor = self._clip_processor
 
         # ---------- Load FaceID LoRA ------------------------------------
         if lora_weight:
             self._load_faceid_lora(lora_weight, lora_scale, repo)
             debug["lora_weight"] = str(lora_weight)
             debug["lora_scale"] = lora_scale
+
+        # ---------- Patch clip_embeds onto the projection layer --------
+        # diffusers 0.36.0 has no FaceID PlusV2 branch in
+        # _convert_ip_adapter_image_proj_to_diffusers — it creates
+        # IPAdapterFaceIDImageProjection (simple FFN) instead of the
+        # correct IPAdapterFaceIDPlusImageProjection (Perceiver Resampler).
+        # The full Perceiver Resampler architecture from the Hub weights
+        # (fused to_kv, different block structure) is incompatible with
+        # diffusers' IPAdapterFaceIDPlusImageProjection, so we fall back
+        # to the identity-only signal (same as FaceID SDXL).
 
         # ---------- Build identity embedding (CFG-paired) ---------------
         combined_embed = torch.cat(
@@ -1201,23 +1237,16 @@ class PipelineManager:
                 [torch.zeros_like(clip_image_embeds), clip_image_embeds], dim=0
             )
 
-            # Set clip_embeds on the projection layers so PlusV2 forward
-            # does not crash (diffusers expects this attribute when
-            # image_encoder_folder=None)
+            # Set clip_embeds on the projection layers — this is how the
+            # PlusV2 Perceiver Resampler receives the face-structure signal.
             proj_layers = (
                 self.pipe.unet.encoder_hid_proj.image_projection_layers
             )
             for layer in proj_layers:
-                if (
-                    hasattr(layer, "clip_embeds")
-                    and layer.clip_embeds is None
-                ):
+                if hasattr(layer, "clip_embeds"):
                     layer.clip_embeds = clip_image_embeds.unsqueeze(1)
 
-            kwargs = {
-                "ip_adapter_image_embeds": [combined_embed],
-                "ip_adapter_image": [clip_image_embeds],
-            }
+            kwargs = {"ip_adapter_image_embeds": [combined_embed]}
         else:
             # Fall back to identity-only (no face crop available)
             kwargs = {"ip_adapter_image_embeds": [combined_embed]}
@@ -1291,59 +1320,57 @@ class PipelineManager:
 
                 self.key = base_model
                 self.current_second_pass_model = None
-                self.current_loras = {}
-                self.current_embeddings = {}
-                self._identity_debug = None
-                self.trigger_phrase = ""
-                self.scheduler_name = None
+        self.current_loras = {}
+        self.current_embeddings = {}
+        self._faceid_lora_name = None
 
-            # Switch scheduler if needed
-            if scheduler_name and scheduler_name != self.scheduler_name:
-                self._ensure_not_cancelled(cancel_event)
-                from server.state import update_stage
-                update_stage(f"Switching scheduler to {scheduler_name}")
-
-                config_source = self.pipe.scheduler.config
-                new_scheduler = create_scheduler(scheduler_name, config_source)
-
-                self.pipe.scheduler = new_scheduler
-                self.base_img2img.scheduler = new_scheduler
-                self.base_inpaint.scheduler = new_scheduler
-                if self.img2img:
-                    self.img2img.scheduler = new_scheduler
-                self.scheduler_name = scheduler_name
-
-            from server.state import update_stage, update_progress
-            update_stage("Attaching second pass model")
-            update_progress(0.15)
+        # Switch scheduler if needed
+        if scheduler_name and scheduler_name != self.scheduler_name:
             self._ensure_not_cancelled(cancel_event)
-            self.attach_second_pass_model(second_pass_model)
+            from server.state import update_stage
+            update_stage(f"Switching scheduler to {scheduler_name}")
 
-            update_stage("Loading LoRAs")
-            update_progress(0.25)
-            self._ensure_not_cancelled(cancel_event)
-            self.apply_loras(loras or [])
+            config_source = self.pipe.scheduler.config
+            new_scheduler = create_scheduler(scheduler_name, config_source)
 
-            update_stage("Loading embeddings")
-            update_progress(0.30)
-            self._ensure_not_cancelled(cancel_event)
-            self.apply_embeddings(embeddings or [])
+            self.pipe.scheduler = new_scheduler
+            self.base_img2img.scheduler = new_scheduler
+            self.base_inpaint.scheduler = new_scheduler
+            if self.img2img:
+                self.img2img.scheduler = new_scheduler
+            self.scheduler_name = scheduler_name
 
-            update_stage("Loading identity adapter")
-            self._ensure_not_cancelled(cancel_event)
-            faceid_kwargs = self.apply_identity_adapter(identity_adapter)
+        from server.state import update_stage, update_progress
+        update_stage("Attaching second pass model")
+        update_progress(0.15)
+        self._ensure_not_cancelled(cancel_event)
+        self.attach_second_pass_model(second_pass_model)
 
-            update_stage("Generating")
-            update_progress(0.35)
+        update_stage("Loading LoRAs")
+        update_progress(0.25)
+        self._ensure_not_cancelled(cancel_event)
+        self.apply_loras(loras or [])
 
-            self._ensure_not_cancelled(cancel_event)
-            self.set_active_unet("base")
+        update_stage("Loading embeddings")
+        update_progress(0.30)
+        self._ensure_not_cancelled(cancel_event)
+        self.apply_embeddings(embeddings or [])
 
-            if DEVICE == "cuda" and torch.cuda.is_available():
-                torch.cuda.synchronize()
-            self.last_used = time.time()
+        update_stage("Loading identity adapter")
+        self._ensure_not_cancelled(cancel_event)
+        faceid_kwargs = self.apply_identity_adapter(identity_adapter)
 
-            return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase, faceid_kwargs
+        update_stage("Generating")
+        update_progress(0.35)
+
+        self._ensure_not_cancelled(cancel_event)
+        self.set_active_unet("base")
+
+        if DEVICE == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self.last_used = time.time()
+
+        return self.pipe, self.img2img, self.base_img2img, self.base_inpaint, self.trigger_phrase, faceid_kwargs
 
 
 pipeline_manager = PipelineManager()
