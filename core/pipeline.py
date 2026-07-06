@@ -963,6 +963,12 @@ class PipelineManager:
             debug["lora_weight"] = str(lora_weight)
         debug["lora_scale"] = lora_scale
 
+        if adapter_type == "official_faceid_sdxl":
+            debug["identity_adapter_applied"] = True
+            debug["implementation"] = "official_h94"
+            self._identity_debug = debug
+            return {}
+
         # --- Load the IP-Adapter weight ------------------------------------
         # diffusers 0.36.0 has no FaceID PlusV2 branch in
         # _convert_ip_adapter_image_proj_to_diffusers, so the Perceiver
