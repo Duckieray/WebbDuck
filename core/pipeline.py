@@ -964,7 +964,17 @@ class PipelineManager:
         debug["lora_scale"] = lora_scale
 
         # --- Load the IP-Adapter weight ------------------------------------
-        is_plusv2 = (adapter_type == "faceid_plusv2_sdxl")
+        # diffusers 0.36.0 has no FaceID PlusV2 branch in
+        # _convert_ip_adapter_image_proj_to_diffusers, so the Perceiver
+        # Resampler state dict from ip-adapter-faceid-plusv2_sdxl.bin causes
+        # a hard crash.  Short-circuit early to avoid it entirely.
+        if adapter_type == "faceid_plusv2_sdxl":
+            log.warning("PlusV2: full Perceiver Resampler not supported in diffusers 0.36.0; "
+                        "using FaceID SDXL identity-only signal")
+            adapter_weight = "ip-adapter-faceid_sdxl.bin"
+            adapter_type = "faceid_sdxl"
+            debug["adapter_weight"] = adapter_weight
+            debug["identity_adapter_type"] = adapter_type
         repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
         try:
             self.pipe.load_ip_adapter(
@@ -974,28 +984,9 @@ class PipelineManager:
                 image_encoder_folder=None,
             )
         except Exception as exc:
-            if is_plusv2:
-                # diffusers 0.36.0 has no FaceID PlusV2 branch in
-                # _convert_ip_adapter_image_proj_to_diffusers — the PlusV2
-                # weight file's Perceiver Resampler state dict causes a crash.
-                # Fall back to FaceID SDXL weights (identity signal only).
-                log.warning("PlusV2: full Perceiver Resampler not supported in diffusers 0.36.0; "
-                            "falling back to FaceID SDXL identity-only signal")
-                self._cleanup_identity_adapter()
-                adapter_weight = "ip-adapter-faceid_sdxl.bin"
-                adapter_type = "faceid_sdxl"
-                is_plusv2 = False
-                debug["adapter_weight"] = adapter_weight
-                debug["identity_adapter_type"] = adapter_type
-                self.pipe.load_ip_adapter(
-                    repo, subfolder="",
-                    weight_name=adapter_weight,
-                    image_encoder_folder=None,
-                )
-            else:
-                raise RuntimeError(
-                    f"Failed to load IP-Adapter weight '{adapter_weight}' from {repo}: {exc}"
-                ) from exc
+            raise RuntimeError(
+                f"Failed to load IP-Adapter weight '{adapter_weight}' from {repo}: {exc}"
+            ) from exc
 
         self.pipe.set_ip_adapter_scale(adapter_scale)
         debug["ip_adapter_loaded"] = True
