@@ -1317,9 +1317,13 @@ class PipelineManager:
 
                 self.key = base_model
                 self.current_second_pass_model = None
-        self.current_loras = {}
-        self.current_embeddings = {}
-        self._faceid_lora_name = None
+                self.current_loras = {}
+                self.current_embeddings = {}
+                self._faceid_lora_name = None
+                self._identity_debug = None
+                self.trigger_phrase = ""
+                self.scheduler_name = None
+                self.base_scheduler_config = self.pipe.scheduler.config
 
         # Switch scheduler if needed
         if scheduler_name and scheduler_name != self.scheduler_name:
@@ -1327,7 +1331,7 @@ class PipelineManager:
             from server.state import update_stage
             update_stage(f"Switching scheduler to {scheduler_name}")
 
-            config_source = self.pipe.scheduler.config
+            config_source = self.base_scheduler_config or self.pipe.scheduler.config
             new_scheduler = create_scheduler(scheduler_name, config_source)
 
             self.pipe.scheduler = new_scheduler
