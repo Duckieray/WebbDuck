@@ -746,6 +746,7 @@ async def test(
         identity_adapter_dict = json.loads(identity_adapter)
     except Exception:
         identity_adapter_dict = {}
+    _resolve_identity_adapter_preset(identity_adapter_dict)
 
     loop = asyncio.get_event_loop()
     future = loop.create_future()
@@ -890,6 +891,7 @@ async def generate(
         identity_adapter_dict = json.loads(identity_adapter)
     except Exception:
         identity_adapter_dict = {}
+    _resolve_identity_adapter_preset(identity_adapter_dict)
 
     loop = asyncio.get_event_loop()
     future = loop.create_future()
@@ -1782,6 +1784,34 @@ async def get_thumbnail(path: str):
 REFS_DIR = BASE / "refs"
 REFS_DIR.mkdir(exist_ok=True)
 PRESETS_FILE = BASE / ".faceid_presets.json"
+
+def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
+    """Merge a saved preset into the identity adapter config.
+
+    If ``adapter_cfg`` contains a non-empty ``preset_name``, the matching
+    preset from ``.faceid_presets.json`` is loaded and its values are used
+    as defaults.  Explicit fields in ``adapter_cfg`` still take priority.
+
+    Returns the merged ``adapter_cfg`` (in-place + return).
+    """
+    preset_name = adapter_cfg.get("preset_name", "") or ""
+    if not preset_name:
+        return adapter_cfg
+    if not PRESETS_FILE.exists():
+        return adapter_cfg
+    try:
+        presets = json.loads(PRESETS_FILE.read_text())
+    except Exception:
+        return adapter_cfg
+    preset = presets.get(preset_name)
+    if not preset:
+        return adapter_cfg
+    # Merge preset values as defaults — explicit request fields win.
+    adapter_cfg.setdefault("type", preset.get("type", "faceid_sdxl"))
+    adapter_cfg.setdefault("reference_images", list(preset.get("refs", [])))
+    adapter_cfg.setdefault("adapter_scale", preset.get("adapter_scale", 1.0))
+    adapter_cfg.setdefault("lora_scale", preset.get("lora_scale", 0.60))
+    return adapter_cfg
 
 @app.get("/ip-adapter/refs")
 async def list_refs():

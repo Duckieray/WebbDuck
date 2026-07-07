@@ -966,6 +966,8 @@ class PipelineManager:
         if adapter_type == "official_faceid_sdxl":
             debug["identity_adapter_applied"] = True
             debug["implementation"] = "official_h94"
+            debug["repo"] = repo
+            debug["preset_name"] = adapter_cfg.get("preset_name", "") or "custom"
             self._identity_debug = debug
             return {}
 

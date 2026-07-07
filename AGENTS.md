@@ -258,3 +258,32 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - `ui/README.md`
 
 When behavior changes, keep these docs in sync.
+
+## 14. Session Log — FaceID official_faceid_sdxl Fix (2026-07-06)
+
+### Root cause
+- `run_official.py` did not save/restore the original UNet attention processors around `IPAdapterFaceIDXL`.
+- After generation, `pipe.unload_ip_adapter()` (a diffusers method) was called, but it does not properly clean up the official wrapper's custom processors.
+- On subsequent generations with the same model, stale/unexpected processor state caused `set_ip_adapter()` to encounter attention processor names with unhandled prefixes, leading to `hidden_size` being unbound.
+- This manifested as `nn.Linear(None, hidden_size)` → `empty(): argument 'size' failed to unpack the object at pos 2 with error "type must be tuple of ints,but got NoneType"`.
+
+### Fixes applied
+1. **`core/run_official.py`** — Save `copy.deepcopy(pipe.unet.attn_processors)` and `getattr(pipe.unet, "encoder_hid_proj", None)` before creating the wrapper; restore via `pipe.unet.set_attn_processor(original_attn_processors)` after generation. Also added safe `pipe.dtype` fallback (try/except `AttributeError` → `pipe.unet.dtype`).
+
+2. **`third_party/IP-Adapter/ip_adapter/ip_adapter_faceid.py`** — Both `IPAdapterFaceID.set_ip_adapter()` and `IPAdapterFaceIDPlus.set_ip_adapter()` now initialize `hidden_size = block_out[-1]` before the loop as a fallback default for any processor name not matching `mid_block`/`up_blocks`/`down_blocks` prefixes.
+
+### Metro data persistence for official FaceID SDXL
+- `identity_adapter` (raw form config) and `identity_adapter_debug` (runtime diagnostics) are both persisted in `outputs/<run>/meta.json` and `outputs/manifest.jsonl`.
+- `sanitize_settings()` in `server/storage.py` strips only `input_image`, `mask_image`, `image` — all other keys survive into the metadata.
+- The UI now sends `preset_name` in the `identity_adapter` payload; backend defaults to `"custom"` when empty.
+- The debug dict captures: `adapter_scale`, `adapter_weight`, `repo`, `preset_name`, `reference_images_requested`, `reference_faces_detected`, `implementation`, `identity_adapter_type`.
+
+### Remaining concerns
+- The `load_ip_adapter()` call inside the wrapper's `__init__` does `ip_layers.load_state_dict(state_dict["ip_adapter"])` via a `ModuleList` — the integer key order depends on `dict.values()` iteration order, which could differ between Python versions or state dict save format. Not observed to fail, but worth noting.
+- `_identity_debug` is only reset to `None` in `_unload_all_locked()` (model switch), but `apply_identity_adapter()` always overwrites it each generation, so stale values don't leak.
+
+### Server-side preset resolution (2026-07-06)
+- Added `_resolve_identity_adapter_preset()` in `server/app.py` that merges a saved preset into the identity adapter config when `preset_name` is provided.
+- An external app can now POST `/test` or `/generate` with just `{"preset_name": "my-preset", "adapter_scale": 0.7}` — the preset's `type`, `refs`, `adapter_scale`, and `lora_scale` are merged as defaults, with request fields taking priority.
+- The helper is wired into both endpoints right after `json.loads(identity_adapter)`.
+- `reference_images` already supports both web URLs (`/outputs/refs/face.png`) and absolute filesystem paths — `resolve_web_path()` handles both transparently.

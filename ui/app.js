@@ -1107,6 +1107,8 @@ function collectFormData() {
         if (Array.isArray(refs) && refs.length > 0) {
             const adapterType = byId('ip-adapter-type')?.value || 'faceid_sdxl';
             const isPlusV2 = adapterType === 'faceid_plusv2_sdxl';
+            const presetSelect = byId('ip-adapter-preset-select');
+            const presetName = presetSelect?.value || '';
             const payload = {
                 enabled: true,
                 type: adapterType,
@@ -1117,6 +1119,7 @@ function collectFormData() {
                 lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
                 reference_images: refs,
                 reference_mode: 'primary_only',
+                preset_name: presetName,
             };
             if (isPlusV2) {
                 payload.lora_weight = 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors';
