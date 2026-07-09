@@ -707,7 +707,7 @@ class PipelineManager:
                 _release_cached_obj(v)
             cache.clear()
 
-    def _unload_all_locked(self):
+    def _unload_all_locked(self, clear_caches: bool = False):
         self._offload_pipeline(self.img2img)
         self._offload_pipeline(self.base_img2img)
         self._offload_pipeline(self.base_inpaint)
@@ -726,16 +726,22 @@ class PipelineManager:
         self.current_loras = {}
         self.current_embeddings = {}
 
-        self._clear_component_caches()
+        if clear_caches:
+            self._clear_component_caches()
         gc.collect()
         if DEVICE == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
-    def unload_all(self):
-        """Unload all loaded model resources and clear caches."""
+    def unload_all(self, clear_caches: bool = False):
+        """Unload active model resources.
+
+        By default this is a soft unload: GPU memory is released, but CPU-side
+        component caches stay warm so the next load can reuse UNet/text encoders.
+        Set ``clear_caches=True`` for a hard unload.
+        """
         with self.lock:
-            self._unload_all_locked()
+            self._unload_all_locked(clear_caches=clear_caches)
 
     def attach_second_pass_model(self, model_name):
         """Attach or update second pass model (refiner or img2img)."""

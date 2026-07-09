@@ -1524,8 +1524,13 @@ async def cancel_queue_job(job_id: str = Form(...)):
 
 
 @app.post("/models/unload_all")
-async def unload_all_models():
-    """Unload all loaded generation and captioning models from memory."""
+async def unload_all_models(clear_caches: bool = False):
+    """Unload loaded generation and captioning models from memory.
+
+    Defaults to a soft unload: releases active model VRAM while preserving
+    component caches for fast reloads. Pass ``clear_caches=true`` for a hard
+    unload that also drops cached UNet/text/VAE components.
+    """
     if active_job_id is not None:
         return JSONResponse(
             status_code=409,
@@ -1540,7 +1545,7 @@ async def unload_all_models():
     await broadcast_state(snapshot())
 
     try:
-        pipeline_manager.unload_all()
+        pipeline_manager.unload_all(clear_caches=clear_caches)
         unload_captioners()
     except Exception as exc:
         update_stage("Error")
@@ -1550,7 +1555,7 @@ async def unload_all_models():
     update_progress(1.0)
     update_stage("Idle")
     await broadcast_state(snapshot())
-    return {"status": "unloaded"}
+    return {"status": "unloaded", "clear_caches": clear_caches}
 
 
 async def _delayed_process_exit(delay_seconds: float = 0.35):

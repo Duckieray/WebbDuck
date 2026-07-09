@@ -287,3 +287,8 @@ When behavior changes, keep these docs in sync.
 - An external app can now POST `/test` or `/generate` with just `{"preset_name": "my-preset", "adapter_scale": 0.7}` — the preset's `type`, `refs`, `adapter_scale`, and `lora_scale` are merged as defaults, with request fields taking priority.
 - The helper is wired into both endpoints right after `json.loads(identity_adapter)`.
 - `reference_images` already supports both web URLs (`/outputs/refs/face.png`) and absolute filesystem paths — `resolve_web_path()` handles both transparently.
+
+### Soft vs hard model unload (2026-07-08)
+- `pipeline_manager.unload_all()` is a soft unload by default: active pipelines are offloaded and dropped, CUDA cache is cleared, but CPU-side component caches stay warm.
+- Use `pipeline_manager.unload_all(clear_caches=True)` or `POST /models/unload_all?clear_caches=true` only when a hard unload is needed.
+- Normal idle unload and model switching should preserve `_UNET_CACHE`, `_TEXT_COMPONENT_CACHE`, `_VAE_CACHE`, `_SCHEDULER_CACHE`, and `_TOKENIZER_CACHE` so reloads stay fast.
