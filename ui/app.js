@@ -1310,6 +1310,30 @@ function setupUploadHandling() {
     });
 
     listen(byId('edit-mask-btn'), 'click', () => togglePreviewMaskMode());
+
+    listen(byId('upscale-input-btn'), 'click', async () => {
+        if (!window._uploadedImage) {
+            toast('No image to upscale', 'error');
+            return;
+        }
+        try {
+            toast('Upscaling input image...', 'info');
+            const formData = new FormData();
+            formData.append('image', window._uploadedImage);
+            formData.append('scale', '2');
+            const data = await api.upscaleInput(formData);
+            const url = data?.image;
+            if (url) {
+                toast('Upscale complete — saved to gallery', 'success');
+                window.galleryManager?.invalidateFilterCache?.();
+            } else {
+                toast('Upscale returned no result', 'warning');
+            }
+        } catch (error) {
+            console.error('Input upscale error:', error);
+            toast(`Upscale failed: ${error.message}`, 'error');
+        }
+    });
 }
 
 function setupHelpModals() {

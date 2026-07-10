@@ -410,8 +410,11 @@ def run_pyramid_outpaint(
     callback=None,
     update_stage_fn=None,
     debug_dir=None,
+    pipe=None,
 ):
     """Execute pyramid outpainting with strict source lock and debug dumps."""
+    if pipe is None:
+        pipe = base_inpaint
     src_w, src_h = source_image.size
     dst_w, dst_h = target_size
     max_gen_size = int(settings.get("smart_extend_pyramid_max_gen_size", 2048))
@@ -512,7 +515,7 @@ def run_pyramid_outpaint(
         stage_steps = steps if p_next >= 0.999 else max(14, int(steps * (0.62 + 0.38 * p_next)))
 
         # Keep the pass seed stable for continuity across staged expansions.
-        local_gen = torch.Generator(base_inpaint.device).manual_seed(seed)
+        local_gen = torch.Generator(pipe.device).manual_seed(seed)
         outpaint_kwargs = {
             "prompt": prompt,
             "prompt_2": prompt_2 or None,
@@ -533,7 +536,7 @@ def run_pyramid_outpaint(
         outpainted = base_inpaint(
             **inject_prompt_conditioning_kwargs(
                 outpaint_kwargs,
-                active_pipe=base_inpaint,
+                active_pipe=pipe,
                 embeddings_active=bool(settings.get("embeddings")),
                 builder=build_sdxl_conditioning_dispatch,
                 cache=conditioning_cache,
@@ -570,7 +573,7 @@ def run_pyramid_outpaint(
                 seam_steps = _ensure_min_steps_for_strength(seam_steps, seam_strength)
         _save_debug_image(debug_dir, f"pyramid/pass_{pass_idx:02d}_14_seam_mask.png", seam_mask)
         if seam_strength > 0.0:
-            seam_gen = torch.Generator(base_inpaint.device).manual_seed(seed + 777)
+            seam_gen = torch.Generator(pipe.device).manual_seed(seed + 777)
             seam_kwargs = {
                 "prompt": prompt,
                 "prompt_2": prompt_2 or None,
@@ -591,7 +594,7 @@ def run_pyramid_outpaint(
             seam_raw = base_inpaint(
                 **inject_prompt_conditioning_kwargs(
                     seam_kwargs,
-                    active_pipe=base_inpaint,
+                    active_pipe=pipe,
                         embeddings_active=bool(settings.get("embeddings")),
                     builder=build_sdxl_conditioning_dispatch,
                     cache=conditioning_cache,
@@ -687,7 +690,7 @@ def run_pyramid_outpaint(
         refine_steps = max(10, int(steps * 0.5))
         refine_cfg = max(6.5, min(9.0, float(settings.get("smart_extend_pyramid_cfg_stage2", 8.5))))
         refine_steps = _ensure_min_steps_for_strength(refine_steps, max(0.0, min(0.60, refine_strength)))
-        refine_gen = torch.Generator(base_inpaint.device).manual_seed(seed + 9999)
+        refine_gen = torch.Generator(pipe.device).manual_seed(seed + 9999)
         refine_kwargs = {
             "prompt": prompt,
             "prompt_2": prompt_2 or None,
@@ -708,7 +711,7 @@ def run_pyramid_outpaint(
         refined = base_inpaint(
             **inject_prompt_conditioning_kwargs(
                 refine_kwargs,
-                active_pipe=base_inpaint,
+                active_pipe=pipe,
                 embeddings_active=bool(settings.get("embeddings")),
                 builder=build_sdxl_conditioning_dispatch,
                 cache=conditioning_cache,

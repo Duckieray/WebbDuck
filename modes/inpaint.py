@@ -663,7 +663,7 @@ class InpaintMode(GenerationMode):
                         })
                         # Keep stage seed stable across passes for continuity.
                         # Per-pass seed jumps can cause large semantic drift in new regions.
-                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base)
+                        local_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base)
                         stage_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
@@ -739,7 +739,7 @@ class InpaintMode(GenerationMode):
                                     update_stage(f"Outpaint final seam {idx + 1}/{total_passes}{img_label}")
                                 else:
                                     update_stage(f"Outpaint seam {idx + 1}/{max(1, total_passes - 1)}{img_label}")
-                            refine_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 7000)
+                            refine_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base + 7000)
                             refine_kwargs = {
                                 "prompt": prompt,
                                 "prompt_2": prompt_2 or None,
@@ -873,7 +873,7 @@ class InpaintMode(GenerationMode):
                     img_label = f" (img {img_idx + 1}/{batch_count})" if batch_count > 1 else ""
                     if callback:
                         update_stage(f"Pyramid outpaint {img_idx + 1}/{batch_count}{img_label}")
-                    local_gen = torch.Generator(base_inpaint.device).manual_seed(base_seed + (img_idx * 1000003))
+                    local_gen = torch.Generator(original_base_inpaint.device).manual_seed(base_seed + (img_idx * 1000003))
                     pass_dir = f"img_{img_idx + 1:02d}/pyramid"
                     _debug_save_image(debug_session, f"{pass_dir}/00_source_crop.png", source_crop)
                     try:
@@ -889,6 +889,7 @@ class InpaintMode(GenerationMode):
                             callback=callback,
                             update_stage_fn=update_stage if callback else None,
                             debug_dir=(debug_session["dir"] / f"img_{img_idx + 1:02d}") if debug_session else None,
+                            pipe=original_base_inpaint,
                         )
                         out_imgs.append(result)
                         _debug_save_image(debug_session, f"{pass_dir}/99_result.png", result)
@@ -1051,7 +1052,7 @@ class InpaintMode(GenerationMode):
                         _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", stage_mask)
                         s1_strength = min(repeat_strength, float(settings.get("smart_extend_large_first_strength", 0.55)))
                         s1_cfg = max(6.5, float(settings.get("smart_extend_large_first_cfg", 7.5)))
-                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 1009)
+                        local_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base + 1009)
                         pass_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
@@ -1126,7 +1127,7 @@ class InpaintMode(GenerationMode):
                             min(0.64, float(settings.get("smart_extend_large_second_strength", 0.58))),
                         )
                         s2_cfg = max(8.0, float(settings.get("smart_extend_large_second_cfg", 10.0)))
-                        local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + 2018)
+                        local_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base + 2018)
                         pass_kwargs = {
                             "prompt": prompt,
                             "prompt_2": prompt_2 or None,
@@ -1191,7 +1192,7 @@ class InpaintMode(GenerationMode):
                                 min(repeat_seam_strength, repeat_strength - ((pass_index - 1) * repeat_strength_drop)),
                             )
                             seam_cfg = repeat_seam_cfg
-                            local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (pass_index * 1009))
+                            local_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base + (pass_index * 1009))
                             pass_kwargs = {
                                 "prompt": prompt,
                                 "prompt_2": prompt_2 or None,
@@ -1272,7 +1273,7 @@ class InpaintMode(GenerationMode):
                                 pass_guidance_scale = repeat_seam_cfg
                             _debug_save_image(debug_session, f"{pass_dir}/01_mask.png", pass_mask)
 
-                            local_gen = torch.Generator(base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
+                            local_gen = torch.Generator(original_base_inpaint.device).manual_seed(image_seed_base + (idx * 1009))
                             pass_kwargs = {
                                 "prompt": prompt,
                                 "prompt_2": prompt_2 or None,
@@ -1429,7 +1430,7 @@ class InpaintMode(GenerationMode):
                 refined = []
                 base_seed = generator.initial_seed()
                 for idx, img in enumerate(out):
-                    local_gen = torch.Generator(base_inpaint.device).manual_seed(base_seed + 1000 + idx)
+                    local_gen = torch.Generator(original_base_inpaint.device).manual_seed(base_seed + 1000 + idx)
                     refine_kwargs = dict(
                         prompt=prompt,
                         prompt_2=prompt_2 or None,

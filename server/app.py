@@ -1475,6 +1475,57 @@ async def upscale(
     return result
 
 
+@app.post("/upscale-input")
+async def upscale_input(
+    image: UploadFile = File(...),
+    scale: int = Form(2),
+):
+    """Upscale an uploaded input image and save the result to the gallery."""
+    import numpy as np
+    import cv2
+    import torch
+    from PIL import Image, ImageOps
+
+    ext = Path(image.filename).suffix if image.filename else ".png"
+    unique_name = f"upscale_input_{uuid.uuid4()}{ext}"
+    temp_path = INPUTS_DIR / unique_name
+    content = await image.read()
+    temp_path.write_bytes(content)
+
+    try:
+        from models.upscaler import get_upsampler
+        upsampler = get_upsampler(scale)
+
+        img = Image.open(temp_path).convert("RGB")
+        img = ImageOps.exif_transpose(img) or img
+        img_np = np.array(img)
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+        with torch.inference_mode():
+            upscaled_bgr, _ = upsampler.enhance(img_bgr, outscale=scale)
+
+        upscaled_rgb = cv2.cvtColor(upscaled_bgr, cv2.COLOR_BGR2RGB)
+        out_img = Image.fromarray(upscaled_rgb)
+
+        w, h = out_img.size
+        settings = {
+            "prompt": "[input image upscale]",
+            "negative_prompt": "",
+            "scale": scale,
+            "source": "input_upscale",
+            "width": w,
+            "height": h,
+            "timestamp": time.time(),
+        }
+        web_paths = save_images([out_img], settings)
+        result_url = web_paths[0]
+
+        return {"image": result_url}
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 @app.get("/queue")
 def get_queue():
     """List active queue jobs and recent completions."""

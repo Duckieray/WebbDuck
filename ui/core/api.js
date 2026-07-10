@@ -158,6 +158,10 @@ export async function upscale(formData) {
     return postForm('/upscale', formData);
 }
 
+export async function upscaleInput(formData) {
+    return postForm('/upscale-input', formData);
+}
+
 /**
  * Caption an image
  */
