@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import torch
 
 from core.runtime import resolve_runtime_profile, runtime_error_hint
@@ -31,3 +34,24 @@ def test_runtime_error_hint_for_kernel_mismatch():
 def test_runtime_error_hint_for_non_kernel_error():
     exc = RuntimeError("unrelated error")
     assert runtime_error_hint(exc) is None
+
+
+def test_model_registry_root_defaults_to_repo_root():
+    expected_root = Path(__file__).resolve().parent.parent
+    assert model_registry.ROOT == expected_root
+
+
+def test_merge_model_registry_creates_parent_directory(monkeypatch, tmp_path):
+    models_file = tmp_path / "nested" / "checkpoint" / "sdxl" / "models.json"
+    monkeypatch.setattr(model_registry, "MODELS_FILE", models_file)
+
+    registry = model_registry.merge_model_registry(
+        {"demo-model": {"path": "demo-path", "source": "local"}},
+        {},
+        persist=True,
+    )
+
+    assert "demo-model" in registry
+    assert models_file.exists()
+    saved = json.loads(models_file.read_text())
+    assert saved == {"demo-model": {"defaults": {}}}

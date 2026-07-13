@@ -64,6 +64,7 @@ from core.web_plugins import (
     mount_web_plugin_assets,
     reload_web_plugin,
 )
+from core.gpu_lease import get_gpu_lease
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -369,6 +370,7 @@ def build_queue_payload() -> dict:
     return {
         "active_job_id": active_job_id,
         "queued_count": generation_queue.qsize(),
+        "gpu_lease": get_gpu_lease(),
         "jobs": jobs[:100],
         "recent_completed": recent_completed[:50],
     }
@@ -458,6 +460,36 @@ def queue_position_for(job_id: str) -> int | None:
     return None
 
 
+def _build_job_status_payload(job_id: str) -> dict | None:
+    meta = job_registry.get(job_id)
+    if not meta:
+        return None
+
+    item = dict(meta)
+    item["queue_position"] = queue_position_for(job_id)
+    return item
+
+
+def _job_error_response(job_id: str, exc: Exception, prefix: str = "Generation failed") -> JSONResponse:
+    error = str(exc).strip() or prefix
+    meta = job_registry.get(job_id)
+    if meta:
+        meta.setdefault("status", "failed")
+        if meta.get("status") not in {"failed", "cancelled", "completed"}:
+            meta["status"] = "failed"
+        meta.setdefault("finished_at", time.time())
+        meta["error"] = error
+    schedule_queue_update()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "failed",
+            "job_id": job_id,
+            "error": error,
+        },
+    )
+
+
 async def enqueue(job, wait_for_result: bool = True):
     """Enqueue job. Optionally wait for result."""
     if "cancel_event" not in job or job.get("cancel_event") is None:
@@ -476,7 +508,10 @@ async def enqueue(job, wait_for_result: bool = True):
             "queue_position": queue_position_for(job_id),
         }
 
-    return await job["future"]
+    try:
+        return await job["future"]
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 async def vram_sampler():
@@ -494,12 +529,23 @@ def _path_stamp(path: Path):
     stamp = [("self", path.name, stat.st_mtime_ns, stat.st_size)]
 
     if path.is_dir():
-        for child in sorted(path.rglob("*"), key=lambda p: p.name):
+        to_visit = [path]
+        while to_visit:
+            current = to_visit.pop()
             try:
-                cstat = child.stat()
-                stamp.append((child.name, cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
+                for child in sorted(current.iterdir(), key=lambda p: p.name):
+                    # Skip descending into diffusers subfolders or internal caches to keep scanning fast
+                    if child.name in {".git", "__pycache__", "unet", "text_encoder", "text_encoder_2", "vae", "scheduler", "feature_extractor", "tokenizer", "tokenizer_2"}:
+                        continue
+                    try:
+                        cstat = child.stat()
+                        stamp.append((child.relative_to(path).as_posix(), cstat.st_mtime_ns, cstat.st_size, child.is_dir()))
+                        if child.is_dir():
+                            to_visit.append(child)
+                    except Exception:
+                        stamp.append((child.name, "err"))
             except Exception:
-                stamp.append((child.name, "err"))
+                pass
 
     return tuple(stamp)
 
@@ -835,7 +881,10 @@ async def test(
             "type": "validation_error"
         }
 
-    return await enqueue(job, wait_for_result=wait_for_result)
+    try:
+        return await enqueue(job, wait_for_result=wait_for_result)
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 @app.post("/generate")
@@ -987,14 +1036,8 @@ async def generate(
             "error": str(e),
             "type": "validation_error"
         }
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        print(trace) # Ensure it shows in server log
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Generation failed: {str(e)}", "trace": trace}
-        )
+    except Exception as exc:
+        return _job_error_response(job_id, exc)
 
 
 def _unlink_file(path: Path) -> bool:
@@ -1465,7 +1508,10 @@ async def upscale(
         "settings": {"image": image, "scale": scale},
     }
 
-    result = await enqueue(job, wait_for_result=wait_for_result)
+    try:
+        result = await enqueue(job, wait_for_result=wait_for_result)
+    except Exception as exc:
+        return _job_error_response(job_id, exc, prefix="Upscale failed")
 
     if isinstance(result, dict) and result.get("image"):
         image_web = to_web_path(resolve_web_path(image))
@@ -1532,6 +1578,29 @@ def get_queue():
     return build_queue_payload()
 
 
+@app.get("/queue/{job_id}")
+def get_queue_job(job_id: str):
+    """Return status for a single queued/running/completed/failed job."""
+    payload = _build_job_status_payload(job_id)
+    if payload is None:
+        return JSONResponse(status_code=404, content={"error": "Job not found"})
+    return payload
+
+
+@app.get("/gpu/lease")
+def gpu_lease_status():
+    """Inspect shared GPU lease state (WebbDuck + local plugins)."""
+    return get_gpu_lease()
+
+
+@app.get("/runtime/profile")
+def runtime_profile():
+    """Return resolved runtime device/dtype profile."""
+    from core.runtime import resolve_runtime_profile
+
+    return {"runtime": resolve_runtime_profile().to_dict()}
+
+
 @app.post("/queue/cancel")
 async def cancel_queue_job(job_id: str = Form(...)):
     """Cancel a queued or running job."""
@@ -1586,6 +1655,14 @@ async def unload_all_models(clear_caches: bool = False):
         return JSONResponse(
             status_code=409,
             content={"error": "Cannot unload while a job is running"},
+        )
+    lease = get_gpu_lease()
+    held = bool(lease.get("held"))
+    lease_owner = ((lease.get("lease") or {}) if isinstance(lease, dict) else {}).get("owner")
+    if held and lease_owner and str(lease_owner) != "webbduck-core":
+        return JSONResponse(
+            status_code=409,
+            content={"error": f"Cannot unload while GPU is leased by {lease_owner}"},
         )
 
     from core.pipeline import pipeline_manager, get_runtime_profile_dict
@@ -1664,6 +1741,7 @@ def health():
             "maxsize": generation_queue.maxsize,
             "active_job_id": active_job_id,
             "tracked_jobs": len(job_registry),
+            "gpu_lease": get_gpu_lease(),
         },
         "pipeline": {
             "loaded": pipeline_manager.pipe is not None,

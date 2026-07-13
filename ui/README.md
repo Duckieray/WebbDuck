@@ -1,8 +1,8 @@
-# WebbDuck UI
+# WebbDuck UI Guide
 
-WebbDuck UI is a zero-build frontend using ES modules and vanilla CSS.
+WebbDuck's frontend is a zero-build web app built with plain HTML, ES modules, and CSS.
 
-## Structure
+## Folder Map
 
 ```text
 ui/
@@ -12,63 +12,103 @@ ui/
 |  |- api.js
 |  |- events.js
 |  |- state.js
-|  |- utils.js
+|  `- utils.js
 |- modules/
-|  |- LightboxManager.js
 |  |- EmbeddingManager.js
+|  |- GalleryManager.js
+|  |- LightboxManager.js
 |  |- LoraManager.js
 |  |- MaskEditor.js
-|  |- ProgressManager.js
+|  `- ProgressManager.js
 |- styles/
+|  |- reset.css
+|  |- base.css
+|  |- design-tokens.css
 |  |- main.css
 |  |- theme-nova.css
-|  |- design-tokens.css
-|  |- base.css
-|  |- reset.css
 |  |- components/
-|  |- layouts/
+|  `- layouts/
+`- planning/
 ```
 
-## Key UI Capabilities
+## File Responsibilities
 
-- Studio + Gallery tabbed layout (desktop and mobile).
-- Mobile Studio pane toggle (`Preview` / `Settings`) for full-height usability.
-- Large Studio preview with action toolbar (zoom/upscale/inpaint/download).
-- Docked generation progress panel in the Studio status bar with cancel control.
-- Prompt token counter with over-limit warning styling.
-- Resolution preset chips with active `Custom` state.
-- Seed randomize icon sets true random mode (clears seed input) with persisted seed handling.
-- Dedicated Queue modal with job metadata, cancel action for queued/running jobs, and img2img thumbnail previews.
-- Settings modal for long-run warning threshold and CLIP_SKIP2 toggle.
-- Smart Extend has a compact default mode plus an optional `Advanced` toggle for manual seam/pyramid tuning.
-- Lightbox info panel at the bottom with toggle and full metadata.
-- Gallery flat-grid view with keyword search, filter chips (`All`/`HD`/`Favorites`), thumbnail-size slider, and infinite scroll.
+- `ui/index.html`: app shell markup, controls, modals, and mount points.
+- `ui/app.js`: top-level wiring for Studio, Queue, Gallery, Settings, help modal, and plugin tabs.
+- `ui/core/api.js`: fetch helpers for backend endpoints.
+- `ui/core/events.js`: local event bus fed by the WebSocket stream.
+- `ui/core/state.js`: persisted Studio state and DOM sync.
+- `ui/core/utils.js`: DOM, toast, async, and form-data helpers used across the app.
+- `ui/modules/GalleryManager.js`: gallery paging, search, filters, and thumbnail sizing.
+- `ui/modules/LightboxManager.js`: full-screen viewer and metadata display.
+- `ui/modules/LoraManager.js`: LoRA list, weights, and compatibility filtering.
+- `ui/modules/EmbeddingManager.js`: embedding selection and token editing.
+- `ui/modules/MaskEditor.js`: inpaint mask interactions.
+- `ui/modules/ProgressManager.js`: progress card and cancel handling.
 
-## Event Flow
+## Realtime Flow
 
-WebSocket events from `/ws` are translated to local events:
+WebSocket events from `/ws` are translated into local frontend events:
+
 - `state` -> `Events.STATUS_UPDATE`
 - `queue` -> `Events.QUEUE_UPDATE`
 - `catalog` -> `Events.CATALOG_UPDATE`
 
-This avoids frontend polling loops for queue/catalog freshness.
+This keeps queue and catalog state fresh without extra polling loops in the browser.
 
-## LoRA UX Notes
+## Persisted State
 
-- LoRA selector options are loaded from `/models/{base_model:path}/loras`.
-- Slider range is `0.00` to `2.00` in `0.05` increments.
-- Default slider value uses backend `weight` from `loras.json`.
-- Selected LoRAs are persisted in local state and restored when compatible.
+`ui/core/state.js` stores Studio settings in `localStorage` under `webbduck_state_v2`.
 
-## Embedding UX Notes
+Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings.
 
-- Embedding selector options are loaded from `/models/{base_model:path}/embeddings`.
-- Selected embeddings are persisted in local state and restored when compatible.
-- Each selected embedding card exposes editable token text used during pipeline loading.
+## Editing Recipes
 
-## Editing Guidance
+### Add a new control
 
-- Add API wrappers in `ui/core/api.js`.
-- Prefer module-local logic in `ui/modules/*` for feature-specific behavior.
-- Use event bus (`ui/core/events.js`) for cross-module communication.
-- Keep style changes in `ui/styles/theme-nova.css` unless the change is a reusable primitive.
+1. Add the markup in `ui/index.html`.
+2. Read and write the value in `ui/app.js`.
+3. Persist it in `ui/core/state.js` if it should survive reloads.
+4. Send it through `ui/core/api.js` if the backend needs it.
+5. Update related docs and tests.
+
+### Add a new screen-level behavior
+
+- Put page orchestration in `ui/app.js`.
+- Move feature-specific logic into a module in `ui/modules/` when the behavior grows beyond a small helper.
+
+### Change styles
+
+- Update `ui/styles/design-tokens.css` for reusable colors, spacing, or typography tokens.
+- Update `ui/styles/theme-nova.css` for WebbDuck-specific theming and component presentation.
+- Update files in `ui/styles/components/` or `ui/styles/layouts/` for reusable CSS organization.
+- `ui/planning/` is available for tracked planning notes, but it is currently empty.
+
+### Change API contracts
+
+- Keep `ui/core/api.js`, `ui/app.js`, and `server/app.py` aligned.
+- If the change affects persisted inputs, update `ui/core/state.js` too.
+
+## Current UI Features
+
+- Studio and Gallery views.
+- Queue modal with queued and running job controls.
+- Prompt token counter and warning states.
+- Resolution presets and custom size support.
+- Seed randomization.
+- LoRA and embedding management.
+- Inpaint mask editor and smart extend controls.
+- Lightbox metadata panel and image actions.
+- Settings modal, in-app help modal, and remote plugin connection UI.
+- Queue detail cards, compare view, and plugin iframe tabs.
+
+## Verification
+
+When you touch the frontend, prefer a focused check first:
+
+```bash
+pytest tests/test_ui_sanity.py -v
+pytest tests/test_server.py -v
+```
+
+`tests/test_ui_sanity.py` expects a running server and browser automation support. If you changed data contracts, add the relevant backend or integration tests too.

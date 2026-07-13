@@ -43,3 +43,6 @@ Thumbs.db
 # Session data
 session_log.json
 PHASE_PLAN.md
+
+# Private backlog notes (local only)
+backlog-private/

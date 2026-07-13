@@ -3,6 +3,8 @@
 import asyncio
 import gc
 import logging
+import os
+import sys
 import time
 import torch
 import cv2
@@ -13,6 +15,7 @@ from datetime import datetime
 
 from core.generation import run_generation
 from core.exceptions import GenerationCancelledError
+from core.gpu_lease import release_gpu_lease, wait_for_gpu_lease_async
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry, to_web_path
 from server.events import broadcast_state
@@ -42,9 +45,87 @@ def _cleanup_memory():
     if torch.cuda.is_available():
         try:
             torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
+            use_ipc_collect = str(os.getenv("WEBBDUCK_USE_IPC_COLLECT", "")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if use_ipc_collect:
+                torch.cuda.ipc_collect()
         except Exception:
             pass
+
+
+def _prepare_gpu_for_webbduck_job() -> None:
+    """Best-effort VRAM cleanup before WebbDuck generation starts.
+
+    If DuckMotion is installed and previously loaded a Wan pipeline in-process,
+    proactively unload it now that WebbDuck owns the GPU lease.
+    """
+    t0 = time.perf_counter()
+    unloaded = False
+    for module_name, module in list(sys.modules.items()):
+        if module_name != "webbduck_webplugin_duckmotion":
+            continue
+        unload = getattr(module, "_unload_pipeline", None)
+        if callable(unload):
+            try:
+                unload()
+                unloaded = True
+                log.info("Unloaded DuckMotion pipeline before WebbDuck job startup.")
+            except Exception:
+                log.exception("Failed to unload DuckMotion pipeline before WebbDuck job.")
+        break
+
+    _cleanup_memory()
+    elapsed = time.perf_counter() - t0
+    if elapsed > 2.0:
+        log.warning("WebbDuck GPU preflight cleanup took %.2fs (duckmotion_unloaded=%s).", elapsed, unloaded)
+
+
+async def _acquire_worker_gpu_lease(job):
+    update_stage("Waiting for GPU")
+    await broadcast_state(snapshot())
+    timeout_raw = str(os.getenv("WEBBDUCK_GPU_LEASE_WAIT_SECONDS", "180")).strip()
+    try:
+        timeout_seconds = max(5.0, float(timeout_raw))
+    except Exception:
+        timeout_seconds = 180.0
+    attempt = await wait_for_gpu_lease_async(
+        owner="webbduck-core",
+        owner_kind="webbduck",
+        label=str(job.get("type") or "generation"),
+        job_id=str(job.get("job_id") or "") or None,
+        timeout_seconds=timeout_seconds,
+    )
+    if not attempt.get("acquired"):
+        lease = attempt.get("lease") if isinstance(attempt, dict) else None
+        holder = ""
+        if isinstance(lease, dict):
+            holder = str(lease.get("owner") or "").strip()
+        holder_txt = f" Current holder: {holder}." if holder else ""
+        waited = attempt.get("waited_seconds")
+        waited_txt = f"{float(waited):.1f}s" if isinstance(waited, (int, float)) else f"{timeout_seconds:.1f}s"
+        raise RuntimeError(
+            "GPU lease wait timed out after "
+            f"{waited_txt}.{holder_txt} "
+            "If this persists, restart WebbDuck and verify no plugin job is still running."
+        )
+    lease = attempt.get("lease") if isinstance(attempt, dict) else None
+    if isinstance(lease, dict):
+        token = str(lease.get("token") or "").strip()
+        return token or None
+    return None
+
+
+def _release_worker_gpu_lease(token):
+    if not token:
+        return
+    try:
+        release_gpu_lease(token=token)
+    except Exception:
+        pass
 
 
 def _build_oom_message(exc: Exception) -> str:
@@ -128,7 +209,9 @@ async def gpu_worker(queue):
                 pass
         
         if job["type"] == "upscale":
+            lease_token = None
             try:
+                lease_token = await _acquire_worker_gpu_lease(job)
                 result = await run_upscale(job, cancel_event=cancel_event)
                 job["future"].set_result({"image": result})
                 if callable(on_finish):
@@ -175,10 +258,14 @@ async def gpu_worker(queue):
                     except Exception:
                         pass
             finally:
+                _release_worker_gpu_lease(lease_token)
                 queue.task_done()
             continue
 
+        lease_token = None
         try:
+            lease_token = await _acquire_worker_gpu_lease(job)
+            _prepare_gpu_for_webbduck_job()
             update_stage("Preparing")
             update_progress(0.02)
             await broadcast_state(snapshot())
@@ -301,4 +388,5 @@ async def gpu_worker(queue):
                     pass
 
         finally:
+            _release_worker_gpu_lease(lease_token)
             queue.task_done()

@@ -68,6 +68,7 @@ if __name__ == "__main__":
         os.environ["WEBBDUCK_MODELS_DIR"] = str(models_path)
     if args.hf_cache:
         hf_raw = Path(args.hf_cache).expanduser().resolve()
+        # Accept either HF_HOME root or explicit hub path.
         if hf_raw.name.lower() == "hub":
             hf_home = hf_raw.parent
             hf_hub = hf_raw

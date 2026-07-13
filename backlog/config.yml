@@ -1,0 +1,17 @@
+project_name: "WebbDuck Backlog"
+default_status: "Backlog"
+statuses: ["Backlog", "To Do", "In Progress", "Done"]
+labels: []
+definition_of_done: ["Feature works in real Diffusers pipeline (not mock only)", "No frontend console errors and no backend tracebacks", "VRAM usage validated and no memory leaks introduced", "LoRA loading and scaling verified (if affected)", "Seed behavior verified (deterministic when expected)", "UI state accurately reflects backend configuration", "README or documentation updated if behavior changed", "Committed with descriptive message", "Generation speed benchmarked against previous version"]
+date_format: yyyy-mm-dd
+max_column_width: 20
+default_editor: "vim"
+auto_open_browser: false
+default_port: 6420
+remote_operations: true
+auto_commit: true
+zero_padded_ids: 3
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "TASK"

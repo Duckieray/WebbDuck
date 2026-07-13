@@ -1,111 +1,132 @@
 # WebbDuck User Guide
 
-This guide describes the current UI and workflows in WebbDuck.
+This guide explains the current user-facing workflows in WebbDuck. It is the longer reference guide; `docs/SIMPLE_GUIDE.md` is the shorter version shown in the in-app help modal.
 
-## Studio
+## Main Screens
 
-The Studio view is where generation jobs are configured and submitted.
+### Studio
 
-### Core Inputs
+Studio is where you configure and submit generation jobs.
 
-- `Model`: Base SDXL checkpoint.
-- `Prompt`: Main prompt text.
-- `Negative Prompt`: Undesired features.
-- `Parameters`: Width, height, steps, CFG, scheduler, seed.
-- `Batch Size`: Always docked near the bottom with quick access.
+- Pick a base model, write a prompt, and optionally add a negative prompt.
+- Adjust width, height, steps, CFG, scheduler, seed, and batch size.
+- Upload an input image for img2img or inpaint workflows.
+- Review progress and the latest result in the preview area.
 
-### Prompt Token Counter
+### Queue
 
-- Prompt token count updates from the backend tokenizer.
-- Over 77 tokens triggers warning/danger styling and a tooltip warning.
-- Prompts longer than 77 tokens are chunk-encoded for SDXL instead of being hard-truncated.
+Open `Queue` in the top bar to inspect pending and running work.
 
-### Resolution Presets
+- Queued jobs show prompt and settings summaries.
+- Queued jobs can be canceled.
+- Running jobs can receive a cancellation request.
+- Queue state updates live over WebSocket instead of polling.
 
-- Presets include `1:1`, `4:3`, `3:2`, `16:9`, `2:3`, `9:16`.
-- `Custom` is highlighted when width/height does not match a preset.
+### Gallery
 
-### Seed Behavior
+Gallery shows saved outputs in a flat newest-first grid.
 
-- Seed input can be blank for random seed.
-- Randomize button sets seed mode to random by clearing the seed input.
-- Last used seed is shown in the Studio status bar after generation.
-
-### LoRA Stack
-
-- LoRAs are filtered by selected model architecture.
-- Each LoRA has weight slider range `0.00` to `2.00` with `0.05` steps.
-- Default LoRA weight is loaded from `lora/loras.json` when available.
-- Selected LoRAs persist across refresh (when still compatible with model).
-- Trigger phrases defined in `loras.json` are injected into the prompt automatically at generation time.
-
-### Embedding Stack
-
-- Embeddings are filtered by selected model architecture.
-- Local embedding files are discovered from the embeddings folder and synced into `embeddings/embeddings.json`.
-- Each selected embedding can set/edit the active token used in prompt text.
-- Selected embeddings persist across refresh (when still compatible with model).
-
-### Input Image / Inpaint
-
-- Drag/drop or click upload for img2img.
-- Optional caption generation if a captioner plugin is installed.
-- Mask editor supports draw/erase/invert, blur, and replace/keep inpaint mode.
-
-### Preview Area
-
-- Placeholder appears until an image is generated.
-- Toolbar actions: zoom, upscale, send to inpaint, download.
-- Progress card appears in the bottom status area during generation with cancel action.
-
-## Queue
-
-Queue is shown in a dedicated modal (`Queue` button in top bar).
-
-Each queued/running job can show:
-- status and queue position,
-- model/scheduler/steps/cfg/batch,
-- truncated prompt,
-- seed/negative/LoRA summary in expandable details,
-- embedding summary in expandable details,
-- img2img/inpaint input thumbnail when available.
-
-Queued jobs can be canceled from the modal.
-Running jobs can also be cancellation-requested from the modal or the progress card.
-
-## Gallery
-
-- Images are shown in a flat newest-first grid (not grouped into run rows).
-- Search matches prompt/metadata keywords globally using manifest-backed search.
-  - All typed terms must be present, but can appear in any order.
-- Thumbnails are loaded through `/thumbs/...` for lighter browsing.
+- Search matches prompt and metadata keywords through the manifest index.
 - Filters include `All`, `HD`, and `Favorites`.
-- Thumbnail size can be adjusted with the gallery `Thumb` slider.
-- More images auto-load as you scroll (infinite scroll).
+- The `Thumb` slider changes thumbnail size.
+- More results load automatically as you scroll.
 
-## Mobile Studio
+### Lightbox
 
-- On mobile, Studio includes a `Preview` / `Settings` toggle in the top bar.
-- `Settings` view keeps controls, batch, and action buttons accessible.
-- `Preview` view shows the image workspace full-height.
+Click an image to inspect it full size.
 
-## Lightbox
+- Metadata includes prompt, negative prompt, model, seed, dimensions, timing, LoRAs, embeddings, and inpaint/outpaint settings.
+- Actions include regenerate, upscale, send to inpaint, download, compare, and delete.
 
-- Open any image to inspect at full size.
-- Bottom metadata/info panel includes prompt, negative, model, seed, settings, inpaint/outpaint settings, LoRAs, embeddings, and timing info.
-- `Info` toggle shows/hides metadata panel.
-- Actions: regenerate, upscale, inpaint, download, compare (when variant exists), delete.
+## Core Generation Controls
 
-## Settings Modal
+### Prompt and Token Count
 
-Open `Settings` from the top bar to configure:
-- `Coffee Warning (min)` threshold for long-run confirmation prompts.
-- `Enable CLIP_SKIP2` toggle (sends `clip_skip=2` to generation endpoints).
+- Prompt length is checked by the backend tokenizer.
+- WebbDuck warns when a prompt exceeds the 77-token CLIP window.
+- Long SDXL prompts are chunk-encoded instead of being hard-truncated.
 
-## State Persistence
+### Resolution and Aspect Ratio
 
-Most Studio settings are persisted in `localStorage` and restored on refresh, including prompt fields, dimensions, scheduler, second-pass settings, denoise strength, selected LoRAs, and selected embeddings.
+- Presets include common aspect ratios like `1:1`, `4:3`, `3:2`, `16:9`, `2:3`, and `9:16`.
+- `Custom` becomes active when the size does not match a preset.
+
+### Seed
+
+- Leave the seed blank for a random result.
+- The randomize button clears the field so the next run uses a fresh seed.
+- The last used seed appears in the Studio status area after generation.
+
+### Batch Size
+
+- Batch size controls how many images are generated in one queued job.
+- Larger batches use more time and VRAM.
+
+## LoRAs and Embeddings
+
+### LoRAs
+
+- LoRAs are filtered to match the selected base model architecture.
+- Each selected LoRA has a weight slider from `0.00` to `2.00` in `0.05` steps.
+- Default weights and trigger phrases come from `lora/loras.json` when present.
+- Trigger phrases are injected automatically during generation.
+
+### Embeddings
+
+- Embeddings are filtered to match the selected base model architecture.
+- Local embedding files are discovered and synced into the embedding catalog.
+- Each selected embedding lets you review or edit the token used in prompts.
+
+## Image Editing Workflows
+
+### Img2img
+
+- Upload or drop an image into the Studio input area.
+- Lower denoising strength keeps the source closer to the original.
+- Higher denoising strength gives WebbDuck more freedom to change the image.
+
+### Inpaint
+
+- Use the mask editor to paint where changes are allowed.
+- `Replace` repaints the masked area.
+- `Keep` protects the mask and edits the surrounding region.
+- Blur softens mask edges for smoother blending.
+
+### Smart Extend / Outpaint
+
+- Extend the canvas to add more scene around an image.
+- The default mode handles the seam settings for you.
+- Advanced controls can override seam and pyramid tuning when needed.
+
+### Upscale
+
+- You can upscale from the Studio preview or from the lightbox.
+- Upscaling runs through the job queue like other GPU-heavy actions.
+
+## Settings and Persistence
+
+Open `Settings` from the top bar to manage app-level options.
+
+- Long-run warning threshold controls the coffee warning prompt.
+- `Enable CLIP_SKIP2` sends `clip_skip=2` to generation endpoints.
+- Remote web-app plugins can be connected from the same settings area.
+
+Most Studio settings persist in `localStorage`, including prompt fields, size, scheduler, second-pass options, denoising strength, selected LoRAs, and selected embeddings.
 
 ## GPU Idle Unload
 
 The model is automatically unloaded from VRAM after 5 minutes of inactivity to free resources. Generation will reload it on the next job (adds a few seconds of startup time). This is configurable via the `WEBBDUCK_IDLE_UNLOAD_SECONDS` environment variable.
+
+## Optional Captioning
+
+- If a captioner plugin is installed, the input-image area exposes a `Caption` action.
+- Captioning is optional and may use substantial VRAM.
+- WebbDuck unloads generation pipelines before captioning to free memory.
+
+## Troubleshooting Tips
+
+- Slow generation: reduce steps, resolution, or batch size.
+- Memory issues: close other GPU apps or lower the requested size/batch.
+- Prompt not matching output: simplify the prompt or lower CFG slightly.
+- Search returning nothing: try fewer keywords first, then narrow it down.
+- Missing caption button: verify plugin installation and restart WebbDuck.

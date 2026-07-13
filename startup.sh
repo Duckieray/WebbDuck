@@ -22,7 +22,7 @@ Starts WebbDuck from this repository directory.
 Options:
   -e, --env NAME        Conda environment name (default: $CONDA_ENV)
   -o, --output DIR      Output directory (default: $OUTPUT_DIR)
-  -m, --models DIR      Models root directory (sets WEBBDUCK_MODELS_DIR)
+  -m, --models DIR      Models root directory (sets WEBBDUCK_MODELS_DIR for run.py)
       --hf-cache DIR    Hugging Face cache root or hub directory override
   -p, --port PORT       Server port (default: $PORT)
       --dtype DTYPE     Set WEBBDUCK_DTYPE (float16|bfloat16|float32)
