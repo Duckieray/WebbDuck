@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """WebbDuck - SDXL Generation Interface"""
 
+import resource
 import sys
 from pathlib import Path
 
@@ -28,6 +29,18 @@ import os
 # Disable progress bars to prevent BrokenPipeError in background execution
 # os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 # os.environ["TQDM_DISABLE"] = "1"
+
+try:
+    RLIMIT_AS_GB = int(os.getenv("WEBBDUCK_RLIMIT_AS_GB", "56"))
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    limit_bytes = RLIMIT_AS_GB * 1024 ** 3
+    if hard == resource.RLIM_INFINITY or limit_bytes < hard:
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard if hard != resource.RLIM_INFINITY else limit_bytes))
+        logging.info("Applied RLIMIT_AS = %d GB", RLIMIT_AS_GB)
+    else:
+        logging.info("Hard RLIMIT_AS (%d GB) is lower than requested; keeping existing limit", hard // 1024**3)
+except Exception as exc:
+    logging.warning("Could not set RLIMIT_AS: %s", exc)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebbDuck SDXL Server")

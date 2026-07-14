@@ -16,6 +16,10 @@ from typing import Any
 
 log = logging.getLogger("webbduck.gpu_lease")
 
+# Default idle timeout before a lease is considered stale (seconds).
+# Set via WEBBDUCK_LEASE_IDLE_TIMEOUT or DUCKMOTION_LEASE_IDLE_TIMEOUT env var.
+_LEASE_IDLE_TIMEOUT = float(os.getenv("WEBBDUCK_LEASE_IDLE_TIMEOUT") or os.getenv("DUCKMOTION_LEASE_IDLE_TIMEOUT") or "300.0")
+
 _LEASE: dict[str, Any] = {
     "held": False,
     "owner": None,
@@ -24,6 +28,7 @@ _LEASE: dict[str, Any] = {
     "token": None,
     "acquired_at": None,
     "job_id": None,
+    "last_progress_at": None,
 }
 _LEASE_LOCK = threading.RLock()
 _CONDITION = threading.Condition(_LEASE_LOCK)
@@ -46,6 +51,19 @@ def acquire_gpu_lease_blocking(
 
     with _CONDITION:
         while _LEASE["held"]:
+            # Auto-release stale leases that have stopped sending heartbeats.
+            last_progress = _LEASE.get("last_progress_at")
+            if last_progress is not None:
+                idle = time.time() - last_progress
+                if idle > _LEASE_IDLE_TIMEOUT:
+                    held_by = f"{_LEASE.get('owner')}/{_LEASE.get('label')}"
+                    log.warning(
+                        "Auto-releasing stale GPU lease held by %s (idle %.0fs > %.0fs)",
+                        held_by, idle, _LEASE_IDLE_TIMEOUT,
+                    )
+                    _clear_lease_locked()
+                    _CONDITION.notify_all()
+                    break
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
             if remaining is not None and remaining <= 0:
                 waited = _LEASE.get("acquired_at")
@@ -128,5 +146,23 @@ def _clear_lease_locked() -> None:
             "token": None,
             "acquired_at": None,
             "job_id": None,
+            "last_progress_at": None,
         }
     )
+
+
+def lease_heartbeat(*, token: str) -> bool:
+    """Update the progress timestamp for the current lease holder.
+
+    Call this periodically from the lease holder while doing GPU work.
+    The lease system will auto-release leases that go idle past
+    ``WEBBDUCK_LEASE_IDLE_TIMEOUT`` (default 300s).
+    Returns ``True`` if the heartbeat was accepted.
+    """
+    with _LEASE_LOCK:
+        if not _LEASE["held"]:
+            return False
+        if str(_LEASE.get("token") or "") != str(token or ""):
+            return False
+        _LEASE["last_progress_at"] = time.time()
+        return True
