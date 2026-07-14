@@ -66,14 +66,17 @@ async def wait_for_gpu_lease_async(
 ) -> dict[str, Any]:
     """Async equivalent of :func:`acquire_gpu_lease_blocking`."""
     loop = asyncio.get_running_loop()
+    from functools import partial as _partial
     return await loop.run_in_executor(
         None,
-        acquire_gpu_lease_blocking,
-        owner,
-        owner_kind,
-        label,
-        job_id,
-        timeout_seconds,
+        _partial(
+            acquire_gpu_lease_blocking,
+            owner=owner,
+            owner_kind=owner_kind,
+            label=label,
+            job_id=job_id,
+            timeout_seconds=timeout_seconds,
+        ),
     )
 
 
