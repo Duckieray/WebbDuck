@@ -18,8 +18,16 @@ async function request(url, options = {}) {
         });
 
         if (!response.ok) {
-            const error = await response.text();
-            throw new Error(error || `HTTP ${response.status}`);
+            const text = await response.text();
+            let message = `HTTP ${response.status}`;
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed.error) message = parsed.error;
+                else if (parsed.detail) message = parsed.detail;
+            } catch {
+                if (text) message = text;
+            }
+            throw new Error(message);
         }
 
         const contentType = response.headers.get('content-type');

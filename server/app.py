@@ -471,7 +471,11 @@ def _build_job_status_payload(job_id: str) -> dict | None:
 
 
 def _job_error_response(job_id: str, exc: Exception, prefix: str = "Generation failed") -> JSONResponse:
-    error = str(exc).strip() or prefix
+    raw = str(exc).strip()
+    if raw:
+        error = raw
+    else:
+        error = f"{prefix} ({type(exc).__name__})"
     meta = job_registry.get(job_id)
     if meta:
         meta.setdefault("status", "failed")
