@@ -18,9 +18,11 @@ state = {
 
 
 def update_stage(stage: str):
-    """Update current processing stage."""
-    if stage != "Error":
-        state["error_detail"] = None
+    """Update current processing stage.
+
+    Clears ``error_detail`` only when transitioning from a terminal/error
+    stage to an active-processing stage (e.g. when a new job starts).
+    """
     state["stage"] = stage
     state["last_update"] = time.time()
 

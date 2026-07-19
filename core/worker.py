@@ -235,9 +235,12 @@ async def gpu_worker(queue):
                     continue
 
                 update_stage("Error")
+                msg = str(e)
+                update_error_detail(msg)
                 await broadcast_state(snapshot())
                 if _is_kernel_compat_error(e):
                     msg = _build_kernel_compat_message(e)
+                    update_error_detail(msg)
                     update_stage("GPU Compatibility Error")
                     update_progress(0.0)
                     await broadcast_state(snapshot())
@@ -245,12 +248,14 @@ async def gpu_worker(queue):
                     job["future"].set_exception(RuntimeError(msg))
                 elif _is_oom_error(e):
                     msg = _build_oom_message(e)
+                    update_error_detail(msg)
                     update_stage("OOM (Memory)")
                     update_progress(0.0)
                     await broadcast_state(snapshot())
                     log.exception("OOM during upscale job %s", job.get("job_id"))
                     job["future"].set_exception(RuntimeError(msg))
                 else:
+                    update_error_detail(msg)
                     job["future"].set_exception(e)
                 if callable(on_finish):
                     try:
@@ -264,6 +269,7 @@ async def gpu_worker(queue):
 
         lease_token = None
         try:
+            update_error_detail(None)
             lease_token = await _acquire_worker_gpu_lease(job)
             _prepare_gpu_for_webbduck_job()
             update_stage("Preparing")
