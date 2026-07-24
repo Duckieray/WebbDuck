@@ -1,6 +1,7 @@
 """FastAPI application and endpoints."""
 
 import asyncio
+import hashlib
 import json
 import uuid
 import time
@@ -221,6 +222,13 @@ def _parse_json_list(raw: str, field_name: str) -> list:
     if not isinstance(value, list):
         raise HTTPException(status_code=422, detail=f"'{field_name}' must be a JSON array")
     return value
+
+
+def _request_fingerprint(settings: dict) -> str:
+    """Deterministic hash of the full normalized generation request."""
+    import hashlib
+    raw = json.dumps(settings, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def summarize_settings(settings: dict) -> dict:
@@ -1011,13 +1019,39 @@ async def generate(
         )
     )
 
+    # Compute content hashes for uploaded files before writing them to disk,
+    # so we can include them in the request fingerprint.
     if image:
-        # Use UUID to prevent file locking issues on Windows
+        raw_bytes = image.file.read()
+        image.file.seek(0)
+        settings["image_content_hash"] = hashlib.sha256(raw_bytes).hexdigest()
+    if mask:
+        raw_bytes = mask.file.read()
+        mask.file.seek(0)
+        settings["mask_content_hash"] = hashlib.sha256(raw_bytes).hexdigest()
+
+    fingerprint = _request_fingerprint(settings) if client_request_id else ""
+
+    if client_request_id:
+        existing = _find_job_by_client_request(client_request_id)
+        if existing is not None:
+            existing_meta = job_registry.get(existing.get("job_id"), {})
+            if existing_meta.get("fingerprint") == fingerprint:
+                return _job_result(existing_meta.get("job_id"), existing_meta)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "client_request_id already exists with different parameters",
+                    "existing_job_id": existing.get("job_id"),
+                },
+            )
+
+    # Write uploaded files to disk only after idempotency check passes.
+    if image:
         ext = Path(image.filename).suffix
         if not ext:
-            ext = ".png" # default
+            ext = ".png"
         unique_name = f"{uuid.uuid4()}{ext}"
-        
         file_path = INPUTS_DIR / unique_name
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
@@ -1029,22 +1063,6 @@ async def generate(
         with open(mask_path, "wb") as buffer:
             shutil.copyfileobj(mask.file, buffer)
         settings["mask_image"] = str(mask_path.absolute())
-
-    if client_request_id:
-        existing = _find_job_by_client_request(client_request_id)
-        if existing is not None:
-            existing_meta = job_registry.get(existing.get("job_id"), {})
-            existing_settings = existing_meta.get("settings", {})
-            current_summary = summarize_settings(settings)
-            if existing_settings == current_summary:
-                return _job_result(existing_meta.get("job_id"), existing_meta)
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "error": "client_request_id already exists with different parameters",
-                    "existing_job_id": existing.get("job_id"),
-                },
-            )
 
     job_id = str(uuid.uuid4())
     job = {
@@ -1062,6 +1080,7 @@ async def generate(
         "status": "created",
         "created_at": time.time(),
         "settings": summarize_settings(settings),
+        "fingerprint": fingerprint,
         "client_request_id": client_request_id,
     }
 
