@@ -935,6 +935,7 @@ async def generate(
     clip_skip: int = Form(None),
     identity_adapter: str = Form("{}"),
     wait_for_result: bool = Form(True),
+    client_request_id: str = Form(""),
 ):
     """Generate batch of images."""
     width, height = normalize_dimensions(width, height)
@@ -1030,6 +1031,7 @@ async def generate(
         "status": "created",
         "created_at": time.time(),
         "settings": summarize_settings(settings),
+        "client_request_id": client_request_id,
     }
 
     try:
@@ -1589,6 +1591,30 @@ def get_queue_job(job_id: str):
     if payload is None:
         return JSONResponse(status_code=404, content={"error": "Job not found"})
     return payload
+
+
+@app.get("/queue/by-client-request/{client_request_id}")
+def get_queue_job_by_client_request(client_request_id: str):
+    """Look up a job by the client_request_id supplied during submission."""
+    if not client_request_id:
+        return JSONResponse(status_code=400, content={"error": "client_request_id is required"})
+    matches = [
+        dict(meta)
+        for meta in job_registry.values()
+        if meta.get("client_request_id") == client_request_id
+    ]
+    if not matches:
+        return JSONResponse(status_code=404, content={"error": "No job found for this client_request_id"})
+    if len(matches) > 1:
+        for m in matches:
+            m["queue_position"] = queue_position_for(m["job_id"])
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Multiple jobs share this client_request_id", "jobs": matches},
+        )
+    match = matches[0]
+    match["queue_position"] = queue_position_for(match["job_id"])
+    return match
 
 
 @app.get("/gpu/lease")
