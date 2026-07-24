@@ -70,6 +70,8 @@ plugins/
          `- index.html
 ```
 
+> **Note:** The `plugins/webapps/` directory is gitignored and does not exist in the repo by default. It is created dynamically by external integrations (e.g., dnaduck, duckmotion).
+
 ### `plugin.json`
 
 Required fields:
@@ -137,7 +139,7 @@ When plugin contracts change, update this file and `plugins/README.md` together.
 
 ## Optional External Plugins
 
-`plugins/webapps/dnaduck/` and `plugins/webapps/duckmotion/` are integration points for separately managed plugin projects. WebbDuck should not require those repos to be present for core functionality.
+`plugins/webapps/` is gitignored and created dynamically by external integrations (dnaduck, duckmotion). `plugins/webapps/dnaduck/` and `plugins/webapps/duckmotion/` are integration points for separately managed plugin projects. WebbDuck should not require those repos to be present for core functionality.
 
 Some external plugin repos may ship their own installer scripts. When they do, point them at the WebbDuck repo root. WebbDuck itself does not currently bundle a generic `tools/install_webbduck_plugin.py` helper.
 

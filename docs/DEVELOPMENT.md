@@ -71,6 +71,8 @@ python run.py --output ./outputs --port 8010
 - `lora/`
 - `lora/loras.json`
 - `checkpoint/sdxl/checkpoints.json`
+- `embeddings/` (EMBEDDING_ROOT)
+- `embeddings/embeddings.json` (EMBEDDING_FILE)
 
 - `core/worker.py`: queued execution.
 - `core/generation.py`: normalized generation flow and mode selection.

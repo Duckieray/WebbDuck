@@ -8,10 +8,12 @@ This folder contains bundled optional plugin examples and integration points.
 plugins/
 |- captioners/
 |  `- joycaption/
-`- webapps/
+`- webapps/          # gitignored — created dynamically by external integrations
    |- dnaduck/
    `- duckmotion/
 ```
+
+> **Note:** The `plugins/webapps/` directory is gitignored and does not exist in the repo by default. It is created dynamically by external integrations (e.g., dnaduck, duckmotion).
 
 ## What Lives Here
 

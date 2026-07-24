@@ -57,6 +57,12 @@ WebbDuck is a local-first SDXL studio:
 | `core/captioner.py` | optional captioner loading and caption execution |
 | `models/registry.py` | discovered checkpoints, LoRAs, embeddings, and catalog refresh |
 | `models/upscaler.py` | upscaler discovery/loading helpers |
+| `models/metastore.py` | canonical metadata store (alongside registry.py and upscaler.py) |
+| `core/run_official.py` | official model runner |
+| `core/schedulers.py` | scheduler implementations |
+| `modes/base.py` | base class for generation modes |
+| `core/perf.py` | performance tracking |
+| `core/exceptions.py` | custom exceptions |
 
 ### Frontend Map
 

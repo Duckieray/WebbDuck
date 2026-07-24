@@ -34,6 +34,8 @@ conda run -n webbduck pytest -v -m "not slow"
 | `tests/test_thumbnails.py` | thumbnail generation and serving |
 | `tests/test_ui_sanity.py` | UI contract and markup sanity checks |
 | `tests/test_outpaint_pyramid_regression.py` | smart-extend/outpaint regression coverage |
+| `tests/test_metastore.py` | metastore tests |
+| `tests/test_identity_adapter.py` | identity adapter tests |
 
 Shared fixtures and helpers live in `tests/conftest.py`.
 

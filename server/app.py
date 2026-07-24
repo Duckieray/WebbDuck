@@ -891,6 +891,21 @@ async def test(
         return _job_error_response(job_id, exc)
 
 
+def _find_job_by_client_request(client_request_id: str) -> dict | None:
+    """Look up a job registry entry by client_request_id."""
+    for meta in job_registry.values():
+        if meta.get("client_request_id") == client_request_id:
+            return dict(meta)
+    return None
+
+
+def _job_result(job_id: str, meta: dict) -> dict:
+    """Format a job registry entry as a response dict."""
+    result = dict(meta)
+    result["queue_position"] = queue_position_for(job_id)
+    return result
+
+
 @app.post("/generate")
 async def generate(
     prompt: str = Form(""),
@@ -1014,6 +1029,22 @@ async def generate(
         with open(mask_path, "wb") as buffer:
             shutil.copyfileobj(mask.file, buffer)
         settings["mask_image"] = str(mask_path.absolute())
+
+    if client_request_id:
+        existing = _find_job_by_client_request(client_request_id)
+        if existing is not None:
+            existing_meta = job_registry.get(existing.get("job_id"), {})
+            existing_settings = existing_meta.get("settings", {})
+            current_summary = summarize_settings(settings)
+            if existing_settings == current_summary:
+                return _job_result(existing_meta.get("job_id"), existing_meta)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "client_request_id already exists with different parameters",
+                    "existing_job_id": existing.get("job_id"),
+                },
+            )
 
     job_id = str(uuid.uuid4())
     job = {
@@ -1598,23 +1629,10 @@ def get_queue_job_by_client_request(client_request_id: str):
     """Look up a job by the client_request_id supplied during submission."""
     if not client_request_id:
         return JSONResponse(status_code=400, content={"error": "client_request_id is required"})
-    matches = [
-        dict(meta)
-        for meta in job_registry.values()
-        if meta.get("client_request_id") == client_request_id
-    ]
-    if not matches:
+    match = _find_job_by_client_request(client_request_id)
+    if match is None:
         return JSONResponse(status_code=404, content={"error": "No job found for this client_request_id"})
-    if len(matches) > 1:
-        for m in matches:
-            m["queue_position"] = queue_position_for(m["job_id"])
-        return JSONResponse(
-            status_code=409,
-            content={"error": "Multiple jobs share this client_request_id", "jobs": matches},
-        )
-    match = matches[0]
-    match["queue_position"] = queue_position_for(match["job_id"])
-    return match
+    return _job_result(match["job_id"], match)
 
 
 @app.get("/gpu/lease")

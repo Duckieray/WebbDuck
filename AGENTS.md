@@ -12,7 +12,7 @@ Use it as the first-stop reference for architecture, workflows, project rules, a
 - Shared in-process GPU lease coordinates WebbDuck core and local web plugins.
 - Realtime: WebSocket events for status/queue/catalog updates.
 - Storage: filesystem outputs + metadata JSON + manifest index for gallery search.
-- Plugin model: optional web-app plugins (`plugins/webapps`) can run local or remote.
+- Plugin model: optional web-app plugins (`plugins/webapps`) can run local or remote. The `plugins/webapps/` directory is gitignored and created dynamically by external integrations (dnaduck, duckmotion).
 - DuckMotion/DNADuck are separately managed plugin repos; WebbDuck should not hard-require them.
 
 ## 1.1 Read These Docs First
@@ -276,7 +276,7 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Validate lightbox actions and metadata rendering.
 
 4. Integrate/update optional web plugins
-- Follow plugin search precedence: `WEBBDUCK_PLUGINS_DIR` -> `webbduck/plugins` -> `~/.webbduck/plugins`.
+- Follow plugin search precedence: `WEBBDUCK_PLUGINS_DIR` -> `<repo>/plugins` -> `~/.webbduck/plugins`.
 - If an external plugin repo ships its own installer, target the WebbDuck repo root when running it.
 - Keep plugin integration optional and non-blocking for core generation flow.
 
@@ -363,7 +363,7 @@ Doc ownership notes:
 - Update `docs/PLUGINS.md` and `plugins/README.md` when plugin contracts or install steps change.
 - Update `ui/README.md` and `tests/README.md` when frontend or validation structure changes.
 
-## 13. PR Expectations
+## 14. PR Expectations
 
 - Summarize what changed and why, scoped to the task.
 - List verification commands run and whether they passed/failed/skipped.
