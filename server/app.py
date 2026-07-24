@@ -973,6 +973,10 @@ async def generate(
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
+    # seed_intent captures the caller's seed intent without resolving None to a
+    # random number, so the idempotency fingerprint is deterministic.
+    seed_intent = "auto" if seed is None else int(seed)
+
     settings = {
         "base_model": base_model,
         "second_pass_model": second_pass_model,
@@ -985,7 +989,7 @@ async def generate(
         "width": width,
         "height": height,
         "num_images": num_images,
-        "seed": resolve_seed(seed),
+        "seed": seed_intent,
         "scheduler": scheduler,
         "loras": lora_list,
         "embeddings": embedding_list,
@@ -1063,6 +1067,15 @@ async def generate(
         with open(mask_path, "wb") as buffer:
             shutil.copyfileobj(mask.file, buffer)
         settings["mask_image"] = str(mask_path.absolute())
+
+    # Resolve seed only after the idempotency check: if the caller omitted the
+    # seed, resolve to a deterministic value derived from client_request_id so
+    # that retries produce the same result.
+    if client_request_id and seed is None:
+        resolved = int(hashlib.sha256(client_request_id.encode()).hexdigest(), 16) % (2 ** 32)
+    else:
+        resolved = resolve_seed(seed)
+    settings["seed"] = resolved
 
     job_id = str(uuid.uuid4())
     job = {

@@ -222,7 +222,65 @@ class TestGenerationEndpoints:
             assert "images" in data
             assert "seed" in data
 
-    def test_test_endpoint(self, client, first_available_model):
+class TestGenerateIdempotency:
+    """client_request_id idempotency on POST /generate."""
+
+    def test_omitted_seed_returns_same_job(self, client):
+        """Same client_request_id with omitted seed returns same job (deterministic fingerprint)."""
+        data = {"prompt": "a cat", "num_images": 1, "client_request_id": "idem-seed-1", "wait_for_result": False}
+        r1 = client.post("/generate", data=data)
+        assert r1.status_code == 200, r1.text
+        j1 = r1.json()
+
+        r2 = client.post("/generate", data=data)
+        assert r2.status_code == 200, r2.text
+        j2 = r2.json()
+        assert j2["job_id"] == j1["job_id"]
+
+    def test_same_explicit_seed_returns_same_job(self, client):
+        """Same client_request_id + same explicit seed returns same job."""
+        data = {"prompt": "a cat", "num_images": 1, "seed": 42, "client_request_id": "idem-seed-2", "wait_for_result": False}
+        r1 = client.post("/generate", data=data)
+        assert r1.status_code == 200, r1.text
+        j1 = r1.json()
+
+        r2 = client.post("/generate", data=data)
+        assert r2.status_code == 200, r2.text
+        j2 = r2.json()
+        assert j2["job_id"] == j1["job_id"]
+
+    def test_different_seed_returns_409(self, client):
+        """Same client_request_id + different explicit seed returns 409."""
+        data = {"prompt": "a cat", "num_images": 1, "seed": 42, "client_request_id": "idem-seed-3", "wait_for_result": False}
+        r1 = client.post("/generate", data=data)
+        assert r1.status_code == 200, r1.text
+
+        data["seed"] = 99
+        r2 = client.post("/generate", data=data)
+        assert r2.status_code == 409, r2.text
+        err = r2.json()
+        assert "existing_job_id" in err
+
+    def test_different_identity_adapter_returns_409(self, client):
+        """Same client_request_id + different identity_adapter returns 409."""
+        data = {"prompt": "a cat", "num_images": 1, "seed": 42, "client_request_id": "idem-adapter-4", "wait_for_result": False}
+        r1 = client.post("/generate", data=data)
+        assert r1.status_code == 200, r1.text
+
+        data["identity_adapter"] = '{"reference_images": ["ref1.jpg"]}'
+        r2 = client.post("/generate", data=data)
+        assert r2.status_code == 409, r2.text
+
+    def test_no_client_id_creates_separate_jobs(self, client):
+        """Two requests without client_request_id produce separate jobs."""
+        data = {"prompt": "a cat", "num_images": 1, "wait_for_result": False}
+        r1 = client.post("/generate", data=data)
+        assert r1.status_code == 200
+        r2 = client.post("/generate", data=data)
+        assert r2.status_code == 200
+        assert r1.json()["job_id"] != r2.json()["job_id"]
+
+    def test_generate_no_client_request_id(self, client):
         """Test the /test endpoint for single image generation."""
         response = client.post("/test", data={
             "prompt": "a dog",
