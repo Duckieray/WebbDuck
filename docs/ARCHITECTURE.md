@@ -12,6 +12,12 @@ WebbDuck is a local-first SDXL studio:
 - Outputs are stored on disk with sidecar metadata and a manifest-backed gallery index.
 - Optional captioner and web-app plugins can extend the app without becoming hard dependencies.
 
+### Planned architecture evolution
+
+The current implementation is SDXL-shaped internally, but the intended product architecture is **model-first and architecture-agnostic**. Users should continue selecting a model/checkpoint while WebbDuck automatically detects its architecture, resolves a compatible backend/runtime, applies model-specific defaults, and exposes only supported capabilities.
+
+Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model architectures such as FLUX or Krea 2. That document is the migration/design source of truth; this file continues to describe the current repository layout until the refactor lands.
+
 ## Runtime Flow
 
 1. `ui/index.html` loads `ui/app.js` and the feature modules.
@@ -137,6 +143,7 @@ Use these docs as the main source of truth:
 
 - `README.md`: product overview, setup, quickstart, docs index
 - `docs/ARCHITECTURE.md`: repo map and file responsibilities
+- `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md`: target model-first generation architecture and migration plan
 - `docs/DEVELOPMENT.md`: contributor workflows and change recipes
 - `docs/USER_GUIDE.md`: end-user workflow
 - `docs/PLUGINS.md`: captioner and web-app plugin integration
