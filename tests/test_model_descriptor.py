@@ -73,8 +73,22 @@ def test_public_descriptor_hides_architecture_and_backend(tmp_path):
     assert payload["name"] == "Krea-2-Turbo"
     assert payload["capabilities"]["text2img"] is True
     assert payload["capabilities"]["inpaint"] is False
+    assert payload["supported"] is False
     assert "architecture" not in payload
     assert "backend" not in payload
+
+
+def test_current_sdxl_backend_remains_runnable(tmp_path):
+    descriptor = describe_registry_model(
+        "existing-sdxl",
+        {
+            "path": tmp_path,
+            "type": "diffusers",
+            "source": "local",
+            "arch": "sdxl",
+        },
+    )
+    assert descriptor.supported is True
 
 
 def test_backend_resolver_routes_by_descriptor_without_caller_arch_branching():
