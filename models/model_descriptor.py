@@ -6,8 +6,8 @@ It answers two questions only:
 1. What kind of model is this checkpoint?
 2. What can WebbDuck safely offer when that checkpoint is selected?
 
-The user-facing product should remain checkpoint-driven. Architecture/backend
-values are internal routing metadata and should not become required UI choices.
+The user-facing product remains checkpoint-driven. Architecture/backend values
+are internal routing metadata and must not become required UI choices.
 """
 
 from __future__ import annotations
@@ -55,7 +55,8 @@ class ModelDescriptor:
 
     @property
     def supported(self) -> bool:
-        return self.backend != UNSUPPORTED_BACKEND and self.capabilities.text2img
+        """Whether the selected checkpoint is runnable in the current build."""
+        return backend_is_implemented(self.backend) and self.capabilities.text2img
 
     def to_internal_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -63,11 +64,11 @@ class ModelDescriptor:
         return payload
 
     def to_public_dict(self) -> dict[str, Any]:
-        """Return data suitable for model-driven UI configuration.
+        """Return the model-driven contract the UI needs.
 
-        Architecture/backend are deliberately omitted. They are implementation
-        details; clients only need checkpoint identity, defaults, capabilities,
-        constraints, and whether the checkpoint is currently runnable.
+        Architecture/backend are deliberately omitted. A model may be detected
+        before its runtime adapter is implemented; in that case ``supported``
+        is false while capabilities still describe the intended workflow.
         """
         return {
             "name": self.name,
@@ -93,8 +94,7 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         clip_skip=True,
         identity_adapter=True,
     ),
-    # Keep the initial non-SDXL declarations conservative. Capability support
-    # should be widened only when its backend adapter actually implements it.
+    # Keep non-SDXL declarations conservative until adapters prove support.
     "flux": ModelCapabilities(text2img=True, lora=True),
     "krea2": ModelCapabilities(text2img=True, lora=True),
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
@@ -106,6 +106,12 @@ _BACKENDS: dict[str, str] = {
     "krea2": "krea2_diffusers",
     "qwen_image": "qwen_image_diffusers",
 }
+
+# Runtime prediction and runtime availability are intentionally separate.
+# Discovery is allowed to recognize future architectures without claiming they
+# can already execute. New adapters should be added here only when wired into
+# live generation.
+_IMPLEMENTED_BACKENDS = {"sdxl_legacy"}
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
@@ -121,6 +127,10 @@ def capabilities_for_architecture(architecture: str | None) -> ModelCapabilities
 
 def backend_for_architecture(architecture: str | None) -> str:
     return _BACKENDS.get((architecture or "").lower(), UNSUPPORTED_BACKEND)
+
+
+def backend_is_implemented(backend: str | None) -> bool:
+    return (backend or "") in _IMPLEMENTED_BACKENDS
 
 
 def constraints_for_architecture(architecture: str | None) -> dict[str, Any]:
@@ -147,10 +157,11 @@ def _class_tokens(config: Mapping[str, Any]) -> str:
 
 
 def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
-    """Infer architecture from standard Diffusers/model configuration files.
+    """Infer an image architecture from standard model configuration files.
 
-    Unknown models stay unknown. This function must not invent SDXL merely
-    because a directory happens to contain safetensors files.
+    Unknown models stay unknown. In particular, the presence of a Diffusers
+    ``model_index.json`` is not itself evidence that a model is SDXL or even an
+    image model.
     """
     path = Path(path)
     model_index = _read_json(path / "model_index.json")
@@ -158,11 +169,13 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
     unet_config = _read_json(path / "unet" / "config.json")
 
     tokens = " ".join(
-        part for part in (
+        part
+        for part in (
             _class_tokens(model_index),
             _class_tokens(transformer_config),
             _class_tokens(unet_config),
-        ) if part
+        )
+        if part
     )
 
     if "krea2" in tokens or "krea-2" in tokens:
@@ -174,8 +187,6 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
     if "stablediffusionxl" in tokens or "stable_diffusion_xl" in tokens:
         return "sdxl", {"method": "config_class", "confidence": "high"}
 
-    # Structural fallback for older SDXL Diffusers exports whose model_index
-    # does not include a sufficiently specific class name.
     if (path / "unet" / "config.json").exists() and (path / "text_encoder_2").exists():
         return "sdxl", {"method": "directory_structure", "confidence": "medium"}
 
@@ -184,7 +195,9 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
 
 def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescriptor:
     """Build a canonical descriptor from a legacy MODEL_REGISTRY entry."""
-    architecture = str(entry.get("arch") or entry.get("architecture") or UNKNOWN_ARCHITECTURE).lower()
+    architecture = str(
+        entry.get("arch") or entry.get("architecture") or UNKNOWN_ARCHITECTURE
+    ).lower()
     path = Path(str(entry.get("path") or ""))
     detection = dict(entry.get("detection") or {})
 
@@ -201,6 +214,8 @@ def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescrip
         backend=str(entry.get("backend") or backend_for_architecture(architecture)),
         capabilities=capabilities_for_architecture(architecture),
         defaults=dict(entry.get("defaults") or {}),
-        constraints=dict(entry.get("constraints") or constraints_for_architecture(architecture)),
+        constraints=dict(
+            entry.get("constraints") or constraints_for_architecture(architecture)
+        ),
         detection=detection,
     )
