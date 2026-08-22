@@ -13,6 +13,7 @@ from core.backends.krea2_weights import (
     parse_comfy_quant_payload,
 )
 from core.backends.krea2_worker import overlay_single_file_transformer
+from models.discovery import discover_local_image_models
 from models.model_descriptor import describe_registry_model
 from models.single_file_inspection import inspect_single_image_checkpoint
 
@@ -46,6 +47,18 @@ def test_structural_inspection_detects_dark_beast_style_krea_fp8(tmp_path):
     assert detection["quantization"] == "fp8_scaled"
 
 
+def test_generic_discovery_finds_krea_single_file_outside_family_folder(tmp_path):
+    root = tmp_path / "checkpoint"
+    root.mkdir()
+    path = root / "Dark_Beast_3_FP8.safetensors"
+    _minimal_krea_file(path, quant={"format": "float8_e4m3fn"})
+
+    models = discover_local_image_models(root)
+
+    assert models[path.stem]["arch"] == "krea2"
+    assert models[path.stem]["detection"]["quantization"] == "fp8_scaled"
+
+
 def test_convrot_is_recognized_but_not_runnable(tmp_path):
     path = tmp_path / "Dark_Beast_3_INT8_ConvRot.safetensors"
     _minimal_krea_file(
@@ -73,6 +86,35 @@ def test_convrot_is_recognized_but_not_runnable(tmp_path):
     assert descriptor.supported is False
     assert descriptor.defaults["steps"] == 28
     assert descriptor.defaults["cfg"] == 4.5
+
+
+def test_top_level_quant_metadata_also_blocks_convrot(tmp_path):
+    path = tmp_path / "custom_name.safetensors"
+    tensors = {
+        "first.weight": torch.ones((2, 2), dtype=torch.int8),
+        "blocks.0.attn.wq.weight": torch.ones((2, 2), dtype=torch.int8),
+        "txtfusion.projector.weight": torch.ones((2, 2), dtype=torch.int8),
+    }
+    metadata = {
+        "_quantization_metadata": json.dumps(
+            {
+                "format_version": "1.0",
+                "layers": {
+                    "first": {
+                        "format": "int8_tensorwise",
+                        "convrot": True,
+                        "convrot_groupsize": 256,
+                    }
+                },
+            }
+        )
+    }
+    save_file(tensors, str(path), metadata=metadata)
+
+    architecture, detection = inspect_single_image_checkpoint(path)
+
+    assert architecture == "krea2"
+    assert detection["quantization"] == "convrot"
 
 
 def test_turbo_and_base_defaults_are_model_specific(tmp_path):
