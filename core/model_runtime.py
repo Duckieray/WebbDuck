@@ -7,6 +7,7 @@ from typing import Any
 from core.backends.base import backend_resolver
 from core.backends.flux import ensure_registered as ensure_flux_registered
 from core.backends.krea2 import ensure_registered as ensure_krea2_registered
+from core.backends.qwen_image import ensure_registered as ensure_qwen_image_registered
 from core.backends.sdxl import ensure_registered as ensure_sdxl_registered
 from models.catalog import descriptor_for_model
 from models.model_descriptor import ModelDescriptor
@@ -43,6 +44,7 @@ def _register_installed_backends() -> None:
     ensure_sdxl_registered()
     ensure_flux_registered()
     ensure_krea2_registered()
+    ensure_qwen_image_registered()
 
 
 def run_selected_model(settings: dict[str, Any], cancel_event=None):
