@@ -8,6 +8,7 @@ recognized without being sent through the legacy SDXL pipeline by accident.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -58,10 +59,18 @@ def runtime_registry() -> dict[str, dict[str, Any]]:
     """Build the current runtime registry using WebbDuck's configured roots."""
     from models import registry as legacy
 
+    # Do not reuse legacy.CHECKPOINT_ROOT here: older installs resolve that
+    # value directly to checkpoint/sdxl. Resolve from MODELS_ROOT so sibling
+    # architecture folders participate automatically.
+    generic_checkpoint_root = resolve_checkpoint_root(
+        legacy.MODELS_ROOT,
+        os.getenv("WEBBDUCK_CHECKPOINT_DIR"),
+    )
+
     return build_runtime_registry(
         legacy.MODEL_REGISTRY,
         models_root=legacy.MODELS_ROOT,
-        checkpoint_root=legacy.CHECKPOINT_ROOT,
+        checkpoint_root=generic_checkpoint_root,
         hf_cache=legacy.HF_CACHE,
     )
 
