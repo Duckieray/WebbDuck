@@ -1,3 +1,5 @@
+import './modelCapabilities.js';
+
 /**
  * WebbDuck Core API Module
  * Centralized fetch wrappers for all API endpoints
@@ -82,6 +84,20 @@ function cachedProfile(modelName) {
     return modelCatalogCache.find(item => item?.name === modelName) || null;
 }
 
+function publishCatalog(catalog) {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('webbduck:model-catalog', {
+        detail: Array.isArray(catalog) ? catalog : [],
+    }));
+}
+
+function publishProfile(profile) {
+    if (typeof window === 'undefined' || !profile) return;
+    window.dispatchEvent(new CustomEvent('webbduck:model-profile', {
+        detail: profile,
+    }));
+}
+
 export function getCachedModelProfile(modelName) {
     return cachedProfile(modelName);
 }
@@ -93,13 +109,19 @@ export function getCachedModelProfile(modelName) {
 export async function getModels() {
     const catalog = normalizeCatalog(await get('/model-catalog'));
     modelCatalogCache = catalog;
+    publishCatalog(catalog);
     return catalog;
 }
 
 export async function getModelProfile(modelName) {
     const cached = cachedProfile(modelName);
-    if (cached?.capabilities) return cached;
-    return get(`/model-catalog/${encodeURIComponent(modelName)}`);
+    if (cached?.capabilities) {
+        publishProfile(cached);
+        return cached;
+    }
+    const profile = await get(`/model-catalog/${encodeURIComponent(modelName)}`);
+    publishProfile(profile);
+    return profile;
 }
 
 export async function getLoras(modelName) {
