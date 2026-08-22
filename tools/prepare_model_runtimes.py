@@ -40,6 +40,7 @@ def prepare(
     root: Path,
     base_python: str,
     torch_version: str,
+    torchvision_version: str,
     torch_index: str,
     dry_run: bool,
 ) -> tuple[str, Path]:
@@ -59,6 +60,7 @@ def prepare(
             "pip",
             "install",
             f"torch=={torch_version}",
+            f"torchvision=={torchvision_version}",
             "--index-url",
             f"https://download.pytorch.org/whl/{torch_index}",
         ],
@@ -79,6 +81,7 @@ def main() -> int:
     )
     parser.add_argument("--python", default=sys.executable, help="Base Python used to create venvs.")
     parser.add_argument("--torch-version", default="2.12.1")
+    parser.add_argument("--torchvision-version", default="0.27.1")
     parser.add_argument("--torch-index", default="cu130", help="PyTorch wheel channel, e.g. cu130 or cu132.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -93,6 +96,7 @@ def main() -> int:
                 root=args.root.expanduser(),
                 base_python=args.python,
                 torch_version=args.torch_version,
+                torchvision_version=args.torchvision_version,
                 torch_index=args.torch_index,
                 dry_run=args.dry_run,
             )
