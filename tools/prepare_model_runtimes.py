@@ -2,8 +2,9 @@
 """Create/update WebbDuck's isolated image runtime environments.
 
 This script installs runtime libraries only. It never downloads model weights.
-Run it from a Python environment that can create venvs (for NixOS, `nix develop`
-is the intended entry point).
+Run it from any Python environment that can create venvs. On NixOS,
+``nix develop`` is one convenient entry point; ordinary Python works on Bazzite
+and other conventional Linux hosts.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIMES = {
+    "sdxl": ("WEBBDUCK_SDXL_PYTHON", ROOT / "runtime_requirements" / "sdxl.txt"),
     "flux": ("WEBBDUCK_FLUX_PYTHON", ROOT / "runtime_requirements" / "flux.txt"),
     "krea2": ("WEBBDUCK_KREA2_PYTHON", ROOT / "runtime_requirements" / "krea2.txt"),
     "qwen_image": ("WEBBDUCK_QWEN_IMAGE_PYTHON", ROOT / "runtime_requirements" / "qwen_image.txt"),
