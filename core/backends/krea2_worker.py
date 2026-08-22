@@ -51,6 +51,27 @@ def _quant_config(handle: Any, keys: set[str], source_key: str) -> dict[str, Any
     return parse_comfy_quant_payload(handle.get_tensor(marker))
 
 
+def _metadata_quant_configs(handle: Any) -> list[dict[str, Any]]:
+    """Read optional top-level Comfy quantization metadata from safetensors."""
+    try:
+        metadata = handle.metadata() or {}
+    except Exception:
+        return []
+    raw = metadata.get("_quantization_metadata") if isinstance(metadata, dict) else None
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    layers = parsed.get("layers")
+    if not isinstance(layers, dict):
+        return []
+    return [dict(value) for value in layers.values() if isinstance(value, dict)]
+
+
 def _dequantize_source_tensor(
     handle: Any,
     keys: set[str],
@@ -122,15 +143,21 @@ def overlay_single_file_transformer(transformer: Any, checkpoint_path: Path) -> 
 
     with safe_open(str(checkpoint_path), framework="pt", device="cpu") as handle:
         keys = set(handle.keys())
+
         # Reject ConvRot before copying any data so a partially overlaid model
-        # can never proceed after an unsupported-format error.
+        # can never proceed after an unsupported-format error. Newer files may
+        # put this declaration in top-level safetensors metadata instead of a
+        # per-layer `.comfy_quant` tensor, so inspect both layouts.
+        quant_configs = _metadata_quant_configs(handle)
         for marker in (key for key in keys if key.endswith(".comfy_quant")):
-            config = parse_comfy_quant_payload(handle.get_tensor(marker))
-            if classify_comfy_quant(config) == "convrot":
-                raise RuntimeError(
-                    "INT8 ConvRot Krea checkpoint detected. This format requires runtime activation "
-                    "rotation and is intentionally not handled by the FP8/BF16 overlay loader."
-                )
+            parsed = parse_comfy_quant_payload(handle.get_tensor(marker))
+            if parsed:
+                quant_configs.append(parsed)
+        if any(classify_comfy_quant(config) == "convrot" for config in quant_configs):
+            raise RuntimeError(
+                "INT8 ConvRot Krea checkpoint detected. This format requires runtime activation "
+                "rotation and is intentionally not handled by the FP8/BF16 overlay loader."
+            )
 
         with torch.no_grad():
             for source_key in sorted(keys):
