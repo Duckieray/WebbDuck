@@ -45,7 +45,8 @@ class Krea2DiffusersBackend(GenerationBackend):
             )
 
         defaults = descriptor.defaults or {}
-        seed = int(settings.get("seed") or int(time.time_ns() & 0xFFFFFFFF))
+        raw_seed = settings.get("seed")
+        seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
         payload = {
             "model_path": descriptor.path,
             "model_format": descriptor.format,
