@@ -1,9 +1,8 @@
 """Standalone worker for WebbDuck's mature SDXL stack.
 
 The WebbDuck host process intentionally does not import the SDXL Diffusers
-pipeline implementation.  This worker is launched with WEBBDUCK_SDXL_PYTHON
-and opts into the backend-owned pipeline through the lightweight core.pipeline
-facade before importing the mature SDXL runtime.
+pipeline implementation. This worker is launched with WEBBDUCK_SDXL_PYTHON;
+all model construction, adapters, LoRAs and generation stay inside this process.
 """
 
 from __future__ import annotations
@@ -21,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# core.pipeline is a lightweight host facade unless this flag is present.
+# Retained only for the lightweight core.pipeline facade used by a few legacy
+# utilities. Backend-owned SDXL modules now import each other directly.
 os.environ["WEBBDUCK_SDXL_WORKER"] = "1"
 
 
@@ -93,37 +93,16 @@ def _metadata_updates(settings: dict[str, Any], seed: int) -> dict[str, Any]:
     return payload
 
 
-def _run_generation_preserving_seed_zero(settings: dict[str, Any]):
-    """Run the mature stack while preserving its historical seed API.
-
-    The mature in-process runtime predates the model-runtime bridge and treats
-    integer 0 as a falsey request for a random seed.  Keep that implementation
-    untouched here while making the public/backend contract correctly preserve
-    explicit seed 0. This compatibility hook can disappear when the mature
-    orchestration is next edited directly.
-    """
-    import core.backends.sdxl_runtime as runtime
-
-    if settings.get("seed") != 0:
-        return runtime.run_generation(settings, cancel_event=None)
-
-    original_randint = runtime.random.randint
-    runtime.random.randint = lambda _low, _high: 0
-    try:
-        return runtime.run_generation(settings, cancel_event=None)
-    finally:
-        runtime.random.randint = original_randint
-
-
 def _generate(request: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     from core.backends.sdxl import _hydrate_execution_registry
+    from core.backends.sdxl_runtime import run_generation
 
     settings = dict(request.get("settings") or {})
     if not settings.get("base_model"):
         raise ValueError("SDXL worker request is missing base_model")
 
     _hydrate_execution_registry()
-    images, seed = _run_generation_preserving_seed_zero(settings)
+    images, seed = run_generation(settings, cancel_event=None)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
