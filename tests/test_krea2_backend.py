@@ -6,10 +6,11 @@ from pathlib import Path
 from PIL import Image
 
 from core.backends.krea2 import Krea2DiffusersBackend
-from models.model_descriptor import ModelDescriptor, capabilities_for_architecture, defaults_for_architecture
+from models.model_descriptor import ModelDescriptor, capabilities_for_architecture, defaults_for_model
 
 
 def _descriptor() -> ModelDescriptor:
+    detection = {"variant": "turbo"}
     return ModelDescriptor(
         name="krea/Krea-2-Turbo",
         path="/cache/krea2",
@@ -18,8 +19,9 @@ def _descriptor() -> ModelDescriptor:
         architecture="krea2",
         backend="krea2_diffusers",
         capabilities=capabilities_for_architecture("krea2"),
-        defaults=defaults_for_architecture("krea2"),
+        defaults=defaults_for_model("krea2", "krea/Krea-2-Turbo", detection),
         constraints={"dimension_multiple": 16},
+        detection=detection,
     )
 
 
@@ -76,5 +78,7 @@ def test_krea2_backend_serializes_request_and_reads_images(monkeypatch):
     assert len(images) == 1
     assert images[0].size == (16, 16)
     assert captured["payload"]["model_path"] == "/cache/krea2"
+    assert captured["payload"]["model_format"] == "diffusers"
+    assert captured["payload"]["variant"] == "turbo"
     assert captured["payload"]["steps"] == 8
     assert captured["payload"]["guidance"] == 0.0
