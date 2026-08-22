@@ -24,13 +24,25 @@ function sectionForElement(id) {
     return element.closest('.section, .nova-block, .form-group') || element;
 }
 
+function setCapabilityDisabled(control, disabled) {
+    if (!control || control.id === 'base_model') return;
+    if (disabled) {
+        if (!control.dataset.capabilityPreviousDisabled) {
+            control.dataset.capabilityPreviousDisabled = control.disabled ? '1' : '0';
+        }
+        control.disabled = true;
+        return;
+    }
+    if (control.dataset.capabilityPreviousDisabled === '0') control.disabled = false;
+    delete control.dataset.capabilityPreviousDisabled;
+}
+
 function setSectionVisible(id, visible) {
     const section = byId(id);
     if (!section) return;
     section.classList.toggle('hidden', !visible);
     section.querySelectorAll('input, select, textarea, button').forEach(control => {
-        if (control.id === 'base_model') return;
-        control.disabled = !visible;
+        setCapabilityDisabled(control, !visible);
     });
 }
 
@@ -39,7 +51,7 @@ function setControlVisible(id, visible) {
     if (!element) return;
     const container = sectionForElement(id);
     if (container) container.classList.toggle('hidden', !visible);
-    element.disabled = !visible;
+    setCapabilityDisabled(element, !visible);
 }
 
 function capabilityLabel(profile) {
@@ -67,6 +79,14 @@ function ensureProfileSummary() {
         select.insertAdjacentElement('afterend', summary);
     }
     return summary;
+}
+
+function neutralizeProductCopy() {
+    document.title = 'WebbDuck - Local AI Image Studio';
+    const brandSubtitle = document.querySelector('.nova-brand-copy span');
+    if (brandSubtitle) brandSubtitle.textContent = 'Local Model-Driven Image Studio';
+    const workspaceCopy = document.querySelector('.nova-workspace-header p');
+    if (workspaceCopy) workspaceCopy.textContent = 'Checkpoint-driven local image generation with controls that adapt to the selected model.';
 }
 
 function applyDimensionConstraints(profile) {
@@ -136,7 +156,7 @@ function applyOperationControls(profile) {
     const drop = byId('upload-drop');
     const sourceSection = drop?.closest('.section, .nova-block');
     if (sourceSection) sourceSection.classList.toggle('hidden', !supportsSource);
-    if (byId('input-image')) byId('input-image').disabled = !supportsSource;
+    setCapabilityDisabled(byId('input-image'), !supportsSource);
 
     setHidden(byId('inpaint-options'), !caps.inpaint);
     setHidden(byId('smart-extend-group'), !caps.outpaint);
@@ -243,6 +263,7 @@ function applySelectedProfile({ forceDefaults = false } = {}) {
 function initialize() {
     if (initialized) return;
     initialized = true;
+    neutralizeProductCopy();
     const select = byId('base_model');
     if (select) {
         select.addEventListener('change', () => applySelectedProfile({ forceDefaults: true }));
