@@ -39,7 +39,7 @@ def _validate_operation(descriptor: ModelDescriptor, operation: str) -> None:
         )
 
 
-def _register_installed_backends() -> None:
+def register_installed_backends() -> None:
     """Composition root for image backends shipped by this WebbDuck build."""
     ensure_sdxl_registered()
     ensure_flux_registered()
@@ -65,7 +65,7 @@ def run_selected_model(settings: dict[str, Any], cancel_event=None):
             f"Checkpoint '{descriptor.name}' is recognized, but no runnable backend is installed for it."
         )
 
-    _register_installed_backends()
+    register_installed_backends()
     backend = backend_resolver.resolve(descriptor)
 
     settings["model_profile"] = descriptor.to_public_dict()
