@@ -13,7 +13,7 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-from core.generation import run_generation
+from core.model_runtime import run_selected_model
 from core.exceptions import GenerationCancelledError
 from core.gpu_lease import release_gpu_lease, wait_for_gpu_lease_async
 from core.runtime import runtime_error_hint
@@ -281,7 +281,7 @@ async def gpu_worker(queue):
             gen_started_monotonic = time.perf_counter()
             gen_started_utc = datetime.utcnow().isoformat() + "Z"
             images, seed = await loop.run_in_executor(
-                None, run_generation, job["settings"], cancel_event
+                None, run_selected_model, job["settings"], cancel_event
             )
             gen_finished_monotonic = time.perf_counter()
             gen_finished_utc = datetime.utcnow().isoformat() + "Z"
