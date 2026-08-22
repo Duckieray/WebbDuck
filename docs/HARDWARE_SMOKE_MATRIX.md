@@ -105,7 +105,51 @@ previous process has released the GPU lease and CUDA memory.
 | 8 | Dark Beast 3 FP8 | T2I | 1024x1024, model defaults, seed 0 | single-file FP8 overlay is complete and generates |
 | 9 | Qwen-Image-2512 | T2I | model default resolution, seed 0 | sequential-offload run completes |
 
-## 4. What to record
+## 4. API-driven runner
+
+`tools/run_hardware_smoke.py` drives the live WebbDuck API rather than importing
+backend implementation modules. That means a pass covers the public model
+catalog, capability validation, request translation, queue/job path, storage and
+backend resolver as one integrated path.
+
+Preflight is safe and does not submit generation jobs:
+
+```bash
+python tools/run_hardware_smoke.py \
+  --sdxl-model "<exact public SDXL model name>" \
+  --dark-beast-model "<exact Dark Beast 3 FP8 public name>"
+```
+
+Rows whose runtime/weights are ready print `READY`; missing required targets are
+`BLOCKED`. The optional SDXL asset row is skipped unless `--lora` or `--refiner`
+is supplied.
+
+When the preflight is green, explicitly opt into real generation:
+
+```bash
+python tools/run_hardware_smoke.py \
+  --execute \
+  --sdxl-model "<exact public SDXL model name>" \
+  --dark-beast-model "<exact Dark Beast 3 FP8 public name>" \
+  --lora "<known-good LoRA name>" \
+  --refiner "<known-good refiner model name>"
+```
+
+Useful controls:
+
+```text
+--only flux-t2i             run one row
+--only ltx-like-name        invalid here; row names are image rows only
+--timeout 7200              per-generation timeout
+--report-dir smoke_reports  JSON report destination
+```
+
+The runner creates deterministic synthetic source/mask fixtures for I2I/edit and
+inpaint tests, uses seed 0, unloads all image models after every executed row,
+and writes the report incrementally so a crash/OOM still leaves useful evidence.
+It never downloads model weights.
+
+## 5. What to record
 
 For every row record:
 
@@ -120,11 +164,16 @@ For every row record:
 - any warning/fallback;
 - whether CUDA memory is released after model switch/unload.
 
+The runner automatically captures the public readiness diagnostics, elapsed
+request time and returned artifact references. Peak host RAM, exact backend
+load time and externally observed CUDA memory may still require host monitoring
+until those metrics are emitted by every worker.
+
 A backend is not considered validated because imports succeed. `runtime.ready`
 only clears the environment gate; each row above requires a real generated
 artifact.
 
-## 5. Failure classification
+## 6. Failure classification
 
 Classify failures before changing architecture:
 
