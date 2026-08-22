@@ -1,4 +1,4 @@
-"""Qwen Image backend executed in an isolated Diffusers runtime."""
+"""Qwen-Image-2512 backend executed in an isolated Diffusers runtime."""
 
 from __future__ import annotations
 
@@ -41,25 +41,8 @@ class QwenImageDiffusersBackend(GenerationBackend):
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
         seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
-
-        operation = "text2img"
-        if settings.get("mask_image") is not None:
-            operation = "inpaint"
-        elif settings.get("image") is not None or settings.get("input_image") is not None:
-            operation = "img2img"
-
-        input_image = settings.get("input_image")
-        if input_image is None:
-            input_image = settings.get("image")
-        mask_image = settings.get("mask_image")
-        raw_strength = settings.get("strength")
-        if raw_strength is None:
-            raw_strength = settings.get("denoise_strength")
-        strength = float(raw_strength) if raw_strength is not None else 0.85
-
         payload = {
             "model_path": descriptor.path,
-            "operation": operation,
             "prompt": prompt,
             "negative_prompt": str(settings.get("negative_prompt") or ""),
             "width": int(settings.get("width") or defaults.get("width") or 1328),
@@ -70,7 +53,6 @@ class QwenImageDiffusersBackend(GenerationBackend):
                 if settings.get("cfg") is not None
                 else defaults.get("cfg", 4.0)
             ),
-            "strength": strength,
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }
@@ -84,21 +66,6 @@ class QwenImageDiffusersBackend(GenerationBackend):
             request_path = tmp / "request.json"
             result_path = tmp / "result.json"
             log_path = tmp / "worker.log"
-
-            if isinstance(input_image, Image.Image):
-                image_path = tmp / "input.png"
-                input_image.convert("RGB").save(image_path)
-                payload["input_image"] = str(image_path)
-            elif input_image is not None:
-                payload["input_image"] = str(input_image)
-
-            if isinstance(mask_image, Image.Image):
-                mask_path = tmp / "mask.png"
-                mask_image.convert("L").save(mask_path)
-                payload["mask_image"] = str(mask_path)
-            elif mask_image is not None:
-                payload["mask_image"] = str(mask_image)
-
             request_path.write_text(json.dumps(payload), encoding="utf-8")
 
             with log_path.open("w", encoding="utf-8") as log_file:
