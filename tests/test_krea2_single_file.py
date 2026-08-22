@@ -7,14 +7,11 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from core.backends.krea2_weights import (
-    classify_comfy_quant,
-    map_krea2_source_key,
-    parse_comfy_quant_payload,
-)
+from core.backends.krea2_weights import map_krea2_source_key
 from core.backends.krea2_worker import overlay_single_file_transformer
 from models.discovery import discover_local_image_models
 from models.model_descriptor import describe_registry_model
+from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 from models.single_file_inspection import inspect_single_image_checkpoint
 
 
