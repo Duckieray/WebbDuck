@@ -4,6 +4,7 @@
  */
 
 const API_BASE = '';
+let modelCatalogCache = null;
 
 /**
  * Generic fetch wrapper with error handling
@@ -23,7 +24,8 @@ async function request(url, options = {}) {
             try {
                 const parsed = JSON.parse(text);
                 if (parsed.error) message = parsed.error;
-                else if (parsed.detail) message = parsed.detail;
+                else if (typeof parsed.detail === 'string') message = parsed.detail;
+                else if (parsed.detail?.message) message = parsed.detail.message;
             } catch {
                 if (text) message = text;
             }
@@ -71,35 +73,91 @@ export async function postForm(url, formData) {
     });
 }
 
+function normalizeCatalog(catalog) {
+    if (!Array.isArray(catalog)) return [];
+    return catalog
+        .filter(item => item && item.name)
+        .map(item => ({
+            ...item,
+            value: item.name,
+            // Existing Studio select rendering already honors `label`, so
+            // recognized future runtimes can be visible without architecture
+            // names leaking into the UI.
+            label: item.supported === false
+                ? `${item.name} — runtime unavailable`
+                : item.name,
+        }));
+}
+
+function cachedProfile(modelName) {
+    if (!modelName || !Array.isArray(modelCatalogCache)) return null;
+    return modelCatalogCache.find(item => item?.name === modelName) || null;
+}
+
+export function getCachedModelProfile(modelName) {
+    return cachedProfile(modelName);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // SPECIFIC API ENDPOINTS
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Fetch available models
+ * Fetch available models from the architecture-free catalog.
+ * Falls back to the legacy endpoint for launch methods that have not mounted
+ * the new router yet.
  */
 export async function getModels() {
-    return get('/models');
+    try {
+        const catalog = normalizeCatalog(await get('/model-catalog'));
+        modelCatalogCache = catalog;
+        return catalog;
+    } catch (error) {
+        console.warn('Model catalog unavailable; falling back to legacy /models.', error);
+        const legacy = await get('/models');
+        modelCatalogCache = Array.isArray(legacy) ? legacy : [];
+        return legacy;
+    }
 }
 
 /**
- * Fetch LoRAs for a specific model
+ * Fetch one model profile. The architecture/backend remain server-internal.
+ */
+export async function getModelProfile(modelName) {
+    const cached = cachedProfile(modelName);
+    if (cached?.capabilities) return cached;
+    return get(`/model-catalog/${encodeURIComponent(modelName)}`);
+}
+
+/**
+ * Fetch LoRAs for a specific model. If the selected model explicitly says it
+ * cannot use LoRAs, avoid querying an architecture-shaped legacy endpoint.
  */
 export async function getLoras(modelName) {
+    const profile = cachedProfile(modelName);
+    if (profile?.capabilities?.lora === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/loras`);
 }
 
 /**
- * Fetch embeddings for a specific model
+ * Fetch embeddings for a specific model.
  */
 export async function getEmbeddings(modelName) {
+    const profile = cachedProfile(modelName);
+    if (profile?.capabilities?.embeddings === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/embeddings`);
 }
 
 /**
- * Fetch second pass / refiner models
+ * Fetch second pass / refiner models. Once the catalog has loaded, derive this
+ * list from model capabilities instead of assuming every checkpoint qualifies.
  */
 export async function getSecondPassModels() {
+    if (Array.isArray(modelCatalogCache) && modelCatalogCache.length) {
+        return modelCatalogCache
+            .filter(item => item?.supported !== false && item?.capabilities?.second_pass === true)
+            .map(item => item.name);
+    }
     return get('/second_pass_models');
 }
 
@@ -181,6 +239,12 @@ export async function caption(formData) {
  * Tokenize prompt for counting
  */
 export async function tokenize(prompt, baseModel) {
+    const profile = cachedProfile(baseModel);
+    // Token diagnostics are currently implemented by the legacy SDXL runtime.
+    // Do not pretend the same tokenizer contract exists for future backends.
+    if (profile && profile.supported === false) {
+        return { tokens: 0, available: false };
+    }
     const formData = new FormData();
     formData.append('text', prompt);
     formData.append('base_model', baseModel);
