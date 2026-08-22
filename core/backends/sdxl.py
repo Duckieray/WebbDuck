@@ -9,7 +9,7 @@ from models.model_descriptor import ModelDescriptor
 
 
 class SDXLDiffusersBackend(GenerationBackend):
-    """Own SDXL routing while the mature SDXL implementation is split internally."""
+    """Own the complete SDXL generation stack behind one backend boundary."""
 
     backend_id = "sdxl_diffusers"
 
@@ -17,9 +17,7 @@ class SDXLDiffusersBackend(GenerationBackend):
         return descriptor.backend == self.backend_id and descriptor.architecture == "sdxl"
 
     def generate(self, descriptor: ModelDescriptor, settings: dict[str, Any], **kwargs: Any) -> Any:
-        # The backend owns the dependency on the existing SDXL generation stack.
-        # Generic routing code has no SDXL pipeline knowledge.
-        from core.generation import run_generation
+        from core.backends.sdxl_runtime import run_generation
 
         selected = str(settings.get("base_model") or "")
         if selected and selected != descriptor.name:
@@ -29,7 +27,7 @@ class SDXLDiffusersBackend(GenerationBackend):
         return run_generation(settings, cancel_event=kwargs.get("cancel_event"))
 
     def unload(self) -> None:
-        from core.pipeline import pipeline_manager
+        from core.backends.sdxl_pipeline import pipeline_manager
 
         unload = getattr(pipeline_manager, "unload_all", None)
         if callable(unload):
