@@ -26,25 +26,19 @@ def _write_json(path: Path, payload: str) -> None:
 
 
 def test_detects_flux_from_model_index(tmp_path):
-    _write_json(
-        tmp_path / "model_index.json",
-        '{"_class_name": "FluxPipeline"}',
-    )
+    _write_json(tmp_path / "model_index.json", '{"_class_name": "FluxPipeline"}')
     arch, detection = detect_diffusers_architecture(tmp_path)
     assert arch == "flux"
     assert detection["confidence"] == "high"
 
 
 def test_detects_krea2_from_model_index(tmp_path):
-    _write_json(
-        tmp_path / "model_index.json",
-        '{"_class_name": "Krea2Pipeline"}',
-    )
+    _write_json(tmp_path / "model_index.json", '{"_class_name": "Krea2Pipeline"}')
     arch, _ = detect_diffusers_architecture(tmp_path)
     assert arch == "krea2"
 
 
-def test_detects_sdxl_from_legacy_structure(tmp_path):
+def test_detects_sdxl_from_existing_structure(tmp_path):
     _write_json(tmp_path / "unet" / "config.json", '{}')
     (tmp_path / "text_encoder_2").mkdir()
     arch, detection = detect_diffusers_architecture(tmp_path)
@@ -58,7 +52,7 @@ def test_unknown_diffusers_model_stays_unknown(tmp_path):
     assert arch == "unknown"
 
 
-def test_public_descriptor_hides_architecture_and_backend(tmp_path):
+def test_krea_public_descriptor_is_runnable_and_hides_routing_metadata(tmp_path):
     descriptor = describe_registry_model(
         "Krea-2-Turbo",
         {
@@ -66,19 +60,21 @@ def test_public_descriptor_hides_architecture_and_backend(tmp_path):
             "type": "diffusers",
             "source": "local",
             "arch": "krea2",
-            "defaults": {"steps": 8, "cfg": 0.0},
         },
     )
     payload = descriptor.to_public_dict()
     assert payload["name"] == "Krea-2-Turbo"
     assert payload["capabilities"]["text2img"] is True
-    assert payload["capabilities"]["inpaint"] is False
-    assert payload["supported"] is False
+    assert payload["capabilities"]["img2img"] is False
+    assert payload["capabilities"]["lora"] is False
+    assert payload["defaults"]["steps"] == 8
+    assert payload["defaults"]["cfg"] == 0.0
+    assert payload["supported"] is True
     assert "architecture" not in payload
     assert "backend" not in payload
 
 
-def test_current_sdxl_backend_remains_runnable(tmp_path):
+def test_sdxl_backend_has_normal_installed_identity(tmp_path):
     descriptor = describe_registry_model(
         "existing-sdxl",
         {
@@ -88,6 +84,7 @@ def test_current_sdxl_backend_remains_runnable(tmp_path):
             "arch": "sdxl",
         },
     )
+    assert descriptor.backend == "sdxl_diffusers"
     assert descriptor.supported is True
 
 
