@@ -57,7 +57,17 @@ class ModelDescriptor:
     @property
     def supported(self) -> bool:
         """Whether the selected checkpoint is runnable in the current build."""
-        return backend_is_implemented(self.backend) and self.capabilities.text2img
+        if not (backend_is_implemented(self.backend) and self.capabilities.text2img):
+            return False
+
+        # The first Krea single-file runtime supports ordinary BF16/FP16 and
+        # correctness-first FP8 overlay. ConvRot changes the runtime matmul and
+        # cannot be flattened into an ordinary Diffusers transformer safely.
+        if self.architecture == "krea2" and self.format == "single":
+            quantization = str(self.detection.get("quantization") or "none").lower()
+            if quantization in {"convrot", "unsupported", "unknown"}:
+                return False
+        return True
 
     def to_internal_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -122,12 +132,19 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "steps": 4,
         "cfg": 1.0,
     },
-    "krea2": {
-        "width": 1024,
-        "height": 1024,
-        "steps": 8,
-        "cfg": 0.0,
-    },
+}
+
+_KREA2_BASE_DEFAULTS = {
+    "width": 1024,
+    "height": 1024,
+    "steps": 28,
+    "cfg": 4.5,
+}
+_KREA2_TURBO_DEFAULTS = {
+    "width": 1024,
+    "height": 1024,
+    "steps": 8,
+    "cfg": 0.0,
 }
 
 
@@ -148,7 +165,41 @@ def constraints_for_architecture(architecture: str | None) -> dict[str, Any]:
 
 
 def defaults_for_architecture(architecture: str | None) -> dict[str, Any]:
-    return dict(_DEFAULTS.get((architecture or "").lower(), {}))
+    architecture = (architecture or "").lower()
+    if architecture == "krea2":
+        # Architecture alone cannot tell Raw/Base from distilled Turbo. The
+        # non-distilled recipe is the safer generic default.
+        return dict(_KREA2_BASE_DEFAULTS)
+    return dict(_DEFAULTS.get(architecture, {}))
+
+
+def variant_for_model(
+    architecture: str | None,
+    name: str,
+    detection: Mapping[str, Any] | None = None,
+) -> str | None:
+    if (architecture or "").lower() != "krea2":
+        return None
+    detected = str((detection or {}).get("variant") or "").strip().lower()
+    if detected in {"turbo", "base"}:
+        return detected
+    text = str(name or "").lower()
+    return "turbo" if ("turbo" in text or "distill" in text or "tdm" in text) else "base"
+
+
+def defaults_for_model(
+    architecture: str | None,
+    name: str,
+    detection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    architecture = (architecture or "").lower()
+    if architecture == "krea2":
+        return dict(
+            _KREA2_TURBO_DEFAULTS
+            if variant_for_model(architecture, name, detection) == "turbo"
+            else _KREA2_BASE_DEFAULTS
+        )
+    return defaults_for_architecture(architecture)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -188,7 +239,11 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
     )
 
     if "krea2" in tokens or "krea-2" in tokens:
-        return "krea2", {"method": "config_class", "confidence": "high"}
+        variant = "turbo" if "turbo" in path.name.lower() else "base"
+        is_distilled = model_index.get("is_distilled")
+        if isinstance(is_distilled, bool):
+            variant = "turbo" if is_distilled else "base"
+        return "krea2", {"method": "config_class", "confidence": "high", "variant": variant}
     if "qwenimage" in tokens or "qwen_image" in tokens or "qwen-image" in tokens:
         return "qwen_image", {"method": "config_class", "confidence": "high"}
     if "flux" in tokens:
@@ -214,7 +269,11 @@ def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescrip
         architecture, detected = detect_diffusers_architecture(path)
         detection = {**detected, **detection}
 
-    defaults = defaults_for_architecture(architecture)
+    variant = variant_for_model(architecture, name, detection)
+    if variant and not detection.get("variant"):
+        detection["variant"] = variant
+
+    defaults = defaults_for_model(architecture, name, detection)
     defaults.update(dict(entry.get("defaults") or {}))
 
     return ModelDescriptor(
