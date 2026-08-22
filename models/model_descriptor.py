@@ -91,21 +91,22 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         identity_adapter=True,
         tokenize=True,
     ),
-    # FLUX.2 klein uses one pipeline for text generation and image editing.
-    # Asset capabilities stay false until the backend actually wires them.
     "flux": ModelCapabilities(text2img=True, img2img=True),
-    "krea2": ModelCapabilities(text2img=True, lora=True),
+    # Krea 2's isolated backend initially advertises only the T2I workflow we
+    # actually execute. Ecosystem LoRAs are not a capability until WebbDuck
+    # wires adapter loading for this backend.
+    "krea2": ModelCapabilities(text2img=True),
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
 }
 
 _BACKENDS: dict[str, str] = {
-    "sdxl": "sdxl_legacy",
+    "sdxl": "sdxl_diffusers",
     "flux": "flux_diffusers",
     "krea2": "krea2_diffusers",
     "qwen_image": "qwen_image_diffusers",
 }
 
-_IMPLEMENTED_BACKENDS = {"sdxl_legacy", "flux_diffusers"}
+_IMPLEMENTED_BACKENDS = {"sdxl_diffusers", "flux_diffusers", "krea2_diffusers"}
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
@@ -120,6 +121,12 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "height": 1024,
         "steps": 4,
         "cfg": 1.0,
+    },
+    "krea2": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 8,
+        "cfg": 0.0,
     },
 }
 
