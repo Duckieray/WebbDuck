@@ -1,14 +1,12 @@
 from pathlib import Path
 
-import pytest
-
 from core import model_runtime
 from models.catalog import build_runtime_registry
 from models.model_descriptor import ModelCapabilities, ModelDescriptor
 
 
 class _Backend:
-    def __init__(self, backend_id="sdxl_legacy"):
+    def __init__(self, backend_id="sdxl_diffusers"):
         self.backend_id = backend_id
 
     def generate(self, descriptor, settings, **kwargs):
@@ -45,19 +43,16 @@ def test_requested_operation_is_capability_driven():
     assert model_runtime.requested_operation({"smart_extend": True, "image": "image.png"}) == "outpaint"
 
 
-def test_unimplemented_krea_fails_before_backend(monkeypatch):
-    descriptor = ModelDescriptor(
-        name="Krea fixture",
-        path="krea",
-        format="diffusers",
-        source="test",
-        architecture="krea2",
-        backend="krea2_diffusers",
-        capabilities=ModelCapabilities(text2img=True),
-    )
+def _assert_routes(monkeypatch, descriptor: ModelDescriptor, backend_id: str):
+    backend = _Backend(backend_id)
     monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
-    with pytest.raises(RuntimeError, match="no runnable backend"):
-        model_runtime.run_selected_model({"base_model": "Krea fixture", "prompt": "duck"})
+    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
+    monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
+    images, seed = model_runtime.run_selected_model(
+        {"base_model": descriptor.name, "prompt": "duck", "seed": 42}
+    )
+    assert images == [descriptor.name]
+    assert seed == 42
 
 
 def test_flux_routes_through_backend_resolver(monkeypatch):
@@ -70,31 +65,30 @@ def test_flux_routes_through_backend_resolver(monkeypatch):
         backend="flux_diffusers",
         capabilities=ModelCapabilities(text2img=True, img2img=True),
     )
-    backend = _Backend("flux_diffusers")
-    monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
-    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
-    monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
-
-    images, seed = model_runtime.run_selected_model({"base_model": "FLUX.2-klein-4B", "prompt": "duck", "seed": 42})
-    assert images == ["FLUX.2-klein-4B"]
-    assert seed == 42
+    _assert_routes(monkeypatch, descriptor, "flux_diffusers")
 
 
-def test_sdxl_routes_through_backend_resolver(monkeypatch):
+def test_krea_routes_through_backend_resolver(monkeypatch):
+    descriptor = ModelDescriptor(
+        name="Krea-2-Turbo",
+        path="krea",
+        format="diffusers",
+        source="test",
+        architecture="krea2",
+        backend="krea2_diffusers",
+        capabilities=ModelCapabilities(text2img=True),
+    )
+    _assert_routes(monkeypatch, descriptor, "krea2_diffusers")
+
+
+def test_sdxl_routes_through_normal_backend_identity(monkeypatch):
     descriptor = ModelDescriptor(
         name="Existing SDXL",
         path="sdxl",
         format="diffusers",
         source="test",
         architecture="sdxl",
-        backend="sdxl_legacy",
+        backend="sdxl_diffusers",
         capabilities=ModelCapabilities(text2img=True, img2img=True, inpaint=True, outpaint=True),
     )
-    backend = _Backend()
-    monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
-    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
-    monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
-
-    images, seed = model_runtime.run_selected_model({"base_model": "Existing SDXL", "prompt": "duck", "seed": 42})
-    assert images == ["Existing SDXL"]
-    assert seed == 42
+    _assert_routes(monkeypatch, descriptor, "sdxl_diffusers")
