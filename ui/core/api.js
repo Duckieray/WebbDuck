@@ -5,6 +5,7 @@
 
 const API_BASE = '';
 let modelCatalogCache = null;
+let modelCatalogCapabilityAware = false;
 
 /**
  * Generic fetch wrapper with error handling
@@ -111,11 +112,13 @@ export async function getModels() {
     try {
         const catalog = normalizeCatalog(await get('/model-catalog'));
         modelCatalogCache = catalog;
+        modelCatalogCapabilityAware = true;
         return catalog;
     } catch (error) {
         console.warn('Model catalog unavailable; falling back to legacy /models.', error);
         const legacy = await get('/models');
         modelCatalogCache = Array.isArray(legacy) ? legacy : [];
+        modelCatalogCapabilityAware = false;
         return legacy;
     }
 }
@@ -125,7 +128,7 @@ export async function getModels() {
  */
 export async function getModelProfile(modelName) {
     const cached = cachedProfile(modelName);
-    if (cached?.capabilities) return cached;
+    if (modelCatalogCapabilityAware && cached?.capabilities) return cached;
     return get(`/model-catalog/${encodeURIComponent(modelName)}`);
 }
 
@@ -135,7 +138,7 @@ export async function getModelProfile(modelName) {
  */
 export async function getLoras(modelName) {
     const profile = cachedProfile(modelName);
-    if (profile?.capabilities?.lora === false) return [];
+    if (modelCatalogCapabilityAware && profile?.capabilities?.lora === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/loras`);
 }
 
@@ -144,7 +147,7 @@ export async function getLoras(modelName) {
  */
 export async function getEmbeddings(modelName) {
     const profile = cachedProfile(modelName);
-    if (profile?.capabilities?.embeddings === false) return [];
+    if (modelCatalogCapabilityAware && profile?.capabilities?.embeddings === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/embeddings`);
 }
 
@@ -153,7 +156,7 @@ export async function getEmbeddings(modelName) {
  * list from model capabilities instead of assuming every checkpoint qualifies.
  */
 export async function getSecondPassModels() {
-    if (Array.isArray(modelCatalogCache) && modelCatalogCache.length) {
+    if (modelCatalogCapabilityAware && Array.isArray(modelCatalogCache)) {
         return modelCatalogCache
             .filter(item => item?.supported !== false && item?.capabilities?.second_pass === true)
             .map(item => item.name);
@@ -242,7 +245,7 @@ export async function tokenize(prompt, baseModel) {
     const profile = cachedProfile(baseModel);
     // Token diagnostics are currently implemented by the legacy SDXL runtime.
     // Do not pretend the same tokenizer contract exists for future backends.
-    if (profile && profile.supported === false) {
+    if (modelCatalogCapabilityAware && profile && profile.supported === false) {
         return { tokens: 0, available: false };
     }
     const formData = new FormData();
