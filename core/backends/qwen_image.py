@@ -45,7 +45,7 @@ class QwenImageDiffusersBackend(GenerationBackend):
         operation = "text2img"
         if settings.get("mask_image") is not None:
             operation = "inpaint"
-        elif settings.get("image") or settings.get("input_image") is not None:
+        elif settings.get("image") is not None or settings.get("input_image") is not None:
             operation = "img2img"
 
         input_image = settings.get("input_image")
@@ -89,14 +89,14 @@ class QwenImageDiffusersBackend(GenerationBackend):
                 image_path = tmp / "input.png"
                 input_image.convert("RGB").save(image_path)
                 payload["input_image"] = str(image_path)
-            elif input_image:
+            elif input_image is not None:
                 payload["input_image"] = str(input_image)
 
             if isinstance(mask_image, Image.Image):
                 mask_path = tmp / "mask.png"
                 mask_image.convert("L").save(mask_path)
                 payload["mask_image"] = str(mask_path)
-            elif mask_image:
+            elif mask_image is not None:
                 payload["mask_image"] = str(mask_image)
 
             request_path.write_text(json.dumps(payload), encoding="utf-8")
