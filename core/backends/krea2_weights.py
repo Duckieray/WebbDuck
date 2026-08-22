@@ -1,23 +1,12 @@
-"""Krea 2 single-transformer checkpoint inspection and key mapping.
+"""Krea 2 original/ComfyUI to Diffusers transformer key mapping.
 
 Community Krea 2 checkpoints commonly use the original/ComfyUI module names
 (`blocks.*`, `txtfusion.*`, `first`, `last`, ...), while Diffusers exposes
-`Krea2Transformer2DModel` names.  Keep that conversion backend-local so the
-model catalog and UI remain architecture agnostic.
+`Krea2Transformer2DModel` names. Keep this conversion backend-local so model
+discovery remains independent from execution.
 """
 
 from __future__ import annotations
-
-import json
-from typing import Any
-
-
-_SUPPORTED_FP8_FORMATS = {
-    "float8_e4m3fn",
-    "float8_e5m2",
-    "fp8",
-    "fp8_scaled",
-}
 
 
 def strip_krea2_prefix(key: str) -> str:
@@ -50,13 +39,17 @@ def _map_attention_and_mlp(key: str) -> str:
 
 
 def map_krea2_source_key(source_key: str) -> tuple[str | None, str | None]:
-    """Map one original/ComfyUI Krea key to Diffusers and optional reshape mode.
-
-    Quantization sidecar tensors are intentionally ignored here.  The runtime
-    consumes them together with the associated weight tensor.
-    """
+    """Map one original/ComfyUI Krea key to Diffusers and optional reshape mode."""
     key = strip_krea2_prefix(source_key)
-    if key.endswith(".comfy_quant") or key.endswith(".weight_scale"):
+    if key.endswith(
+        (
+            ".comfy_quant",
+            ".weight_scale",
+            ".weight_scale_2",
+            ".input_scale",
+            ".pre_quant_scale",
+        )
+    ):
         return None, None
 
     direct_prefixes = (
@@ -95,31 +88,3 @@ def map_krea2_source_key(source_key: str) -> tuple[str | None, str | None]:
             return _map_attention_and_mlp(mapped), None
 
     return None, None
-
-
-def parse_comfy_quant_payload(raw: Any) -> dict[str, Any]:
-    """Decode the uint8 JSON tensor used by ComfyUI quantized checkpoints."""
-    if raw is None:
-        return {}
-    try:
-        values = raw.tolist() if hasattr(raw, "tolist") else raw
-        if isinstance(values, list):
-            payload = bytes(int(value) for value in values)
-        elif isinstance(values, (bytes, bytearray)):
-            payload = bytes(values)
-        else:
-            return {}
-        parsed = json.loads(payload)
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def classify_comfy_quant(config: dict[str, Any]) -> str:
-    """Return fp8 / convrot / unsupported for a Comfy quant descriptor."""
-    fmt = str(config.get("format") or "").strip().lower()
-    if bool(config.get("convrot")):
-        return "convrot"
-    if fmt in _SUPPORTED_FP8_FORMATS or fmt.startswith("float8"):
-        return "fp8"
-    return "unsupported" if fmt else "unknown"
