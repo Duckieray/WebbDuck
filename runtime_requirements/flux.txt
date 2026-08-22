@@ -1,14 +1,14 @@
-# FLUX.2 klein runtime
+# FLUX.2 Klein isolated runtime
 #
-# Install into a backend-specific virtual environment and point WebbDuck at it:
-#   python -m venv .venv-flux
-#   .venv-flux/bin/pip install -r runtime_requirements/flux.txt
-#   export WEBBDUCK_FLUX_PYTHON="$PWD/.venv-flux/bin/python"
-#
-# FLUX.2 klein currently requires Diffusers main / 0.37-dev support.
-git+https://github.com/huggingface/diffusers.git
-transformers>=4.57.0
-accelerate>=1.0.0
+# Install PyTorch separately for the host CUDA stack, then install this file in
+# a backend-specific environment and set WEBBDUCK_FLUX_PYTHON to that Python.
+# Diffusers 0.39.0 contains Flux2KleinPipeline, so this runtime no longer needs
+# a floating install from Diffusers main.
+diffusers==0.39.0
+transformers>=4.57.0,<6
+accelerate>=1.12.0,<2
 safetensors>=0.5.0
 huggingface_hub>=0.36.0
+sentencepiece>=0.2.0
 pillow>=11.0.0
+numpy>=2.0.0
