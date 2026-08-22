@@ -34,3 +34,43 @@ def test_backend_owned_sdxl_implementations_are_present():
     assert (root / "sdxl_runtime.py").stat().st_size > 10_000
     assert (root / "sdxl_pipeline.py").stat().st_size > 30_000
     assert (root / "sdxl_faceid.py").stat().st_size > 2_000
+
+
+def test_sdxl_execution_registry_is_hydrated_from_canonical_catalog(monkeypatch, tmp_path):
+    import models.catalog as catalog
+    import models.registry as registry
+
+    sdxl_path = tmp_path / "new-sdxl"
+    flux_path = tmp_path / "flux"
+    canonical = {
+        "New SDXL": {
+            "type": "diffusers",
+            "arch": "sdxl",
+            "path": sdxl_path,
+            "source": "local",
+            "defaults": {"steps": 31},
+        },
+        "FLUX": {
+            "type": "diffusers",
+            "arch": "flux",
+            "path": flux_path,
+            "source": "local",
+        },
+    }
+    monkeypatch.setattr(catalog, "runtime_registry", lambda: canonical)
+    monkeypatch.setattr(
+        registry,
+        "MODEL_REGISTRY",
+        {
+            "Stale SDXL": {"arch": "sdxl", "path": tmp_path / "stale"},
+            "Internal Other": {"arch": "other", "path": tmp_path / "other"},
+        },
+    )
+
+    sdxl_backend._hydrate_execution_registry()
+
+    assert "Stale SDXL" not in registry.MODEL_REGISTRY
+    assert registry.MODEL_REGISTRY["New SDXL"]["path"] == sdxl_path
+    assert registry.MODEL_REGISTRY["New SDXL"]["defaults"]["steps"] == 31
+    assert "FLUX" not in registry.MODEL_REGISTRY
+    assert "Internal Other" in registry.MODEL_REGISTRY
