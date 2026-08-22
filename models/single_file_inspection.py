@@ -1,8 +1,8 @@
 """Cheap structural inspection for single-file image checkpoints.
 
 The catalog must not classify a multi-gigabyte safetensors file from its folder
-name alone.  Safetensors exposes all tensor names/dtypes in its JSON header, so
-we can recognize formats without materializing model weights during discovery.
+name alone. Safetensors exposes tensor names/dtypes in its JSON header, so we
+can recognize formats without materializing model weights during discovery.
 """
 
 from __future__ import annotations
@@ -54,8 +54,6 @@ def _read_comfy_quant_configs(path: Path, keys: list[str]) -> list[dict[str, Any
     configs: list[dict[str, Any]] = []
     try:
         with safe_open(str(path), framework="pt", device="cpu") as handle:
-            # A handful of descriptors is enough to classify the file. Avoid
-            # needlessly decoding hundreds of duplicate per-layer descriptors.
             for key in quant_keys[:16]:
                 parsed = parse_comfy_quant_payload(handle.get_tensor(key))
                 if parsed:
@@ -65,6 +63,22 @@ def _read_comfy_quant_configs(path: Path, keys: list[str]) -> list[dict[str, Any
     return configs
 
 
+def _metadata_quant_configs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = metadata.get("_quantization_metadata")
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    layers = parsed.get("layers")
+    if not isinstance(layers, dict):
+        return []
+    return [dict(value) for value in layers.values() if isinstance(value, dict)][:32]
+
+
 def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     """Return architecture + internal detection metadata for one safetensors file."""
     path = Path(path)
@@ -72,7 +86,11 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     if not header:
         return UNKNOWN_ARCHITECTURE, {"method": "invalid_safetensors", "confidence": "none"}
 
-    tensor_entries = {key: value for key, value in header.items() if key != "__metadata__" and isinstance(value, dict)}
+    tensor_entries = {
+        key: value
+        for key, value in header.items()
+        if key != "__metadata__" and isinstance(value, dict)
+    }
     normalized_keys = {_strip_prefix(key) for key in tensor_entries}
     metadata = header.get("__metadata__") if isinstance(header.get("__metadata__"), dict) else {}
 
@@ -85,17 +103,24 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
         return UNKNOWN_ARCHITECTURE, {"method": "tensor_keys", "confidence": "none"}
 
     quantization = "none"
-    quant_configs = _read_comfy_quant_configs(path, list(tensor_entries))
+    quant_configs = [
+        *_read_comfy_quant_configs(path, list(tensor_entries)),
+        *_metadata_quant_configs(metadata),
+    ]
     quant_kinds = {classify_comfy_quant(config) for config in quant_configs}
     stem = path.stem.lower()
     if "convrot" in quant_kinds or "convrot" in stem:
         quantization = "convrot"
     elif "fp8" in quant_kinds:
         quantization = "fp8_scaled"
+    elif "unsupported" in quant_kinds:
+        quantization = "unsupported"
     else:
         dtypes = {str(entry.get("dtype") or "").upper() for entry in tensor_entries.values()}
         if any(dtype.startswith("F8") for dtype in dtypes) or "fp8" in stem:
             quantization = "fp8"
+        elif any(dtype in {"I8", "U8"} for dtype in dtypes):
+            quantization = "unsupported"
         elif "BF16" in dtypes:
             quantization = "bf16"
         elif "F16" in dtypes:
@@ -103,7 +128,7 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
 
     metadata_text = " ".join(f"{key}={value}" for key, value in metadata.items()).lower()
     variant_text = f"{stem} {metadata_text}"
-    variant = "turbo" if ("turbo" in variant_text or "distill" in variant_text) else "base"
+    variant = "turbo" if ("turbo" in variant_text or "distill" in variant_text or "tdm" in variant_text) else "base"
 
     return "krea2", {
         "method": "tensor_keys",
