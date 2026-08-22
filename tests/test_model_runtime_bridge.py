@@ -47,7 +47,7 @@ def test_requested_operation_is_capability_driven():
 def _assert_routes(monkeypatch, descriptor: ModelDescriptor, backend_id: str):
     backend = _Backend(backend_id)
     monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
-    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
+    monkeypatch.setattr(model_runtime, "register_installed_backends", lambda: None)
     monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
     images, seed = model_runtime.run_selected_model(
         {"base_model": descriptor.name, "prompt": "duck", "seed": 42}
