@@ -41,7 +41,8 @@ class FluxDiffusersBackend(GenerationBackend):
             raise ValueError("Prompt is required.")
 
         defaults = descriptor.defaults or {}
-        seed = int(settings.get("seed") or int(time.time_ns() & 0xFFFFFFFF))
+        seed_raw = settings.get("seed")
+        seed = int(seed_raw) if seed_raw is not None else int(time.time_ns() & 0xFFFFFFFF)
         payload = {
             "model_path": descriptor.path,
             "prompt": prompt,
@@ -62,32 +63,31 @@ class FluxDiffusersBackend(GenerationBackend):
             tmp = Path(tmp_raw)
             request_path = tmp / "request.json"
             result_path = tmp / "result.json"
+            log_path = tmp / "worker.log"
             request_path.write_text(json.dumps(payload), encoding="utf-8")
 
-            proc = subprocess.Popen(
-                [python_exe, str(worker), "--request", str(request_path), "--result", str(result_path), "--output-dir", str(tmp)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            started = time.monotonic()
-            log_lines: list[str] = []
-            while proc.poll() is None:
-                if cancel_event is not None and cancel_event.is_set():
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
+            with log_path.open("w", encoding="utf-8") as log_file:
+                proc = subprocess.Popen(
+                    [python_exe, str(worker), "--request", str(request_path), "--result", str(result_path), "--output-dir", str(tmp)],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                started = time.monotonic()
+                while proc.poll() is None:
+                    if cancel_event is not None and cancel_event.is_set():
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        raise GenerationCancelledError("FLUX generation cancelled")
+                    if time.monotonic() - started > timeout_seconds:
                         proc.kill()
-                    raise GenerationCancelledError("FLUX generation cancelled")
-                if time.monotonic() - started > timeout_seconds:
-                    proc.kill()
-                    raise RuntimeError(f"FLUX runtime timed out after {int(timeout_seconds)} seconds")
-                time.sleep(0.2)
+                        raise RuntimeError(f"FLUX runtime timed out after {int(timeout_seconds)} seconds")
+                    time.sleep(0.2)
 
-            if proc.stdout is not None:
-                log_lines = proc.stdout.read().splitlines()[-80:]
-
+            log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
             if not result_path.exists():
                 detail = "\n".join(log_lines[-20:])
                 raise RuntimeError(f"FLUX runtime exited without a result (code {proc.returncode}).\n{detail}")
