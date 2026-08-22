@@ -1,8 +1,4 @@
-"""Standalone Qwen Image Diffusers worker.
-
-The worker owns Qwen-specific pipeline classes and memory policy so WebbDuck's
-core process remains architecture agnostic.
-"""
+"""Standalone Qwen-Image-2512 Diffusers worker."""
 
 from __future__ import annotations
 
@@ -17,15 +13,6 @@ def _snap(value: int, multiple: int = 16) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
 
 
-def _load_image(path: str | None, mode: str):
-    if not path:
-        return None
-    from PIL import Image
-
-    with Image.open(path) as image:
-        return image.convert(mode).copy()
-
-
 def _configure_memory(pipe, device: str, total_vram_gb: float) -> str:
     if device != "cuda":
         pipe.to("cpu")
@@ -33,9 +20,8 @@ def _configure_memory(pipe, device: str, total_vram_gb: float) -> str:
 
     mode = str(os.getenv("WEBBDUCK_QWEN_IMAGE_OFFLOAD", "auto")).strip().lower()
     if mode == "auto":
-        # Qwen-Image-2512 contains a 20B image model plus a 7B-class vision-language
-        # encoder. Whole-component model offload can still exceed a 16 GB card,
-        # so use submodule-level sequential offload below 24 GB.
+        # The official 2512 package is much larger than a 16 GB card, including
+        # a 16.6 GB text encoder. Use submodule-level offload below 24 GB.
         mode = "sequential" if total_vram_gb < 24.0 else "model"
 
     if mode in {"sequential", "seq"}:
@@ -49,26 +35,11 @@ def _configure_memory(pipe, device: str, total_vram_gb: float) -> str:
     return "none"
 
 
-def _pipeline_for_operation(model_path: str, operation: str, dtype):
-    if operation == "img2img":
-        from diffusers import QwenImageImg2ImgPipeline
-
-        return QwenImageImg2ImgPipeline.from_pretrained(model_path, torch_dtype=dtype)
-    if operation == "inpaint":
-        from diffusers import QwenImageInpaintPipeline
-
-        return QwenImageInpaintPipeline.from_pretrained(model_path, torch_dtype=dtype)
-
-    from diffusers import QwenImagePipeline
-
-    return QwenImagePipeline.from_pretrained(model_path, torch_dtype=dtype)
-
-
 def _run(request: dict, output_dir: Path) -> dict:
     import torch
+    from diffusers import QwenImagePipeline
 
     model_path = str(request["model_path"])
-    operation = str(request.get("operation") or "text2img").strip().lower()
     prompt = str(request.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("Prompt is required")
@@ -78,7 +49,6 @@ def _run(request: dict, output_dir: Path) -> dict:
     height = _snap(int(request.get("height") or 1328))
     steps = max(1, int(request.get("steps") or 50))
     cfg = float(request.get("true_cfg_scale") if request.get("true_cfg_scale") is not None else 4.0)
-    strength = min(1.0, max(0.0, float(request.get("strength") or 0.85)))
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") if request.get("seed") is not None else 0)
 
@@ -91,7 +61,7 @@ def _run(request: dict, output_dir: Path) -> dict:
     else:
         dtype = torch.float32
 
-    pipe = _pipeline_for_operation(model_path, operation, dtype)
+    pipe = QwenImagePipeline.from_pretrained(model_path, torch_dtype=dtype)
 
     total_vram_gb = 0.0
     if device == "cuda":
@@ -106,40 +76,19 @@ def _run(request: dict, output_dir: Path) -> dict:
     except Exception:
         pass
 
-    input_image = _load_image(request.get("input_image"), "RGB")
-    mask_image = _load_image(request.get("mask_image"), "L")
-    if operation == "img2img" and input_image is None:
-        raise ValueError("Qwen Image img2img requires an input image")
-    if operation == "inpaint" and (input_image is None or mask_image is None):
-        raise ValueError("Qwen Image inpaint requires both an input image and a mask")
-
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
     for index in range(num_images):
         generator = torch.Generator(device=device if device == "cuda" else "cpu").manual_seed(seed + index)
-        kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": steps,
-            "true_cfg_scale": cfg,
-            "generator": generator,
-        }
-        if operation == "text2img":
-            kwargs.update({"width": width, "height": height})
-        elif operation == "img2img":
-            kwargs.update({"image": input_image, "strength": strength})
-        elif operation == "inpaint":
-            kwargs.update(
-                {
-                    "image": input_image,
-                    "mask_image": mask_image,
-                    "strength": strength,
-                }
-            )
-        else:
-            raise ValueError(f"Unsupported Qwen Image operation: {operation}")
-
-        result = pipe(**kwargs)
+        result = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_inference_steps=steps,
+            true_cfg_scale=cfg,
+            generator=generator,
+        )
         image = result.images[0]
         path = output_dir / f"qwen_image_{index:03d}.png"
         image.save(path)
@@ -150,7 +99,6 @@ def _run(request: dict, output_dir: Path) -> dict:
         "images": saved,
         "seed": seed,
         "runtime": {
-            "operation": operation,
             "device": device,
             "dtype": str(dtype).replace("torch.", ""),
             "offload": offload,
