@@ -25,6 +25,14 @@ class GenerationBackend(ABC):
     def generate(self, descriptor: ModelDescriptor, settings: dict[str, Any], **kwargs: Any) -> Any:
         """Execute a generation request and return backend-specific result data."""
 
+    def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
+        """Probe runtime availability without loading model weights."""
+        ready = bool(self.can_handle(descriptor))
+        return {
+            "ready": ready,
+            "reason": None if ready else f"Installed backend cannot handle checkpoint '{descriptor.name}'.",
+        }
+
     def unload(self) -> None:
         """Release backend-owned runtime resources when applicable."""
 
@@ -57,6 +65,16 @@ class BackendResolver:
             f"No generation backend is registered for checkpoint '{descriptor.name}' "
             f"(backend={descriptor.backend!r})."
         )
+
+    def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
+        backend = self.resolve(descriptor)
+        payload = backend.readiness(descriptor)
+        if not isinstance(payload, dict):
+            return {"ready": False, "reason": "Backend returned an invalid readiness payload."}
+        return {
+            **payload,
+            "ready": bool(payload.get("ready")),
+        }
 
     def ids(self) -> tuple[str, ...]:
         return tuple(self._backends.keys())
