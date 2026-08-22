@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from core import pipeline as pipeline_mod
+from core.backends import sdxl_pipeline as pipeline_mod
 
 
 class _FakePipe:

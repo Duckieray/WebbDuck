@@ -19,7 +19,7 @@ def run_official_faceid_sdxl(settings, pipe, generator, cancel_event):
             "Could not import official IPAdapterFaceIDXL. Please ensure third_party/IP-Adapter is present."
         ) from exc
 
-    from core.pipeline import pipeline_manager
+    from core.backends.sdxl_pipeline import pipeline_manager
     adapter_cfg = settings.get("identity_adapter", {})
     refs = adapter_cfg.get("reference_images", [])
     if not refs:

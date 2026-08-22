@@ -6,7 +6,7 @@ import random
 import logging
 from PIL import Image, ImageOps, ImageStat, ImageFilter
 
-from core.pipeline import pipeline_manager
+from core.backends.sdxl_pipeline import pipeline_manager
 from core.captioner import unload_captioners
 from core.exceptions import GenerationCancelledError
 from core.perf import reset_metrics, snapshot_metrics, stage_timer
@@ -416,11 +416,12 @@ def run_generation(settings, cancel_event=None):
                 del settings["mask_image"]
 
 
-    seed = settings.get("seed") or random.randint(0, 2**32 - 1)
+    seed_raw = settings.get("seed")
+    seed = int(seed_raw) if seed_raw is not None else random.randint(0, 2**32 - 1)
     generator = torch.Generator(pipe.device).manual_seed(seed)
 
     if settings.get("identity_adapter", {}).get("type") == "official_faceid_sdxl":
-        from core.run_official import run_official_faceid_sdxl
+        from core.backends.sdxl_faceid import run_official_faceid_sdxl
         with stage_timer("mode_run_seconds"):
             images, out_seed = run_official_faceid_sdxl(settings, pipe, generator, cancel_event)
         settings["performance_timing"] = snapshot_metrics()
