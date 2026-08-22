@@ -40,7 +40,7 @@ def test_get_model_profile_is_architecture_free(monkeypatch):
         format="diffusers",
         source="local",
         architecture="sdxl",
-        backend="sdxl_legacy",
+        backend="sdxl_diffusers",
         capabilities=ModelCapabilities(text2img=True, second_pass=True),
         defaults={"steps": 30, "cfg": 6.0},
         constraints={"dimension_multiple": 8},
