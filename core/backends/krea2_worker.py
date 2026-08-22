@@ -1,9 +1,9 @@
 """Standalone Krea 2 Diffusers worker.
 
 Full Diffusers checkpoints load normally. Community single-file transformer
-checkpoints are overlaid onto the official Krea component pipeline one tensor
-at a time, so discovery/loading does not depend on Diffusers implementing
-Krea2Transformer2DModel.from_single_file().
+checkpoints are streamed directly into a transformer scaffold created from the
+official Krea config on the meta device. This avoids downloading/loading a
+second official transformer merely to overwrite it.
 """
 
 from __future__ import annotations
@@ -130,8 +130,34 @@ def _reshape_for_target(value: Any, target: Any, mode: str | None, source_key: s
     return value
 
 
-def overlay_single_file_transformer(transformer: Any, checkpoint_path: Path) -> dict[str, Any]:
-    """Stream one Krea transformer checkpoint into an instantiated Diffusers model."""
+def _assign_target_tensor(
+    transformer: Any,
+    target_key: str,
+    target: Any,
+    value: Any,
+) -> None:
+    """Materialize a meta parameter or copy into an already allocated target."""
+    if bool(getattr(target, "is_meta", False)):
+        from accelerate.utils import set_module_tensor_to_device
+
+        set_module_tensor_to_device(
+            transformer,
+            target_key,
+            device="cpu",
+            value=value,
+            dtype=value.dtype,
+        )
+        return
+    target.copy_(value)
+
+
+def overlay_single_file_transformer(
+    transformer: Any,
+    checkpoint_path: Path,
+    *,
+    target_dtype: Any | None = None,
+) -> dict[str, Any]:
+    """Stream one Krea transformer checkpoint into a Diffusers model/scaffold."""
     import torch
     from safetensors import safe_open
 
@@ -144,10 +170,6 @@ def overlay_single_file_transformer(transformer: Any, checkpoint_path: Path) -> 
     with safe_open(str(checkpoint_path), framework="pt", device="cpu") as handle:
         keys = set(handle.keys())
 
-        # Reject ConvRot before copying any data so a partially overlaid model
-        # can never proceed after an unsupported-format error. Newer files may
-        # put this declaration in top-level safetensors metadata instead of a
-        # per-layer `.comfy_quant` tensor, so inspect both layouts.
         quant_configs = _metadata_quant_configs(handle)
         for marker in (key for key in keys if key.endswith(".comfy_quant")):
             parsed = parse_comfy_quant_payload(handle.get_tensor(marker))
@@ -187,15 +209,16 @@ def overlay_single_file_transformer(transformer: Any, checkpoint_path: Path) -> 
                     )
 
                 source = handle.get_tensor(source_key)
+                effective_dtype = target_dtype if target_dtype is not None else target.dtype
                 value = _dequantize_source_tensor(
                     handle,
                     keys,
                     source_key,
                     source,
-                    target.dtype,
+                    effective_dtype,
                 )
                 value = _reshape_for_target(value, target, reshape_mode, source_key)
-                target.copy_(value)
+                _assign_target_tensor(transformer, target_key, target, value)
                 mapped.add(target_key)
                 del source, value
 
@@ -211,6 +234,20 @@ def overlay_single_file_transformer(transformer: Any, checkpoint_path: Path) -> 
         "mapped_tensors": len(mapped),
         "ignored_tensors": len(ignored),
     }
+
+
+def _build_empty_transformer(component_source: str) -> Any:
+    """Instantiate the official Krea transformer shape without its weights."""
+    from accelerate import init_empty_weights
+    from diffusers import Krea2Transformer2DModel
+
+    config = Krea2Transformer2DModel.load_config(
+        component_source,
+        subfolder="transformer",
+    )
+    with init_empty_weights():
+        transformer = Krea2Transformer2DModel.from_config(config)
+    return transformer
 
 
 def _configure_offload(pipe: Any, device: str, total_vram_gb: float) -> str:
@@ -245,7 +282,11 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
     variant = str(request.get("variant") or "base").lower()
 
     if model_format != "single" and model_path.is_dir():
-        pipe = Krea2Pipeline.from_pretrained(str(model_path), torch_dtype=dtype)
+        pipe = Krea2Pipeline.from_pretrained(
+            str(model_path),
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
         return pipe, {"source": "diffusers", "variant": variant}
 
     if not model_path.is_file():
@@ -259,8 +300,18 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
         )
 
     component_source = _component_source(variant)
-    pipe = Krea2Pipeline.from_pretrained(component_source, torch_dtype=dtype)
-    overlay = overlay_single_file_transformer(pipe.transformer, model_path)
+    transformer = _build_empty_transformer(component_source)
+    overlay = overlay_single_file_transformer(
+        transformer,
+        model_path,
+        target_dtype=dtype,
+    )
+    pipe = Krea2Pipeline.from_pretrained(
+        component_source,
+        transformer=transformer,
+        torch_dtype=dtype,
+        low_cpu_mem_usage=True,
+    )
 
     is_distilled = variant == "turbo"
     if hasattr(pipe, "is_distilled"):
@@ -274,6 +325,7 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
         "variant": variant,
         "quantization": quantization,
         "component_source": component_source,
+        "component_transformer_weights_loaded": False,
         **overlay,
     }
 
