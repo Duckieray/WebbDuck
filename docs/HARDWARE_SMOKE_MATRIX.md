@@ -7,26 +7,36 @@ this document defines the first real hardware validation pass.
 
 ## 1. Runtime environments
 
-Create the isolated image environments from a Nix development shell (or another
-Python environment capable of creating venvs):
+Create the isolated image environments from any Python environment capable of
+creating venvs:
 
 ```bash
-nix develop
 python tools/prepare_model_runtimes.py all
 ```
+
+Nix is not required. On NixOS, `nix develop` is one convenient way to obtain the
+base Python; on Bazzite and conventional Linux hosts, run the script directly
+with the Python used for local tooling.
 
 The setup tool defaults to PyTorch 2.12.1 from the CUDA 13.0 wheel channel and
 prints the environment variables that must be present when WebbDuck starts:
 
 ```bash
+export WEBBDUCK_SDXL_PYTHON=...
 export WEBBDUCK_FLUX_PYTHON=...
 export WEBBDUCK_KREA2_PYTHON=...
 export WEBBDUCK_QWEN_IMAGE_PYTHON=...
 ```
 
-SDXL remains in WebbDuck's host environment. FLUX, Krea and Qwen Image use
-Diffusers 0.39.0 in isolated environments. Runtime preparation never downloads
-model weights.
+SDXL is isolated like the other image backends. Its job-scoped worker preserves
+the mature SDXL T2I/I2I/inpaint/outpaint, LoRA, textual-inversion, second-pass
+and identity-adapter paths while keeping Diffusers/model state out of the
+WebbDuck service process. SDXL currently pins the mature Diffusers 0.36.0 stack;
+FLUX, Krea and Qwen Image use their own isolated runtime requirement sets.
+Runtime preparation never downloads model weights.
+
+For a systemd deployment, add the four `WEBBDUCK_*_PYTHON` values to the service
+environment rather than exporting them only in an interactive shell.
 
 Before loading any model, start WebbDuck and check:
 
@@ -86,7 +96,8 @@ sequential CPU offload on a 16 GB GPU.
 
 Use one existing known-good local SDXL checkpoint plus the currently configured
 LoRA/embedding/refiner assets. The purpose is regression coverage for the mature
-backend, not another SDXL download.
+backend, not another SDXL download. The checkpoint and assets remain in their
+existing shared model library; only the Python runtime is isolated.
 
 ## 3. Smoke order
 
