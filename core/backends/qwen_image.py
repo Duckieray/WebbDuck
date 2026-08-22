@@ -48,8 +48,15 @@ class QwenImageDiffusersBackend(GenerationBackend):
         elif settings.get("image") or settings.get("input_image") is not None:
             operation = "img2img"
 
-        input_image = settings.get("input_image") or settings.get("image")
+        input_image = settings.get("input_image")
+        if input_image is None:
+            input_image = settings.get("image")
         mask_image = settings.get("mask_image")
+        raw_strength = settings.get("strength")
+        if raw_strength is None:
+            raw_strength = settings.get("denoise_strength")
+        strength = float(raw_strength) if raw_strength is not None else 0.85
+
         payload = {
             "model_path": descriptor.path,
             "operation": operation,
@@ -63,7 +70,7 @@ class QwenImageDiffusersBackend(GenerationBackend):
                 if settings.get("cfg") is not None
                 else defaults.get("cfg", 4.0)
             ),
-            "strength": float(settings.get("strength") or settings.get("denoise_strength") or 0.85),
+            "strength": strength,
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }
