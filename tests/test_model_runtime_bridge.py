@@ -8,72 +8,82 @@ from models.model_descriptor import ModelCapabilities, ModelDescriptor
 
 
 class _Backend:
-    backend_id = "sdxl_legacy"
+    def __init__(self, backend_id="sdxl_legacy"):
+        self.backend_id = backend_id
 
     def generate(self, descriptor, settings, **kwargs):
         return [descriptor.name], settings.get("seed", 123)
 
 
-def test_runtime_registry_preserves_legacy_and_adds_hf_model(tmp_path):
+def test_runtime_registry_preserves_sdxl_and_adds_hf_flux(tmp_path):
     checkpoint_root = tmp_path / "checkpoint"
-    legacy_path = checkpoint_root / "sdxl" / "legacy"
-    (legacy_path / "unet").mkdir(parents=True)
-    (legacy_path / "unet" / "config.json").write_text("{}", encoding="utf-8")
-    (legacy_path / "text_encoder_2").mkdir()
+    sdxl_path = checkpoint_root / "sdxl" / "existing"
+    (sdxl_path / "unet").mkdir(parents=True)
+    (sdxl_path / "unet" / "config.json").write_text("{}", encoding="utf-8")
+    (sdxl_path / "text_encoder_2").mkdir()
 
     hf_cache = tmp_path / "hub"
     flux = hf_cache / "models--black-forest-labs--FLUX.2-klein-4B" / "snapshots" / "abc"
     flux.mkdir(parents=True)
-    (flux / "model_index.json").write_text('{"_class_name": "FluxPipeline"}', encoding="utf-8")
+    (flux / "model_index.json").write_text('{"_class_name": "Flux2KleinPipeline"}', encoding="utf-8")
 
-    legacy = {
-        "Legacy SDXL": {
-            "type": "diffusers",
-            "arch": "sdxl",
-            "path": legacy_path,
-            "source": "local",
-            "defaults": {"steps": 30, "cfg": 6.0},
-        }
-    }
     registry = build_runtime_registry(
-        legacy,
+        {"Existing SDXL": {"type": "diffusers", "arch": "sdxl", "path": sdxl_path, "source": "local", "defaults": {"steps": 30, "cfg": 6.0}}},
         models_root=tmp_path,
         checkpoint_root=checkpoint_root,
         hf_cache=hf_cache,
     )
 
-    assert registry["Legacy SDXL"]["defaults"]["steps"] == 30
-    assert "black-forest-labs/FLUX.2-klein-4B" in registry
+    assert registry["Existing SDXL"]["defaults"]["steps"] == 30
     assert registry["black-forest-labs/FLUX.2-klein-4B"]["arch"] == "flux"
 
 
 def test_requested_operation_is_capability_driven():
     assert model_runtime.requested_operation({}) == "text2img"
-    assert model_runtime.requested_operation({"image": "/tmp/a.png"}) == "img2img"
-    assert model_runtime.requested_operation({"mask_image": "/tmp/m.png"}) == "inpaint"
-    assert model_runtime.requested_operation({"smart_extend": True, "image": "/tmp/a.png"}) == "outpaint"
+    assert model_runtime.requested_operation({"image": "image.png"}) == "img2img"
+    assert model_runtime.requested_operation({"mask_image": "mask.png"}) == "inpaint"
+    assert model_runtime.requested_operation({"smart_extend": True, "image": "image.png"}) == "outpaint"
 
 
-def test_unrunnable_recognized_model_fails_before_legacy_pipeline(monkeypatch):
+def test_unimplemented_krea_fails_before_backend(monkeypatch):
     descriptor = ModelDescriptor(
-        name="FLUX fixture",
-        path="/tmp/flux",
+        name="Krea fixture",
+        path="krea",
+        format="diffusers",
+        source="test",
+        architecture="krea2",
+        backend="krea2_diffusers",
+        capabilities=ModelCapabilities(text2img=True),
+    )
+    monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
+    with pytest.raises(RuntimeError, match="no runnable backend"):
+        model_runtime.run_selected_model({"base_model": "Krea fixture", "prompt": "duck"})
+
+
+def test_flux_routes_through_backend_resolver(monkeypatch):
+    descriptor = ModelDescriptor(
+        name="FLUX.2-klein-4B",
+        path="flux",
         format="diffusers",
         source="test",
         architecture="flux",
         backend="flux_diffusers",
-        capabilities=ModelCapabilities(text2img=True),
+        capabilities=ModelCapabilities(text2img=True, img2img=True),
     )
+    backend = _Backend("flux_diffusers")
     monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
+    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
+    monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
 
-    with pytest.raises(RuntimeError, match="discovered successfully"):
-        model_runtime.run_selected_model({"base_model": "FLUX fixture", "prompt": "duck"})
+    images, seed = model_runtime.run_selected_model({"base_model": "FLUX.2-klein-4B", "prompt": "duck", "seed": 42})
+    assert images == ["FLUX.2-klein-4B"]
+    assert seed == 42
 
 
 def test_sdxl_routes_through_backend_resolver(monkeypatch):
     descriptor = ModelDescriptor(
-        name="Legacy SDXL",
-        path="/tmp/sdxl",
+        name="Existing SDXL",
+        path="sdxl",
         format="diffusers",
         source="test",
         architecture="sdxl",
@@ -82,11 +92,9 @@ def test_sdxl_routes_through_backend_resolver(monkeypatch):
     )
     backend = _Backend()
     monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
-    monkeypatch.setattr(model_runtime, "ensure_sdxl_registered", lambda: backend)
+    monkeypatch.setattr(model_runtime, "_register_installed_backends", lambda: None)
     monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
 
-    images, seed = model_runtime.run_selected_model(
-        {"base_model": "Legacy SDXL", "prompt": "duck", "seed": 42}
-    )
-    assert images == ["Legacy SDXL"]
+    images, seed = model_runtime.run_selected_model({"base_model": "Existing SDXL", "prompt": "duck", "seed": 42})
+    assert images == ["Existing SDXL"]
     assert seed == 42
