@@ -109,7 +109,7 @@ _IMPLEMENTED_BACKENDS = {"sdxl_legacy", "flux_diffusers"}
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
-    "flux": {"dimension_multiple": 16},
+    "flux": {"dimension_multiple": 8},
     "krea2": {"dimension_multiple": 16},
     "qwen_image": {"dimension_multiple": 16},
 }
