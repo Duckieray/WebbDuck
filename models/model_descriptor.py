@@ -35,6 +35,7 @@ class ModelCapabilities:
     prompt_2: bool = False
     clip_skip: bool = False
     identity_adapter: bool = False
+    tokenize: bool = False
 
     def to_dict(self) -> dict[str, bool]:
         return asdict(self)
@@ -88,6 +89,7 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         prompt_2=True,
         clip_skip=True,
         identity_adapter=True,
+        tokenize=True,
     ),
     # FLUX.2 klein uses one pipeline for text generation and image editing.
     # Asset capabilities stay false until the backend actually wires them.
