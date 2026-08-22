@@ -60,9 +60,6 @@ class ModelDescriptor:
         if not (backend_is_implemented(self.backend) and self.capabilities.text2img):
             return False
 
-        # The first Krea single-file runtime supports ordinary BF16/FP16 and
-        # correctness-first FP8 overlay. ConvRot changes the runtime matmul and
-        # cannot be flattened into an ordinary Diffusers transformer safely.
         if self.architecture == "krea2" and self.format == "single":
             quantization = str(self.detection.get("quantization") or "none").lower()
             if quantization in {"convrot", "unsupported", "unknown"}:
@@ -102,9 +99,6 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         tokenize=True,
     ),
     "flux": ModelCapabilities(text2img=True, img2img=True),
-    # Krea 2's isolated backend initially advertises only the T2I workflow we
-    # actually execute. Ecosystem LoRAs are not a capability until WebbDuck
-    # wires adapter loading for this backend.
     "krea2": ModelCapabilities(text2img=True),
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
 }
@@ -167,8 +161,6 @@ def constraints_for_architecture(architecture: str | None) -> dict[str, Any]:
 def defaults_for_architecture(architecture: str | None) -> dict[str, Any]:
     architecture = (architecture or "").lower()
     if architecture == "krea2":
-        # Architecture alone cannot tell Raw/Base from distilled Turbo. The
-        # non-distilled recipe is the safer generic default.
         return dict(_KREA2_BASE_DEFAULTS)
     return dict(_DEFAULTS.get(architecture, {}))
 
@@ -180,11 +172,20 @@ def variant_for_model(
 ) -> str | None:
     if (architecture or "").lower() != "krea2":
         return None
+
     detected = str((detection or {}).get("variant") or "").strip().lower()
-    if detected in {"turbo", "base"}:
-        return detected
+    if detected == "turbo":
+        return "turbo"
+
+    # HF-cache snapshot directories are revision hashes, so a config-class
+    # detector may only know "base" from the filesystem path. The canonical
+    # catalog identity is a stronger signal for released Turbo/TDM checkpoints.
     text = str(name or "").lower()
-    return "turbo" if ("turbo" in text or "distill" in text or "tdm" in text) else "base"
+    if "turbo" in text or "distill" in text or "tdm" in text:
+        return "turbo"
+    if detected == "base":
+        return "base"
+    return "base"
 
 
 def defaults_for_model(
@@ -270,7 +271,7 @@ def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescrip
         detection = {**detected, **detection}
 
     variant = variant_for_model(architecture, name, detection)
-    if variant and not detection.get("variant"):
+    if variant:
         detection["variant"] = variant
 
     defaults = defaults_for_model(architecture, name, detection)
