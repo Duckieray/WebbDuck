@@ -11,24 +11,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import traceback
 from pathlib import Path
 from typing import Any
 
-try:
-    from core.backends.krea2_weights import (
-        classify_comfy_quant,
-        map_krea2_source_key,
-        parse_comfy_quant_payload,
-        strip_krea2_prefix,
-    )
-except ImportError:  # launched directly as this file
-    from krea2_weights import (  # type: ignore
-        classify_comfy_quant,
-        map_krea2_source_key,
-        parse_comfy_quant_payload,
-        strip_krea2_prefix,
-    )
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.backends.krea2_weights import map_krea2_source_key, strip_krea2_prefix
+from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 
 
 def _snap(value: int, multiple: int = 16) -> int:
