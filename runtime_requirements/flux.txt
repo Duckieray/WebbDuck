@@ -1,0 +1,14 @@
+# FLUX.2 klein runtime
+#
+# Install into a backend-specific virtual environment and point WebbDuck at it:
+#   python -m venv .venv-flux
+#   .venv-flux/bin/pip install -r runtime_requirements/flux.txt
+#   export WEBBDUCK_FLUX_PYTHON="$PWD/.venv-flux/bin/python"
+#
+# FLUX.2 klein currently requires Diffusers main / 0.37-dev support.
+git+https://github.com/huggingface/diffusers.git
+transformers>=4.57.0
+accelerate>=1.0.0
+safetensors>=0.5.0
+huggingface_hub>=0.36.0
+pillow>=11.0.0
