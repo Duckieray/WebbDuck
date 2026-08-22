@@ -1,10 +1,11 @@
-"""Checkpoint-driven runtime bridge for WebbDuck generation jobs."""
+"""Checkpoint-driven runtime routing for WebbDuck generation jobs."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from core.backends.base import backend_resolver
+from core.backends.flux import ensure_registered as ensure_flux_registered
 from core.backends.sdxl import ensure_registered as ensure_sdxl_registered
 from models.catalog import descriptor_for_model
 from models.model_descriptor import ModelDescriptor
@@ -36,12 +37,14 @@ def _validate_operation(descriptor: ModelDescriptor, operation: str) -> None:
         )
 
 
-def run_selected_model(settings: dict[str, Any], cancel_event=None):
-    """Resolve the selected checkpoint and execute it through a registered backend.
+def _register_installed_backends() -> None:
+    """Composition root for image backends shipped by this WebbDuck build."""
+    ensure_sdxl_registered()
+    ensure_flux_registered()
 
-    Recognized checkpoints with unfinished runtime adapters fail here, before the
-    legacy SDXL pipeline can see them.
-    """
+
+def run_selected_model(settings: dict[str, Any], cancel_event=None):
+    """Resolve the selected checkpoint and execute its backend."""
     model_name = str(settings.get("base_model") or "").strip()
     if not model_name:
         raise ValueError("A checkpoint must be selected before generation.")
@@ -53,16 +56,12 @@ def run_selected_model(settings: dict[str, Any], cancel_event=None):
 
     operation = requested_operation(settings)
     _validate_operation(descriptor, operation)
-
     if not descriptor.supported:
         raise RuntimeError(
-            f"Checkpoint '{descriptor.name}' was discovered successfully, but its generation runtime "
-            "is not available in this WebbDuck build yet."
+            f"Checkpoint '{descriptor.name}' is recognized, but no runnable backend is installed for it."
         )
 
-    # Existing SDXL is the first live adapter. Future adapters register through
-    # their own composition modules without changing this router.
-    ensure_sdxl_registered()
+    _register_installed_backends()
     backend = backend_resolver.resolve(descriptor)
 
     settings["model_profile"] = descriptor.to_public_dict()
