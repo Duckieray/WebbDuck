@@ -19,6 +19,8 @@ from pathlib import Path
 if str(os.getenv("WEBBDUCK_SDXL_WORKER", "")).strip().lower() in {"1", "true", "yes", "on"}:
     from core.backends.sdxl_pipeline import *  # noqa: F401,F403
 else:
+    from server.storage import resolve_web_path
+
     class _IsolatedPipelineManager:
         """Host-side compatibility view with no in-process SDXL state."""
 
