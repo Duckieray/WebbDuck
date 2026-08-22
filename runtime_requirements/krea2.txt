@@ -1,0 +1,13 @@
+# Krea 2 backend runtime dependencies.
+# Install torch separately for the target CUDA/ROCm host.
+#
+# Krea 2 support landed on Diffusers main before a stable release, so keep this
+# runtime isolated from WebbDuck's core environment.
+git+https://github.com/huggingface/diffusers.git
+transformers>=4.57.0
+accelerate>=1.12.0
+safetensors>=0.5.3
+huggingface-hub>=0.36.0
+sentencepiece>=0.2.0
+protobuf>=5.29.0
+pillow>=11.0.0
