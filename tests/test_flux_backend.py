@@ -19,7 +19,7 @@ def _descriptor() -> ModelDescriptor:
         backend="flux_diffusers",
         capabilities=capabilities_for_architecture("flux"),
         defaults=defaults_for_architecture("flux"),
-        constraints={"dimension_multiple": 16},
+        constraints={"dimension_multiple": 8},
     )
 
 
@@ -32,14 +32,11 @@ def test_flux_descriptor_exposes_current_workflows_and_defaults():
     assert descriptor.capabilities.lora is False
     assert descriptor.defaults["steps"] == 4
     assert descriptor.defaults["cfg"] == 1.0
+    assert descriptor.constraints["dimension_multiple"] == 8
 
 
 def test_flux_backend_serializes_request_and_reads_images(monkeypatch):
     captured = {}
-
-    class FakeStdout:
-        def read(self):
-            return ""
 
     class FakeProcess:
         def __init__(self, cmd, **_kwargs):
@@ -55,7 +52,6 @@ def test_flux_backend_serializes_request_and_reads_images(monkeypatch):
                 encoding="utf-8",
             )
             self.returncode = 0
-            self.stdout = FakeStdout()
 
         def poll(self):
             return self.returncode
