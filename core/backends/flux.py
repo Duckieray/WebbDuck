@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
 from models.model_descriptor import ModelDescriptor
 
@@ -25,6 +26,15 @@ class FluxDiffusersBackend(GenerationBackend):
 
     def can_handle(self, descriptor: ModelDescriptor) -> bool:
         return descriptor.backend == self.backend_id and descriptor.architecture == "flux"
+
+    def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
+        if not self.can_handle(descriptor):
+            return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
+        python_exe = os.getenv("WEBBDUCK_FLUX_PYTHON") or sys.executable
+        return probe_python_runtime(
+            python_exe,
+            (("diffusers", "Flux2KleinPipeline"),),
+        )
 
     def generate(
         self,

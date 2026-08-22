@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.runtime_probe import probe_python_runtime
 from models.model_descriptor import ModelDescriptor
 
 
@@ -29,9 +31,6 @@ def _hydrate_execution_registry() -> None:
         entry["path"] = Path(str(entry.get("path") or ""))
         sdxl_entries[str(name)] = entry
 
-    # Remove stale SDXL model entries only. Other legacy registry contents are
-    # asset/runtime internals outside this backend migration and are not used as
-    # canonical checkpoint discovery by model routing.
     for name in list(MODEL_REGISTRY):
         if str(MODEL_REGISTRY.get(name, {}).get("arch") or "").lower() == "sdxl":
             MODEL_REGISTRY.pop(name, None)
@@ -45,6 +44,18 @@ class SDXLDiffusersBackend(GenerationBackend):
 
     def can_handle(self, descriptor: ModelDescriptor) -> bool:
         return descriptor.backend == self.backend_id and descriptor.architecture == "sdxl"
+
+    def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
+        if not self.can_handle(descriptor):
+            return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
+        return probe_python_runtime(
+            sys.executable,
+            (
+                ("diffusers", "StableDiffusionXLPipeline"),
+                ("diffusers", "StableDiffusionXLImg2ImgPipeline"),
+                ("diffusers", "StableDiffusionXLInpaintPipeline"),
+            ),
+        )
 
     def generate(self, descriptor: ModelDescriptor, settings: dict[str, Any], **kwargs: Any) -> Any:
         from core.backends.sdxl_runtime import run_generation
