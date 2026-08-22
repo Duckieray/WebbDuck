@@ -75,9 +75,12 @@ def test_qwen_backend_serializes_t2i_request_and_preserves_zero_seed(monkeypatch
 
     assert seed == 0
     assert len(images) == 1
-    assert captured["payload"]["operation"] == "text2img"
+    assert captured["payload"]["model_path"] == "/cache/qwen-image-2512"
     assert captured["payload"]["seed"] == 0
     assert captured["payload"]["true_cfg_scale"] == 4.0
+    assert captured["payload"]["width"] == 1328
+    assert "input_image" not in captured["payload"]
+    assert "mask_image" not in captured["payload"]
 
 
 class _FakePipe:
