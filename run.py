@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebbDuck - SDXL Generation Interface"""
+"""WebbDuck - local image generation interface."""
 
 import resource
 import sys
@@ -51,7 +51,7 @@ except Exception as exc:
     logging.warning("Could not set RLIMIT_AS: %s", exc)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WebbDuck SDXL Server")
+    parser = argparse.ArgumentParser(description="WebbDuck Server")
     parser.add_argument("--output", type=str, help="Custom output directory for generated images")
     parser.add_argument(
         "--models",
@@ -104,8 +104,15 @@ if __name__ == "__main__":
         os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
         os.environ["TRANSFORMERS_CACHE"] = str(hf_hub)
 
+    # Import the application only after CLI/environment path overrides are set,
+    # because model discovery resolves its roots during module import.
+    from server.app import app as webbduck_app
+    from server.model_catalog_api import router as model_catalog_router
+
+    webbduck_app.include_router(model_catalog_router)
+
     uvicorn.run(
-        "server.app:app",
+        webbduck_app,
         host="0.0.0.0",
         port=max(1, min(65535, int(args.port))),
         reload=False,
