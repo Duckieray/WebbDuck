@@ -64,12 +64,7 @@ class ModelDescriptor:
         return payload
 
     def to_public_dict(self) -> dict[str, Any]:
-        """Return the model-driven contract the UI needs.
-
-        Architecture/backend are deliberately omitted. A model may be detected
-        before its runtime adapter is implemented; in that case ``supported``
-        is false while capabilities still describe the intended workflow.
-        """
+        """Return the model-driven contract the UI needs."""
         return {
             "name": self.name,
             "type": self.format,
@@ -94,8 +89,9 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         clip_skip=True,
         identity_adapter=True,
     ),
-    # Keep non-SDXL declarations conservative until adapters prove support.
-    "flux": ModelCapabilities(text2img=True, lora=True),
+    # FLUX.2 klein uses one pipeline for text generation and image editing.
+    # Asset capabilities stay false until the backend actually wires them.
+    "flux": ModelCapabilities(text2img=True, img2img=True),
     "krea2": ModelCapabilities(text2img=True, lora=True),
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
 }
@@ -107,17 +103,22 @@ _BACKENDS: dict[str, str] = {
     "qwen_image": "qwen_image_diffusers",
 }
 
-# Runtime prediction and runtime availability are intentionally separate.
-# Discovery is allowed to recognize future architectures without claiming they
-# can already execute. New adapters should be added here only when wired into
-# live generation.
-_IMPLEMENTED_BACKENDS = {"sdxl_legacy"}
+_IMPLEMENTED_BACKENDS = {"sdxl_legacy", "flux_diffusers"}
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
     "flux": {"dimension_multiple": 16},
     "krea2": {"dimension_multiple": 16},
     "qwen_image": {"dimension_multiple": 16},
+}
+
+_DEFAULTS: dict[str, dict[str, Any]] = {
+    "flux": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 4,
+        "cfg": 1.0,
+    },
 }
 
 
@@ -135,6 +136,10 @@ def backend_is_implemented(backend: str | None) -> bool:
 
 def constraints_for_architecture(architecture: str | None) -> dict[str, Any]:
     return dict(_CONSTRAINTS.get((architecture or "").lower(), {}))
+
+
+def defaults_for_architecture(architecture: str | None) -> dict[str, Any]:
+    return dict(_DEFAULTS.get((architecture or "").lower(), {}))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -157,12 +162,7 @@ def _class_tokens(config: Mapping[str, Any]) -> str:
 
 
 def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
-    """Infer an image architecture from standard model configuration files.
-
-    Unknown models stay unknown. In particular, the presence of a Diffusers
-    ``model_index.json`` is not itself evidence that a model is SDXL or even an
-    image model.
-    """
+    """Infer an image architecture from standard model configuration files."""
     path = Path(path)
     model_index = _read_json(path / "model_index.json")
     transformer_config = _read_json(path / "transformer" / "config.json")
@@ -194,7 +194,7 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
 
 
 def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescriptor:
-    """Build a canonical descriptor from a legacy MODEL_REGISTRY entry."""
+    """Build a canonical descriptor from a registry entry."""
     architecture = str(
         entry.get("arch") or entry.get("architecture") or UNKNOWN_ARCHITECTURE
     ).lower()
@@ -205,6 +205,9 @@ def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescrip
         architecture, detected = detect_diffusers_architecture(path)
         detection = {**detected, **detection}
 
+    defaults = defaults_for_architecture(architecture)
+    defaults.update(dict(entry.get("defaults") or {}))
+
     return ModelDescriptor(
         name=name,
         path=str(path),
@@ -213,7 +216,7 @@ def describe_registry_model(name: str, entry: Mapping[str, Any]) -> ModelDescrip
         architecture=architecture,
         backend=str(entry.get("backend") or backend_for_architecture(architecture)),
         capabilities=capabilities_for_architecture(architecture),
-        defaults=dict(entry.get("defaults") or {}),
+        defaults=defaults,
         constraints=dict(
             entry.get("constraints") or constraints_for_architecture(architecture)
         ),
