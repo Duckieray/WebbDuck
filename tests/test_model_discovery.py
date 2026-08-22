@@ -80,8 +80,8 @@ def test_hf_cache_discovers_qwen_image_2512_as_runnable(tmp_path):
     assert payload["name"] == "Qwen/Qwen-Image-2512"
     assert payload["supported"] is True
     assert payload["capabilities"]["text2img"] is True
-    assert payload["capabilities"]["img2img"] is True
-    assert payload["capabilities"]["inpaint"] is True
+    assert payload["capabilities"]["img2img"] is False
+    assert payload["capabilities"]["inpaint"] is False
     assert payload["defaults"]["width"] == 1328
     assert payload["defaults"]["steps"] == 50
     assert payload["defaults"]["cfg"] == 4.0
