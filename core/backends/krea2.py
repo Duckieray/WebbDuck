@@ -37,16 +37,26 @@ class Krea2DiffusersBackend(GenerationBackend):
         prompt = str(settings.get("prompt") or "").strip()
         if not prompt:
             raise ValueError("Prompt is required.")
+        if not descriptor.supported:
+            quant = str(descriptor.detection.get("quantization") or "unknown")
+            raise RuntimeError(
+                f"Krea checkpoint '{descriptor.name}' is recognized but its {quant} single-file "
+                "format is not runnable by the installed Krea backend."
+            )
 
         defaults = descriptor.defaults or {}
-        seed = int(settings.get("seed") or int(time.time_ns() & 0xFFFFFFFF))
+        raw_seed = settings.get("seed")
+        seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
         payload = {
             "model_path": descriptor.path,
+            "model_format": descriptor.format,
+            "variant": descriptor.detection.get("variant"),
+            "quantization": descriptor.detection.get("quantization"),
             "prompt": prompt,
             "width": int(settings.get("width") or defaults.get("width") or 1024),
             "height": int(settings.get("height") or defaults.get("height") or 1024),
-            "steps": int(settings.get("steps") or defaults.get("steps") or 8),
-            "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else defaults.get("cfg", 0.0)),
+            "steps": int(settings.get("steps") or defaults.get("steps") or 28),
+            "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else defaults.get("cfg", 4.5)),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }

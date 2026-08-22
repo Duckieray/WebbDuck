@@ -1,28 +1,343 @@
-"""Standalone Krea 2 Diffusers worker."""
+"""Standalone Krea 2 Diffusers worker.
+
+Full Diffusers checkpoints load normally. Community single-file transformer
+checkpoints are streamed directly into a transformer scaffold created from the
+official Krea config on the meta device. This avoids downloading/loading a
+second official transformer merely to overwrite it.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import sys
 import traceback
 from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.backends.krea2_weights import map_krea2_source_key, strip_krea2_prefix
+from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 
 
 def _snap(value: int, multiple: int = 16) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
 
 
-def _run(request: dict, output_dir: Path) -> dict:
+def _component_source(variant: str) -> str:
+    explicit = str(os.getenv("WEBBDUCK_KREA2_COMPONENT_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    if variant == "turbo":
+        return str(os.getenv("WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL") or "krea/Krea-2-Turbo")
+    return str(os.getenv("WEBBDUCK_KREA2_BASE_COMPONENT_MODEL") or "krea/Krea-2-Raw")
+
+
+def _source_layer_prefix(weight_key: str) -> str | None:
+    return weight_key[: -len(".weight")] if weight_key.endswith(".weight") else None
+
+
+def _quant_config(handle: Any, keys: set[str], source_key: str) -> dict[str, Any]:
+    prefix = _source_layer_prefix(source_key)
+    if not prefix:
+        return {}
+    marker = f"{prefix}.comfy_quant"
+    if marker not in keys:
+        return {}
+    return parse_comfy_quant_payload(handle.get_tensor(marker))
+
+
+def _metadata_quant_configs(handle: Any) -> list[dict[str, Any]]:
+    """Read optional top-level Comfy quantization metadata from safetensors."""
+    try:
+        metadata = handle.metadata() or {}
+    except Exception:
+        return []
+    raw = metadata.get("_quantization_metadata") if isinstance(metadata, dict) else None
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    layers = parsed.get("layers")
+    if not isinstance(layers, dict):
+        return []
+    return [dict(value) for value in layers.values() if isinstance(value, dict)]
+
+
+def _dequantize_source_tensor(
+    handle: Any,
+    keys: set[str],
+    source_key: str,
+    tensor: Any,
+    target_dtype: Any,
+) -> Any:
     import torch
+
+    config = _quant_config(handle, keys, source_key)
+    quant_kind = classify_comfy_quant(config)
+    if quant_kind == "convrot":
+        raise RuntimeError(
+            "This Krea checkpoint uses INT8 ConvRot. ConvRot rotates both stored weights and runtime "
+            "activations, so it cannot be safely flattened into a normal Diffusers transformer. "
+            "Use an FP8/BF16 checkpoint until WebbDuck's native ConvRot backend is installed."
+        )
+    if quant_kind == "unsupported":
+        raise RuntimeError(
+            f"Unsupported Krea quantization format {config.get('format')!r} in tensor {source_key!r}."
+        )
+
+    prefix = _source_layer_prefix(source_key)
+    scale_key = f"{prefix}.weight_scale" if prefix else ""
+    is_float8 = str(tensor.dtype).startswith("torch.float8")
+
+    if quant_kind == "fp8" or is_float8:
+        # Comfy FP8 stores q = W / scale. Reconstruct the ordinary weight for
+        # this correctness-first backend. Native FP8 matmul can replace this
+        # later without changing the model-facing contract.
+        value = tensor.float()
+        if scale_key and scale_key in keys:
+            value = value * handle.get_tensor(scale_key).float()
+        return value.to(dtype=target_dtype)
+
+    if tensor.dtype in {torch.int8, torch.uint8}:
+        raise RuntimeError(
+            f"Integer-quantized Krea tensor {source_key!r} has no supported dequantization contract."
+        )
+    return tensor.to(dtype=target_dtype)
+
+
+def _reshape_for_target(value: Any, target: Any, mode: str | None, source_key: str) -> Any:
+    if mode in {"six_rows", "two_rows"}:
+        if int(value.numel()) != int(target.numel()):
+            raise RuntimeError(
+                f"Krea modulation tensor {source_key!r} has {value.numel()} values; "
+                f"expected {target.numel()}."
+            )
+        return value.reshape(target.shape)
+    if tuple(value.shape) != tuple(target.shape):
+        raise RuntimeError(
+            f"Krea tensor shape mismatch for {source_key!r}: source={tuple(value.shape)} "
+            f"target={tuple(target.shape)}."
+        )
+    return value
+
+
+def _assign_target_tensor(
+    transformer: Any,
+    target_key: str,
+    target: Any,
+    value: Any,
+) -> None:
+    """Materialize a meta parameter or copy into an already allocated target."""
+    if bool(getattr(target, "is_meta", False)):
+        from accelerate.utils import set_module_tensor_to_device
+
+        set_module_tensor_to_device(
+            transformer,
+            target_key,
+            device="cpu",
+            value=value,
+            dtype=value.dtype,
+        )
+        return
+    target.copy_(value)
+
+
+def overlay_single_file_transformer(
+    transformer: Any,
+    checkpoint_path: Path,
+    *,
+    target_dtype: Any | None = None,
+) -> dict[str, Any]:
+    """Stream one Krea transformer checkpoint into a Diffusers model/scaffold."""
+    import torch
+    from safetensors import safe_open
+
+    checkpoint_path = Path(checkpoint_path)
+    target_state = transformer.state_dict(keep_vars=True)
+    expected = set(target_state)
+    mapped: set[str] = set()
+    ignored: list[str] = []
+
+    with safe_open(str(checkpoint_path), framework="pt", device="cpu") as handle:
+        keys = set(handle.keys())
+
+        quant_configs = _metadata_quant_configs(handle)
+        for marker in (key for key in keys if key.endswith(".comfy_quant")):
+            parsed = parse_comfy_quant_payload(handle.get_tensor(marker))
+            if parsed:
+                quant_configs.append(parsed)
+        if any(classify_comfy_quant(config) == "convrot" for config in quant_configs):
+            raise RuntimeError(
+                "INT8 ConvRot Krea checkpoint detected. This format requires runtime activation "
+                "rotation and is intentionally not handled by the FP8/BF16 overlay loader."
+            )
+
+        with torch.no_grad():
+            for source_key in sorted(keys):
+                if source_key.endswith(
+                    (
+                        ".comfy_quant",
+                        ".weight_scale",
+                        ".weight_scale_2",
+                        ".input_scale",
+                        ".pre_quant_scale",
+                    )
+                ):
+                    continue
+
+                target_key, reshape_mode = map_krea2_source_key(source_key)
+                normalized = strip_krea2_prefix(source_key)
+                if target_key is None and normalized in target_state:
+                    target_key = normalized
+                if target_key is None:
+                    ignored.append(source_key)
+                    continue
+
+                target = target_state.get(target_key)
+                if target is None:
+                    raise RuntimeError(
+                        f"Krea checkpoint tensor {source_key!r} maps to unknown Diffusers key {target_key!r}."
+                    )
+
+                source = handle.get_tensor(source_key)
+                effective_dtype = target_dtype if target_dtype is not None else target.dtype
+                value = _dequantize_source_tensor(
+                    handle,
+                    keys,
+                    source_key,
+                    source,
+                    effective_dtype,
+                )
+                value = _reshape_for_target(value, target, reshape_mode, source_key)
+                _assign_target_tensor(transformer, target_key, target, value)
+                mapped.add(target_key)
+                del source, value
+
+    missing = sorted(expected - mapped)
+    if missing:
+        preview = ", ".join(missing[:20])
+        raise RuntimeError(
+            f"Krea single-file overlay was incomplete: {len(missing)} Diffusers transformer tensors "
+            f"were not supplied by the checkpoint. First missing keys: {preview}"
+        )
+
+    return {
+        "mapped_tensors": len(mapped),
+        "ignored_tensors": len(ignored),
+    }
+
+
+def _build_empty_transformer(component_source: str) -> Any:
+    """Instantiate the official Krea transformer shape without its weights."""
+    from accelerate import init_empty_weights
+    from diffusers import Krea2Transformer2DModel
+
+    config = Krea2Transformer2DModel.load_config(
+        component_source,
+        subfolder="transformer",
+    )
+    with init_empty_weights():
+        transformer = Krea2Transformer2DModel.from_config(config)
+    return transformer
+
+
+def _configure_offload(pipe: Any, device: str, total_vram_gb: float) -> str:
+    if device != "cuda":
+        pipe.to("cpu")
+        return "cpu"
+
+    mode = str(os.getenv("WEBBDUCK_KREA2_OFFLOAD", "auto")).strip().lower()
+    if mode == "auto":
+        # A BF16 Krea transformer is larger than a 16 GB card by itself. Model
+        # CPU offload moves whole components and is therefore insufficient on
+        # that class of GPU; sequential offload keeps individual submodules on
+        # the accelerator only while they execute.
+        mode = "sequential" if total_vram_gb < 20.0 else ("model" if total_vram_gb < 28.0 else "none")
+
+    if mode in {"sequential", "seq"}:
+        pipe.enable_sequential_cpu_offload(device="cuda")
+        return "sequential"
+    if mode in {"model", "cpu", "1", "true", "yes"}:
+        pipe.enable_model_cpu_offload(device="cuda")
+        return "model"
+
+    pipe.to("cuda")
+    return "none"
+
+
+def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
     from diffusers import Krea2Pipeline
 
-    model_path = str(request["model_path"])
+    model_path = Path(str(request["model_path"])).expanduser()
+    model_format = str(request.get("model_format") or "").lower()
+    variant = str(request.get("variant") or "base").lower()
+
+    if model_format != "single" and model_path.is_dir():
+        pipe = Krea2Pipeline.from_pretrained(
+            str(model_path),
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
+        return pipe, {"source": "diffusers", "variant": variant}
+
+    if not model_path.is_file():
+        raise RuntimeError(f"Krea checkpoint path does not exist: {model_path}")
+
+    quantization = str(request.get("quantization") or "none").lower()
+    if quantization == "convrot":
+        raise RuntimeError(
+            "INT8 ConvRot Krea checkpoints require WebbDuck's future native ConvRot runtime; "
+            "the generic single-file loader will not silently mis-handle them."
+        )
+
+    component_source = _component_source(variant)
+    transformer = _build_empty_transformer(component_source)
+    overlay = overlay_single_file_transformer(
+        transformer,
+        model_path,
+        target_dtype=dtype,
+    )
+    pipe = Krea2Pipeline.from_pretrained(
+        component_source,
+        transformer=transformer,
+        torch_dtype=dtype,
+        low_cpu_mem_usage=True,
+    )
+
+    is_distilled = variant == "turbo"
+    if hasattr(pipe, "is_distilled"):
+        pipe.is_distilled = is_distilled
+    register_to_config = getattr(pipe, "register_to_config", None)
+    if callable(register_to_config):
+        register_to_config(is_distilled=is_distilled)
+
+    return pipe, {
+        "source": "single",
+        "variant": variant,
+        "quantization": quantization,
+        "component_source": component_source,
+        "component_transformer_weights_loaded": False,
+        **overlay,
+    }
+
+
+def _run(request: dict, output_dir: Path) -> dict:
+    import torch
+
     prompt = str(request["prompt"])
     width = _snap(int(request.get("width") or 1024))
     height = _snap(int(request.get("height") or 1024))
-    steps = max(1, int(request.get("steps") or 8))
-    guidance = float(request.get("guidance") if request.get("guidance") is not None else 0.0)
+    steps = max(1, int(request.get("steps") or 28))
+    guidance = float(request.get("guidance") if request.get("guidance") is not None else 4.5)
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") or 0)
 
@@ -35,23 +350,15 @@ def _run(request: dict, output_dir: Path) -> dict:
     else:
         dtype = torch.float32
 
-    pipe = Krea2Pipeline.from_pretrained(model_path, torch_dtype=dtype)
+    pipe, load_info = _load_pipeline(request, dtype)
 
-    offload_mode = str(os.getenv("WEBBDUCK_KREA2_OFFLOAD", "auto")).strip().lower()
     total_vram_gb = 0.0
     if device == "cuda":
         try:
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         except Exception:
             total_vram_gb = 0.0
-
-    if device == "cuda" and (
-        offload_mode in {"1", "true", "yes", "cpu"}
-        or (offload_mode == "auto" and total_vram_gb < 28.0)
-    ):
-        pipe.enable_model_cpu_offload()
-    else:
-        pipe.to(device)
+    offload = _configure_offload(pipe, device, total_vram_gb)
 
     try:
         pipe.vae.enable_tiling()
@@ -75,7 +382,18 @@ def _run(request: dict, output_dir: Path) -> dict:
         image.save(path)
         saved.append(str(path))
 
-    return {"ok": True, "images": saved, "seed": seed}
+    return {
+        "ok": True,
+        "images": saved,
+        "seed": seed,
+        "runtime": {
+            **load_info,
+            "offload": offload,
+            "device": device,
+            "dtype": str(dtype).replace("torch.", ""),
+            "total_vram_gb": round(total_vram_gb, 2),
+        },
+    }
 
 
 def main() -> int:

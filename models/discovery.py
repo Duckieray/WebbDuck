@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from models.model_descriptor import (
     UNKNOWN_ARCHITECTURE,
@@ -18,6 +18,7 @@ from models.model_descriptor import (
     describe_registry_model,
     detect_diffusers_architecture,
 )
+from models.single_file_inspection import inspect_single_image_checkpoint
 
 
 IMAGE_ARCHITECTURES = {"sdxl", "flux", "krea2", "qwen_image"}
@@ -43,13 +44,7 @@ def resolve_hf_cache_root() -> Path:
 
 
 def resolve_checkpoint_root(models_root: Path, explicit: str | None = None) -> Path:
-    """Return the architecture-neutral local checkpoint root.
-
-    Older WebbDuck installs commonly store images under ``checkpoint/sdxl``.
-    The generic parent is preferred so sibling folders such as ``flux`` or
-    ``krea2`` participate without configuration. If only a legacy SDXL folder
-    exists, its parent is still selected when possible.
-    """
+    """Return the architecture-neutral local checkpoint root."""
     if explicit:
         return Path(explicit).expanduser()
 
@@ -64,7 +59,7 @@ def resolve_checkpoint_root(models_root: Path, explicit: str | None = None) -> P
 
 
 def _architecture_hint_from_path(path: Path, root: Path) -> str:
-    """Use explicit family folder names only as a conservative single-file hint."""
+    """Use explicit family folder names only as a conservative fallback hint."""
     try:
         parts = [part.lower() for part in path.relative_to(root).parts[:-1]]
     except ValueError:
@@ -133,10 +128,18 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
             return
         for item in children:
             if item.is_file() and item.suffix.lower() == ".safetensors":
-                architecture = _architecture_hint_from_path(item, root)
+                architecture, detection = inspect_single_image_checkpoint(item)
                 if architecture not in IMAGE_ARCHITECTURES:
-                    # A random safetensors file is not proof of an image model.
-                    continue
+                    # Structural inspection is authoritative for newly supported
+                    # single-file families. Preserve the established explicit
+                    # SDXL folder convention until SDXL tensor introspection is
+                    # moved into the same inspector.
+                    hint = _architecture_hint_from_path(item, root)
+                    if hint != "sdxl":
+                        continue
+                    architecture = hint
+                    detection = {"method": "family_folder", "confidence": "medium"}
+
                 _register_unique(
                     models,
                     item.stem,
@@ -145,7 +148,7 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
                         architecture=architecture,
                         source="local",
                         format_name="single",
-                        detection={"method": "family_folder", "confidence": "medium"},
+                        detection=detection,
                     ),
                 )
                 continue
@@ -201,8 +204,6 @@ def discover_hf_image_models(hf_cache: Path) -> dict[str, dict[str, Any]]:
 
     for repo in repos:
         name = _repo_display_name(repo)
-        # A repo may contain several revisions. The newest recognized snapshot is
-        # enough for the normal catalog; explicit revision pinning can come later.
         for snapshot in _snapshot_dirs(repo):
             if not (snapshot / "model_index.json").exists():
                 continue
