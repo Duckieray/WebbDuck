@@ -8,8 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PARENT = ROOT.parent
 
-# Ensure both direct module imports and package imports ("webbduck.*") resolve
-# regardless of whether run.py is invoked from repo root or elsewhere.
 for path in (PARENT, ROOT):
     path_str = str(path)
     if path_str not in sys.path:
@@ -26,14 +24,8 @@ logging.basicConfig(
 import argparse
 import os
 
-# Reduce PyTorch CUDA virtual address space waste by using expandable
-# segments (avoids pre-reserving large VA ranges for the caching allocator).
 if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-# Disable progress bars to prevent BrokenPipeError in background execution
-# os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-# os.environ["TQDM_DISABLE"] = "1"
 
 try:
     RLIMIT_AS_GB = int(os.getenv("WEBBDUCK_RLIMIT_AS_GB", "0"))
@@ -89,7 +81,6 @@ if __name__ == "__main__":
         os.environ["WEBBDUCK_MODELS_DIR"] = str(models_path)
     if args.hf_cache:
         hf_raw = Path(args.hf_cache).expanduser().resolve()
-        # Accept either HF_HOME root or explicit hub path.
         if hf_raw.name.lower() == "hub":
             hf_home = hf_raw.parent
             hf_hub = hf_raw
@@ -104,12 +95,12 @@ if __name__ == "__main__":
         os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
         os.environ["TRANSFORMERS_CACHE"] = str(hf_hub)
 
-    # Import the application only after CLI/environment path overrides are set,
-    # because model discovery resolves its roots during module import.
     from server.app import app as webbduck_app
     from server.model_catalog_api import router as model_catalog_router
+    from server.runtime_readiness_api import router as runtime_readiness_router
 
     webbduck_app.include_router(model_catalog_router)
+    webbduck_app.include_router(runtime_readiness_router)
 
     uvicorn.run(
         webbduck_app,
