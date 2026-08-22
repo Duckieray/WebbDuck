@@ -13,9 +13,9 @@ class _Backend:
         return [descriptor.name], settings.get("seed", 123)
 
 
-def test_runtime_registry_preserves_sdxl_and_adds_hf_flux(tmp_path):
+def test_runtime_registry_uses_generic_discovery_and_neutral_saved_defaults(tmp_path):
     checkpoint_root = tmp_path / "checkpoint"
-    sdxl_path = checkpoint_root / "sdxl" / "existing"
+    sdxl_path = checkpoint_root / "sdxl" / "Existing SDXL"
     (sdxl_path / "unet").mkdir(parents=True)
     (sdxl_path / "unet" / "config.json").write_text("{}", encoding="utf-8")
     (sdxl_path / "text_encoder_2").mkdir()
@@ -26,13 +26,14 @@ def test_runtime_registry_preserves_sdxl_and_adds_hf_flux(tmp_path):
     (flux / "model_index.json").write_text('{"_class_name": "Flux2KleinPipeline"}', encoding="utf-8")
 
     registry = build_runtime_registry(
-        {"Existing SDXL": {"type": "diffusers", "arch": "sdxl", "path": sdxl_path, "source": "local", "defaults": {"steps": 30, "cfg": 6.0}}},
         models_root=tmp_path,
         checkpoint_root=checkpoint_root,
         hf_cache=hf_cache,
+        saved_defaults={"Existing SDXL": {"steps": 30, "cfg": 6.0}},
     )
 
     assert registry["Existing SDXL"]["defaults"]["steps"] == 30
+    assert registry["Existing SDXL"]["backend"] == "sdxl_diffusers"
     assert registry["black-forest-labs/FLUX.2-klein-4B"]["arch"] == "flux"
 
 
