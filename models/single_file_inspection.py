@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from core.backends.krea2_weights import classify_comfy_quant, parse_comfy_quant_payload
+from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 
 
 UNKNOWN_ARCHITECTURE = "unknown"
