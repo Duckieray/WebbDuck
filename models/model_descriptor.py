@@ -100,12 +100,11 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     ),
     "flux": ModelCapabilities(text2img=True, img2img=True),
     "krea2": ModelCapabilities(text2img=True),
-    "qwen_image": ModelCapabilities(
-        text2img=True,
-        img2img=True,
-        inpaint=True,
-        negative_prompt=True,
-    ),
+    # Qwen-Image-2512 is the currently installed Qwen target and is officially
+    # published as Text-to-Image. Qwen edit checkpoints will receive their own
+    # checkpoint-specific capabilities rather than borrowing generic pipeline
+    # classes and overclaiming editing support for 2512.
+    "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
 }
 
 _BACKENDS: dict[str, str] = {
