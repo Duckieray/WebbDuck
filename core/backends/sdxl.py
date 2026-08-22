@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import time
 from typing import Any
@@ -46,7 +45,14 @@ def _hydrate_execution_registry() -> None:
 
 
 def _runtime_python() -> str:
-    return str(os.getenv("WEBBDUCK_SDXL_PYTHON") or sys.executable)
+    configured = str(os.getenv("WEBBDUCK_SDXL_PYTHON") or "").strip()
+    if configured:
+        return configured
+    runtime_home = Path(
+        os.getenv("WEBBDUCK_RUNTIME_HOME", "~/.local/share/webbduck/runtimes")
+    ).expanduser()
+    suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
+    return str(runtime_home / "sdxl" / suffix)
 
 
 def _apply_progress_file(path: Path) -> None:
@@ -122,6 +128,7 @@ class SDXLDiffusersBackend(GenerationBackend):
 
         python_exe = _runtime_python()
         worker = Path(__file__).with_name("sdxl_worker.py")
+        repo_root = Path(__file__).resolve().parents[2]
         timeout_seconds = max(30.0, float(os.getenv("WEBBDUCK_SDXL_TIMEOUT_SECONDS", "3600")))
 
         with tempfile.TemporaryDirectory(prefix="webbduck_sdxl_") as tmp_raw:
@@ -149,6 +156,7 @@ class SDXLDiffusersBackend(GenerationBackend):
                         "--progress",
                         str(progress_path),
                     ],
+                    cwd=str(repo_root),
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -203,6 +211,7 @@ class SDXLDiffusersBackend(GenerationBackend):
             raise ValueError("Checkpoint is not handled by the SDXL backend")
 
         worker = Path(__file__).with_name("sdxl_worker.py")
+        repo_root = Path(__file__).resolve().parents[2]
         timeout_seconds = max(10.0, float(os.getenv("WEBBDUCK_SDXL_TOKENIZE_TIMEOUT_SECONDS", "60")))
         with tempfile.TemporaryDirectory(prefix="webbduck_sdxl_tokenize_") as tmp_raw:
             tmp = Path(tmp_raw)
@@ -228,6 +237,7 @@ class SDXLDiffusersBackend(GenerationBackend):
                     "--result",
                     str(result_path),
                 ],
+                cwd=str(repo_root),
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
