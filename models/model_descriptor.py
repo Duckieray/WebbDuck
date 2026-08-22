@@ -100,6 +100,10 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     ),
     "flux": ModelCapabilities(text2img=True, img2img=True),
     "krea2": ModelCapabilities(text2img=True),
+    # Qwen-Image-2512 is the currently installed Qwen target and is officially
+    # published as Text-to-Image. Qwen edit checkpoints will receive their own
+    # checkpoint-specific capabilities rather than borrowing generic pipeline
+    # classes and overclaiming editing support for 2512.
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
 }
 
@@ -110,7 +114,12 @@ _BACKENDS: dict[str, str] = {
     "qwen_image": "qwen_image_diffusers",
 }
 
-_IMPLEMENTED_BACKENDS = {"sdxl_diffusers", "flux_diffusers", "krea2_diffusers"}
+_IMPLEMENTED_BACKENDS = {
+    "sdxl_diffusers",
+    "flux_diffusers",
+    "krea2_diffusers",
+    "qwen_image_diffusers",
+}
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
@@ -125,6 +134,12 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "height": 1024,
         "steps": 4,
         "cfg": 1.0,
+    },
+    "qwen_image": {
+        "width": 1328,
+        "height": 1328,
+        "steps": 50,
+        "cfg": 4.0,
     },
 }
 
