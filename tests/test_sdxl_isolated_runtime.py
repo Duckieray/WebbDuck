@@ -42,14 +42,23 @@ def test_sdxl_runtime_requirements_preserve_mature_features():
     assert "onnxruntime-gpu" in text
 
 
-def test_worker_preserves_seed_zero_and_mature_metadata():
+def test_worker_preserves_mature_metadata():
     root = Path(__file__).resolve().parents[1]
     text = (root / "core" / "backends" / "sdxl_worker.py").read_text(encoding="utf-8")
-    assert 'settings.get("seed") != 0' in text
     assert '"lora_trigger_phrase"' in text
     assert '"identity_adapter_debug"' in text
     assert '"performance_timing"' in text
     assert '"smart_extend_source_box"' in text
+
+
+def test_mature_runtime_preserves_explicit_seed_zero_and_backend_ownership():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "core" / "backends" / "sdxl_runtime.py").read_text(encoding="utf-8")
+    assert 'seed_raw = settings.get("seed")' in text
+    assert "if seed_raw is not None" in text
+    assert "from core.backends.sdxl_pipeline import pipeline_manager" in text
+    assert "from core.pipeline import pipeline_manager" not in text
+    assert "from core.backends.sdxl_faceid import run_official_faceid_sdxl" in text
 
 
 def test_scheduler_module_has_no_top_level_diffusers_import():
