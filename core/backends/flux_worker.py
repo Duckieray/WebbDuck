@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 
 
-def _snap(value: int, multiple: int = 16) -> int:
+def _snap(value: int, multiple: int = 8) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
 
 
@@ -78,7 +78,9 @@ def _run(request: dict, output_dir: Path) -> dict:
             "guidance_scale": guidance,
             "num_inference_steps": steps,
         }
-        if input_image is not None and (not call_params or "image" in call_params):
+        if input_image is not None:
+            if call_params and "image" not in call_params:
+                raise RuntimeError("Installed Flux2KleinPipeline does not expose image editing support")
             kwargs["image"] = input_image
         generator_device = device if device == "cuda" else "cpu"
         kwargs["generator"] = torch.Generator(device=generator_device).manual_seed(seed + index)
