@@ -83,23 +83,43 @@ def stored_provider_token(provider: str) -> str:
     return str(raw.get("token") or "").strip()
 
 
-def environment_provider_token(provider: str) -> tuple[str, str | None]:
+def _explicit_environment_token(provider: str) -> tuple[str, str | None]:
+    """Return only environment values not populated by WebbDuck itself."""
     provider = _validate_provider(provider)
+    canonical = _CANONICAL_ENV[provider]
+    managed = _MANAGED_ENV.get(provider)
     for name in _PROVIDER_ENV[provider]:
         value = str(os.getenv(name) or "").strip()
-        if value:
-            return value, name
+        if not value:
+            continue
+        if name == canonical and managed and value == managed:
+            continue
+        return value, name
+    return "", None
+
+
+def environment_provider_token(provider: str) -> tuple[str, str | None]:
+    provider = _validate_provider(provider)
+    explicit, explicit_name = _explicit_environment_token(provider)
+    if explicit:
+        return explicit, explicit_name
+    canonical = _CANONICAL_ENV[provider]
+    managed = _MANAGED_ENV.get(provider)
+    if managed and str(os.getenv(canonical) or "").strip() == managed:
+        return managed, canonical
     return "", None
 
 
 def resolve_provider_token(provider: str) -> tuple[str, str | None]:
     """Resolve provider token, preferring explicit environment overrides."""
     provider = _validate_provider(provider)
-    token, env_name = environment_provider_token(provider)
-    if token:
-        managed = _MANAGED_ENV.get(provider)
-        source = "settings" if managed and managed == token and env_name == _CANONICAL_ENV[provider] else "environment"
-        return token, source
+    explicit, _ = _explicit_environment_token(provider)
+    if explicit:
+        return explicit, "environment"
+    managed = _MANAGED_ENV.get(provider)
+    canonical = _CANONICAL_ENV[provider]
+    if managed and str(os.getenv(canonical) or "").strip() == managed:
+        return managed, "settings"
     token = stored_provider_token(provider)
     return (token, "settings") if token else ("", None)
 
@@ -139,14 +159,22 @@ def clear_provider_token(provider: str) -> None:
 def _sync_managed_environment(provider: str) -> None:
     """Refresh only environment values that WebbDuck itself manages.
 
-    An explicit shell/service environment variable always wins.  If WebbDuck
-    previously populated the canonical variable from Settings, a Settings update
-    may replace or remove that managed value in the running process.
+    Any explicit shell/service environment alias wins. If WebbDuck previously
+    populated the canonical variable from Settings and an explicit alias appears,
+    the managed canonical value is removed so it cannot outrank that override.
     """
     provider = _validate_provider(provider)
     canonical = _CANONICAL_ENV[provider]
-    current = str(os.getenv(canonical) or "").strip()
     previous_managed = _MANAGED_ENV.get(provider)
+
+    explicit, _ = _explicit_environment_token(provider)
+    if explicit:
+        if previous_managed and os.getenv(canonical) == previous_managed:
+            os.environ.pop(canonical, None)
+        _MANAGED_ENV.pop(provider, None)
+        return
+
+    current = str(os.getenv(canonical) or "").strip()
     if current and (not previous_managed or current != previous_managed):
         return
 
