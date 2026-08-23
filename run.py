@@ -95,12 +95,21 @@ if __name__ == "__main__":
         os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
         os.environ["TRANSFORMERS_CACHE"] = str(hf_hub)
 
+    # Apply optional Settings-managed provider credentials before importing the
+    # server or local plugins so every child runtime inherits the same values.
+    # Explicit shell/service environment variables remain authoritative.
+    from core.provider_credentials import apply_provider_credentials_to_environment
+
+    apply_provider_credentials_to_environment()
+
     from server.app import app as webbduck_app
     from server.model_catalog_api import router as model_catalog_router
+    from server.provider_credentials_api import router as provider_credentials_router
     from server.runtime_readiness_api import router as runtime_readiness_router
 
     webbduck_app.include_router(model_catalog_router)
     webbduck_app.include_router(runtime_readiness_router)
+    webbduck_app.include_router(provider_credentials_router)
 
     uvicorn.run(
         webbduck_app,

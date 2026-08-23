@@ -8,6 +8,7 @@ WebbDuck's frontend is a zero-build web app built with plain HTML, ES modules, a
 ui/
 |- index.html
 |- app.js
+|- app_main.js
 |- core/
 |  |- api.js
 |  |- events.js
@@ -19,7 +20,8 @@ ui/
 |  |- LightboxManager.js
 |  |- LoraManager.js
 |  |- MaskEditor.js
-|  `- ProgressManager.js
+|  |- ProgressManager.js
+|  `- ProviderCredentialsSettings.js
 |- styles/
 |  |- reset.css
 |  |- base.css
@@ -34,7 +36,9 @@ ui/
 ## File Responsibilities
 
 - `ui/index.html`: app shell markup, controls, modals, and mount points.
-- `ui/app.js`: top-level wiring for Studio, Queue, Gallery, Settings, help modal, and plugin tabs.
+- `ui/app.js`: stable browser composition entrypoint; imports the main app plus small host-level extensions.
+- `ui/app_main.js`: Studio, Queue, Gallery, Settings, help modal, and plugin-tab orchestration.
+- `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into the existing Settings modal. Token values are never persisted in browser state.
 - `ui/core/api.js`: fetch helpers for backend endpoints.
 - `ui/core/events.js`: local event bus fed by the WebSocket stream.
 - `ui/core/state.js`: persisted Studio state and DOM sync.
@@ -62,19 +66,22 @@ This keeps queue and catalog state fresh without extra polling loops in the brow
 
 Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings.
 
+Provider credentials are deliberately excluded from this state. They are stored by the WebbDuck host under `~/.webbduck/provider_credentials.json`; the browser receives configuration status only and never reads a saved token back.
+
 ## Editing Recipes
 
 ### Add a new control
 
-1. Add the markup in `ui/index.html`.
-2. Read and write the value in `ui/app.js`.
-3. Persist it in `ui/core/state.js` if it should survive reloads.
-4. Send it through `ui/core/api.js` if the backend needs it.
+1. Add the markup in `ui/index.html`, or inject a tightly scoped host-level Settings extension from `ui/modules/` when the control should remain isolated.
+2. Read and write ordinary Studio values in `ui/app_main.js`.
+3. Persist it in `ui/core/state.js` if it should survive reloads and is not secret.
+4. Send it through `ui/core/api.js` or a focused feature module if the backend needs it.
 5. Update related docs and tests.
 
 ### Add a new screen-level behavior
 
-- Put page orchestration in `ui/app.js`.
+- Keep the stable composition entry in `ui/app.js` small.
+- Put page orchestration in `ui/app_main.js`.
 - Move feature-specific logic into a module in `ui/modules/` when the behavior grows beyond a small helper.
 
 ### Change styles
@@ -86,8 +93,8 @@ Persisted state includes prompt fields, dimensions, scheduler, second-pass optio
 
 ### Change API contracts
 
-- Keep `ui/core/api.js`, `ui/app.js`, and `server/app.py` aligned.
-- If the change affects persisted inputs, update `ui/core/state.js` too.
+- Keep the relevant UI module/API helper and server router aligned.
+- If the change affects persisted non-secret inputs, update `ui/core/state.js` too.
 
 ## Current UI Features
 
@@ -99,7 +106,7 @@ Persisted state includes prompt fields, dimensions, scheduler, second-pass optio
 - LoRA and embedding management.
 - Inpaint mask editor and smart extend controls.
 - Lightbox metadata panel and image actions.
-- Settings modal, in-app help modal, and remote plugin connection UI.
+- Settings modal, optional model-provider credentials, in-app help modal, and remote plugin connection UI.
 - Queue detail cards, compare view, and plugin iframe tabs.
 
 ## Verification
