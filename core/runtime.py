@@ -1,4 +1,4 @@
-"""Runtime device/dtype selection and GPU compatibility probing."""
+"""Runtime device/dtype selection and accelerator compatibility probing."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ _KERNEL_COMPAT_MARKERS = (
     "no kernel image is available for execution on the device",
     "device kernel image is invalid",
     "cuda error",
+    "hip error",
+    "mps backend",
 )
 
 
@@ -21,6 +23,8 @@ class RuntimeProfile:
     device: str
     dtype: torch.dtype
     dtype_name: str
+    accelerator: str
+    vendor: str
     cuda_available: bool
     cuda_device_name: Optional[str] = None
     cuda_capability: Optional[tuple[int, int]] = None
@@ -42,20 +46,29 @@ def _is_kernel_compat_error(exc: Exception) -> bool:
     return any(marker in text for marker in _KERNEL_COMPAT_MARKERS)
 
 
-def _probe_cuda_kernel_support() -> tuple[bool, Optional[str]]:
-    """Run tiny CUDA kernels to verify runtime compatibility.
-
-    Includes an embedding op since some incompatible builds fail there first.
-    """
+def _available_accelerator() -> tuple[str, str, str, bool]:
+    cuda_available = bool(torch.cuda.is_available())
+    if cuda_available:
+        is_rocm = bool(getattr(getattr(torch, "version", None), "hip", None))
+        return ("cuda", "rocm" if is_rocm else "cuda", "amd" if is_rocm else "nvidia", True)
     try:
-        x = torch.tensor([1.0], device="cuda")
+        if bool(torch.backends.mps.is_available()):
+            return ("mps", "mps", "apple", False)
+    except Exception:
+        pass
+    return ("cpu", "cpu", "cpu", False)
+
+
+def _probe_device_kernel_support(device: str) -> tuple[bool, Optional[str]]:
+    """Run tiny kernels to verify runtime compatibility."""
+    try:
+        x = torch.tensor([1.0], device=device)
         _ = (x + 1.0).item()
-
-        emb = torch.nn.Embedding(16, 8, device="cuda")
-        idx = torch.tensor([1, 3, 5], device="cuda", dtype=torch.long)
+        emb = torch.nn.Embedding(16, 8, device=device)
+        idx = torch.tensor([1, 3, 5], device=device, dtype=torch.long)
         _ = emb(idx)
-
-        torch.cuda.synchronize()
+        if device == "cuda":
+            torch.cuda.synchronize()
         return True, None
     except Exception as exc:
         return False, str(exc)
@@ -69,17 +82,28 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
     forced_dtype = (os.getenv("WEBBDUCK_DTYPE", "") or "").strip().lower()
     strict_device = _is_true(os.getenv("WEBBDUCK_STRICT_DEVICE"))
 
-    cuda_available = bool(torch.cuda.is_available())
-    device = "cuda" if cuda_available else "cpu"
-    if forced_device in {"cpu", "cuda"}:
-        device = forced_device
+    device, accelerator, vendor, cuda_available = _available_accelerator()
 
-    if device == "cuda" and not cuda_available:
-        msg = "WEBBDUCK_DEVICE=cuda was requested but CUDA is not available"
-        if strict_device:
-            raise RuntimeError(msg)
-        notes.append(f"{msg}; falling back to CPU")
-        device = "cpu"
+    if forced_device in {"cpu", "cuda", "rocm", "mps"}:
+        requested_accelerator = forced_device
+        if forced_device == "rocm":
+            requested_device = "cuda"
+        else:
+            requested_device = forced_device
+        compatible = (
+            requested_accelerator == "cpu"
+            or requested_accelerator == accelerator
+            or (requested_accelerator == "cuda" and accelerator in {"cuda", "rocm"})
+        )
+        if compatible:
+            device = requested_device
+        else:
+            msg = (
+                f"WEBBDUCK_DEVICE={forced_device} was requested but detected accelerator is {accelerator}"
+            )
+            if strict_device:
+                raise RuntimeError(msg)
+            notes.append(f"{msg}; using detected {accelerator} runtime")
 
     cuda_name = None
     cuda_cap = None
@@ -90,24 +114,27 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
             cuda_name = torch.cuda.get_device_name(0)
         except Exception:
             cuda_name = None
-        try:
-            major, minor = torch.cuda.get_device_capability(0)
-            cuda_cap = (int(major), int(minor))
-        except Exception:
-            cuda_cap = None
+        if accelerator == "cuda":
+            try:
+                major, minor = torch.cuda.get_device_capability(0)
+                cuda_cap = (int(major), int(minor))
+            except Exception:
+                cuda_cap = None
         try:
             total_vram_gb = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)
         except Exception:
             total_vram_gb = None
 
-    if device == "cuda":
-        ok, err = _probe_cuda_kernel_support()
+    if device in {"cuda", "mps"}:
+        ok, err = _probe_device_kernel_support(device)
         if not ok:
-            msg = f"CUDA runtime kernel probe failed: {err}"
+            msg = f"{accelerator.upper()} runtime kernel probe failed: {err}"
             if strict_device:
                 raise RuntimeError(msg)
             notes.append(f"{msg}; falling back to CPU")
             device = "cpu"
+            accelerator = "cpu"
+            vendor = "cpu"
 
     dtype_map = {
         "float32": torch.float32,
@@ -129,11 +156,13 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
         dtype = dtype_map[forced_dtype]
     elif device == "cuda":
         dtype = torch.bfloat16 if bf16_supported else torch.float16
+    elif device == "mps":
+        dtype = torch.float16
     else:
         dtype = torch.float32
 
     if device == "cuda" and dtype == torch.bfloat16 and not bf16_supported:
-        notes.append("bfloat16 requested but not supported on this GPU; using float16")
+        notes.append("bfloat16 requested but not supported on this accelerator; using float16")
         dtype = torch.float16
 
     if device == "cpu" and dtype != torch.float32:
@@ -144,6 +173,8 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
         device=device,
         dtype=dtype,
         dtype_name=str(dtype).replace("torch.", ""),
+        accelerator=accelerator,
+        vendor=vendor,
         cuda_available=cuda_available,
         cuda_device_name=cuda_name,
         cuda_capability=cuda_cap,
@@ -153,10 +184,11 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
 
     if logger is not None:
         logger.info(
-            "Runtime profile: device=%s dtype=%s cuda_available=%s gpu=%s cc=%s vram_gb=%s",
+            "Runtime profile: device=%s accelerator=%s vendor=%s dtype=%s gpu=%s cc=%s vram_gb=%s",
             profile.device,
+            profile.accelerator,
+            profile.vendor,
             profile.dtype_name,
-            profile.cuda_available,
             profile.cuda_device_name,
             profile.cuda_capability,
             profile.total_vram_gb,
@@ -168,11 +200,11 @@ def resolve_runtime_profile(logger=None) -> RuntimeProfile:
 
 
 def runtime_error_hint(exc: Exception) -> Optional[str]:
-    """Return user-facing hint when an exception indicates CUDA kernel mismatch."""
+    """Return a user-facing hint for accelerator/runtime kernel mismatch."""
     if not _is_kernel_compat_error(exc):
         return None
     return (
-        "Detected CUDA kernel compatibility failure. "
-        "Install a PyTorch build compatible with your GPU architecture, "
-        "or set WEBBDUCK_DEVICE=cpu as a fallback."
+        "Detected accelerator kernel compatibility failure. "
+        "Run tools/prepare_model_runtimes.py so WebbDuck can install the PyTorch build "
+        "for the detected CUDA/ROCm/CPU platform, or set WEBBDUCK_DEVICE=cpu as a fallback."
     )
