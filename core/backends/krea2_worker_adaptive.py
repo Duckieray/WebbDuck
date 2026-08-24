@@ -7,8 +7,7 @@ that are easier to reason about than low-level offload policy:
   smaller cards so the worker stops repeatedly attempting pathological shapes;
 * reduce default-looking step counts on constrained cards to bring generation
   time down to something less punishing than 28-step offloaded denoising; and
-* report the effective request back to WebbDuck so the UI/logs can explain what
-  the backend actually ran.
+* report the effective request and post-run cleanup state back to WebbDuck.
 
 The underlying hardened worker still owns dtype coercion, offload fallback, and
 all Krea-specific execution details.
@@ -47,12 +46,7 @@ def _image_tokens(width: int, height: int) -> int:
     return (width // _EFFECTIVE_TOKEN_MULTIPLE) * (height // _EFFECTIVE_TOKEN_MULTIPLE)
 
 
-def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
-    device = safe.base._torch_device(hardware)
-    if device != "cuda":
-        return None
-
-    total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
+def _base_token_budget(total_vram_gb: float, variant: str) -> int | None:
     lowered_variant = str(variant or "base").lower()
 
     if lowered_variant == "turbo":
@@ -60,6 +54,8 @@ def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
             return 3584
         if total_vram_gb <= 16.5:
             return 4096
+        if total_vram_gb <= 20.5:
+            return 4608
         return None
 
     if total_vram_gb <= 12.5:
@@ -71,6 +67,33 @@ def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
     if total_vram_gb <= 24.5:
         return 4608
     return None
+
+
+def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
+    device = safe.base._torch_device(hardware)
+    if device != "cuda":
+        return None
+
+    total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
+    free_vram_gb = float(hardware.get("free_vram_gb") or 0.0)
+    budget = _base_token_budget(total_vram_gb, variant)
+    if budget is None:
+        return None
+
+    # The same physical GPU can have materially different safe request sizes on
+    # a headless machine versus a desktop driving multiple displays/browser
+    # windows. Use live free VRAM to reduce the request budget under pressure.
+    if total_vram_gb > 0 and free_vram_gb > 0:
+        occupied_gb = max(0.0, total_vram_gb - free_vram_gb)
+        free_fraction = free_vram_gb / total_vram_gb
+        if free_vram_gb < 10.0 or occupied_gb >= 4.0 or free_fraction < 0.67:
+            budget = min(budget, 3072)
+        elif free_vram_gb < 11.5 or occupied_gb >= 3.0 or free_fraction < 0.74:
+            budget = min(budget, 3328)
+        elif occupied_gb >= 2.25 or free_fraction < 0.80:
+            budget = min(budget, 3584)
+
+    return budget
 
 
 def _fit_token_budget(width: int, height: int, token_budget: int) -> tuple[int, int]:
@@ -92,7 +115,10 @@ def _fit_token_budget(width: int, height: int, token_budget: int) -> tuple[int, 
         else:
             break
 
-    return max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_width), max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_height)
+    return max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_width), max(
+        _EFFECTIVE_TOKEN_MULTIPLE,
+        tuned_height,
+    )
 
 
 def _tuned_default_steps(
@@ -174,6 +200,10 @@ def _adaptive_request(
             float(hardware.get("total_vram_gb") or 0.0),
             3,
         ),
+        "hardware_free_vram_gb": round(
+            float(hardware.get("free_vram_gb") or 0.0),
+            3,
+        ),
     }
     return tuned, plan
 
@@ -196,6 +226,13 @@ def _cleanup_cuda_state() -> None:
         pass
 
 
+def _post_cleanup_hardware() -> dict[str, Any]:
+    try:
+        return detect_torch_hardware(torch)
+    except Exception:
+        return {}
+
+
 def _run(
     request: dict[str, Any],
     output_dir: Path,
@@ -216,12 +253,21 @@ def _run(
     finally:
         _cleanup_cuda_state()
 
+    post_cleanup = _post_cleanup_hardware()
     runtime = result.setdefault("runtime", {})
     if isinstance(runtime, dict):
         runtime["adaptive_request"] = plan
         runtime["requested_width"] = plan["requested_width"]
         runtime["requested_height"] = plan["requested_height"]
         runtime["requested_steps"] = plan["requested_steps"]
+        runtime["post_cleanup_free_vram_gb"] = round(
+            float(post_cleanup.get("free_vram_gb") or 0.0),
+            3,
+        )
+        runtime["post_cleanup_total_vram_gb"] = round(
+            float(post_cleanup.get("total_vram_gb") or 0.0),
+            3,
+        )
     return result
 
 
