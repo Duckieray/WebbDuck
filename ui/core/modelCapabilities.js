@@ -6,6 +6,7 @@ const CATALOG_EVENT = 'webbduck:model-catalog';
 let catalog = [];
 let activeProfile = null;
 let initialized = false;
+let profileRequestSerial = 0;
 
 function findProfile(name) {
     if (!name) return null;
@@ -54,14 +55,25 @@ function setControlVisible(id, visible) {
     setCapabilityDisabled(element, !visible);
 }
 
+function capabilityEnabled(caps, key) {
+    return caps?.[key] === true;
+}
+
+function capabilityAllowed(caps, key) {
+    // Fail open while a profile is loading or when talking to an older/partial
+    // catalog. Mature Studio controls should disappear only when the model
+    // contract explicitly says that capability is unsupported.
+    return caps?.[key] !== false;
+}
+
 function capabilityLabel(profile) {
     if (!profile) return '';
     const caps = profile.capabilities || {};
     const workflows = [];
-    if (caps.text2img) workflows.push('Text → Image');
-    if (caps.img2img) workflows.push('Image → Image');
-    if (caps.inpaint) workflows.push('Inpaint');
-    if (caps.outpaint) workflows.push('Outpaint');
+    if (capabilityEnabled(caps, 'text2img')) workflows.push('Text → Image');
+    if (capabilityEnabled(caps, 'img2img')) workflows.push('Image → Image');
+    if (capabilityEnabled(caps, 'inpaint')) workflows.push('Inpaint');
+    if (capabilityEnabled(caps, 'outpaint')) workflows.push('Outpaint');
     const multiple = Number(profile.constraints?.dimension_multiple || 0);
     if (multiple > 1) workflows.push(`${multiple}px grid`);
     return workflows.join(' • ');
@@ -131,19 +143,19 @@ function applyDefaults(profile, { force = false } = {}) {
 }
 
 function clearUnsupportedSourceState(caps) {
-    if (!caps.img2img) {
+    if (caps?.img2img === false) {
         window._uploadedImage = null;
         window._uploadedImageDims = null;
         const input = byId('input-image');
         if (input) input.value = '';
     }
-    if (!caps.inpaint) {
+    if (caps?.inpaint === false) {
         window._maskBlob = null;
         window._previewMaskCanvas = null;
         window._maskDrawState = null;
         window._previewEditMode = null;
     }
-    if (!caps.outpaint) {
+    if (caps?.outpaint === false) {
         window._smartExtendPlacement = null;
         const smart = byId('smart-extend-enabled');
         if (smart) smart.checked = false;
@@ -152,19 +164,22 @@ function clearUnsupportedSourceState(caps) {
 
 function applyOperationControls(profile) {
     const caps = profile?.capabilities || {};
-    const supportsSource = !!(caps.img2img || caps.inpaint || caps.outpaint);
+    const supportsSource = capabilityAllowed(caps, 'img2img')
+        || capabilityAllowed(caps, 'inpaint')
+        || capabilityAllowed(caps, 'outpaint');
     const drop = byId('upload-drop');
     const sourceSection = drop?.closest('.section, .nova-block');
     if (sourceSection) sourceSection.classList.toggle('hidden', !supportsSource);
     setCapabilityDisabled(byId('input-image'), !supportsSource);
 
-    setHidden(byId('inpaint-options'), !caps.inpaint);
-    setHidden(byId('smart-extend-group'), !caps.outpaint);
+    setHidden(byId('inpaint-options'), !capabilityAllowed(caps, 'inpaint'));
+    setHidden(byId('smart-extend-group'), !capabilityAllowed(caps, 'outpaint'));
     for (const id of ['preview-inpaint', 'lightbox-inpaint']) {
         const button = byId(id);
         if (button) {
-            button.disabled = !caps.inpaint;
-            button.classList.toggle('hidden', !caps.inpaint);
+            const available = capabilityAllowed(caps, 'inpaint');
+            button.disabled = !available;
+            button.classList.toggle('hidden', !available);
         }
     }
     clearUnsupportedSourceState(caps);
@@ -172,13 +187,25 @@ function applyOperationControls(profile) {
 
 function applyFeatureSections(profile) {
     const caps = profile?.capabilities || {};
-    setSectionVisible('section-negative', !!caps.negative_prompt);
-    setSectionVisible('section-refiner', !!caps.second_pass);
-    setSectionVisible('section-lora', !!caps.lora);
-    setSectionVisible('section-embeddings', !!caps.embeddings);
-    setSectionVisible('section-ip-adapter', !!caps.identity_adapter);
-    setControlVisible('prompt_2', !!caps.prompt_2);
-    setControlVisible('clip_skip', !!caps.clip_skip);
+    setSectionVisible('section-negative', capabilityAllowed(caps, 'negative_prompt'));
+    setSectionVisible('section-refiner', capabilityAllowed(caps, 'second_pass'));
+    setSectionVisible('section-lora', capabilityAllowed(caps, 'lora'));
+    setSectionVisible('section-embeddings', capabilityAllowed(caps, 'embeddings'));
+    setSectionVisible('section-ip-adapter', capabilityAllowed(caps, 'identity_adapter'));
+    setControlVisible('prompt_2', capabilityAllowed(caps, 'prompt_2'));
+    setControlVisible('clip_skip', capabilityAllowed(caps, 'clip_skip'));
+}
+
+function restoreLegacyStudioControls() {
+    // A transient catalog miss must never collapse the mature Studio down to
+    // Parameters. Leave the proven controls available until a concrete profile
+    // explicitly disables them.
+    for (const id of ['section-negative', 'section-refiner', 'section-lora', 'section-embeddings', 'section-ip-adapter']) {
+        setSectionVisible(id, true);
+    }
+    setControlVisible('prompt_2', true);
+    setControlVisible('clip_skip', true);
+    applyOperationControls({ capabilities: {} });
 }
 
 function updateModelOptions() {
@@ -215,10 +242,10 @@ function validateCurrentOperation(event) {
     const op = requestedOperation();
     const caps = profile.capabilities || {};
     const supported = {
-        text2img: !!caps.text2img,
-        img2img: !!caps.img2img,
-        inpaint: !!caps.inpaint,
-        outpaint: !!caps.outpaint,
+        text2img: capabilityAllowed(caps, 'text2img'),
+        img2img: capabilityAllowed(caps, 'img2img'),
+        inpaint: capabilityAllowed(caps, 'inpaint'),
+        outpaint: capabilityAllowed(caps, 'outpaint'),
     }[op];
     if (!supported) {
         event.preventDefault();
@@ -228,7 +255,7 @@ function validateCurrentOperation(event) {
 }
 
 function updateGenerateButtons(profile) {
-    const unavailable = !profile || profile.supported === false;
+    const unavailable = profile?.supported === false;
     for (const id of ['btn-generate', 'btn-test']) {
         const button = byId(id);
         if (!button) continue;
@@ -254,10 +281,44 @@ function applyProfile(profile, options = {}) {
     }
 }
 
-function applySelectedProfile({ forceDefaults = false } = {}) {
+function cacheProfile(profile) {
+    if (!profile?.name) return;
+    const existing = catalog.findIndex(item => item?.name === profile.name);
+    if (existing >= 0) catalog[existing] = profile;
+    else catalog.push(profile);
+}
+
+async function refreshSelectedProfile({ forceDefaults = false } = {}) {
     const name = byId('base_model')?.value;
-    const profile = findProfile(name);
-    if (profile) applyProfile(profile, { force: forceDefaults });
+    if (!name) {
+        activeProfile = null;
+        restoreLegacyStudioControls();
+        updateGenerateButtons(null);
+        return;
+    }
+
+    const cached = findProfile(name);
+    if (cached) applyProfile(cached, { force: forceDefaults });
+    else {
+        activeProfile = null;
+        restoreLegacyStudioControls();
+        updateGenerateButtons(null);
+    }
+
+    const requestSerial = ++profileRequestSerial;
+    try {
+        const response = await fetch(`/model-catalog/${encodeURIComponent(name)}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const profile = await response.json();
+        if (requestSerial !== profileRequestSerial || byId('base_model')?.value !== name) return;
+        if (!profile?.name) throw new Error('Model profile response was empty');
+        cacheProfile(profile);
+        applyProfile(profile, { force: forceDefaults });
+    } catch (error) {
+        if (requestSerial !== profileRequestSerial) return;
+        console.warn(`Could not refresh model profile for ${name}:`, error);
+        if (!cached) restoreLegacyStudioControls();
+    }
 }
 
 function initialize() {
@@ -266,31 +327,31 @@ function initialize() {
     neutralizeProductCopy();
     const select = byId('base_model');
     if (select) {
-        select.addEventListener('change', () => applySelectedProfile({ forceDefaults: true }));
+        select.addEventListener('change', () => {
+            void refreshSelectedProfile({ forceDefaults: true });
+        });
         const observer = new MutationObserver(() => {
             updateModelOptions();
-            setTimeout(() => applySelectedProfile(), 0);
+            setTimeout(() => { void refreshSelectedProfile(); }, 0);
         });
         observer.observe(select, { childList: true, subtree: true });
     }
     for (const id of ['btn-generate', 'btn-test']) {
         byId(id)?.addEventListener('click', validateCurrentOperation, true);
     }
-    applySelectedProfile({ forceDefaults: true });
+    void refreshSelectedProfile({ forceDefaults: true });
 }
 
 window.addEventListener(CATALOG_EVENT, event => {
     catalog = Array.isArray(event.detail) ? event.detail : [];
     updateModelOptions();
-    setTimeout(() => applySelectedProfile({ forceDefaults: true }), 0);
+    setTimeout(() => { void refreshSelectedProfile({ forceDefaults: true }); }, 0);
 });
 
 window.addEventListener(PROFILE_EVENT, event => {
     const profile = event.detail;
     if (!profile?.name) return;
-    const existing = catalog.findIndex(item => item?.name === profile.name);
-    if (existing >= 0) catalog[existing] = profile;
-    else catalog.push(profile);
+    cacheProfile(profile);
     if (byId('base_model')?.value === profile.name) applyProfile(profile);
 });
 

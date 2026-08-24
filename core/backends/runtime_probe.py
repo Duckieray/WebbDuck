@@ -12,6 +12,12 @@ import subprocess
 from typing import Iterable
 
 
+# Every currently installed image runtime reads safetensors checkpoints either
+# directly or through Diffusers. Probe it centrally so a stale venv cannot be
+# advertised as ready and then fail only after the user presses Generate.
+_SHARED_REQUIRED_SYMBOLS = (("safetensors", "safe_open"),)
+
+
 def probe_python_runtime(
     python_executable: str,
     required_symbols: Iterable[tuple[str, str]],
@@ -26,7 +32,16 @@ def probe_python_runtime(
             "reason": "Configured runtime Python does not exist.",
         }
 
-    requirements = [[str(module), str(symbol)] for module, symbol in required_symbols]
+    requested = [*list(_SHARED_REQUIRED_SYMBOLS), *list(required_symbols)]
+    requirements: list[list[str]] = []
+    seen: set[tuple[str, str]] = set()
+    for module, symbol in requested:
+        key = (str(module), str(symbol))
+        if key in seen:
+            continue
+        seen.add(key)
+        requirements.append([key[0], key[1]])
+
     script = r'''
 import importlib
 import json
