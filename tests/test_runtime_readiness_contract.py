@@ -136,6 +136,13 @@ def test_runtime_probe_always_checks_safetensors_before_reporting_ready():
     assert "_SHARED_REQUIRED_SYMBOLS" in inspect.getsource(probe_python_runtime)
 
 
+def test_hard_readiness_gate_preserves_webbduck_cpu_fallback_contract():
+    source = inspect.getsource(runtime_probe)
+    assert "WEBBDUCK_STRICT_DEVICE" in source
+    assert "forced_device == \"cuda\" and strict_device" in source
+    assert "generation may use WebbDuck's CPU fallback" in source
+
+
 def test_image_isolated_requirements_are_pinned():
     root = Path(__file__).resolve().parents[1] / "runtime_requirements"
 
