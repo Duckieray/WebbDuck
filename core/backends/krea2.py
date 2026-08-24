@@ -61,7 +61,12 @@ def _worker_environment() -> dict[str, str]:
     return env
 
 
-def _component_access_error(component_source: str, exc: Exception, *, token_configured: bool) -> RuntimeError:
+def _component_access_error(
+    component_source: str,
+    exc: Exception,
+    *,
+    token_configured: bool,
+) -> RuntimeError:
     text = str(exc or exc.__class__.__name__)
     lowered = text.lower()
     repo_url = f"https://huggingface.co/{component_source}"
@@ -142,16 +147,17 @@ def _preflight_component_access(component_source: str) -> None:
         ) from exc
 
 
-def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int | None) -> RuntimeError:
+def _worker_error(
+    result: dict[str, Any],
+    log_lines: list[str],
+    returncode: int | None,
+) -> RuntimeError:
     detail = str(result.get("error") or "Krea 2 runtime failed")
     worker_trace = str(result.get("traceback") or "").strip()
     logs = "\n".join(log_lines[-20:]).strip()
     combined = "\n".join(part for part in (detail, worker_trace, logs) if part)
     lowered = combined.lower()
 
-    # Keep this as a worker-side fallback in case access disappears after the
-    # host preflight. Known gating failures stay concise in the UI; the worker
-    # traceback remains in its job log for debugging.
     if (
         "krea/krea-2-" in lowered
         and (
@@ -175,17 +181,26 @@ def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int 
     return RuntimeError(detail.strip())
 
 
-def _report_progress(callback: Any, stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+def _report_progress(
+    callback: Any,
+    stage: str,
+    progress: float,
+    step: int = 0,
+    total_steps: int = 0,
+) -> None:
     if not callable(callback):
         return
     try:
         callback(stage, progress, step, total_steps)
     except Exception:
-        # UI progress must never be allowed to fail inference.
         pass
 
 
-def _forward_worker_progress(progress_path: Path, callback: Any, previous: str | None) -> str | None:
+def _forward_worker_progress(
+    progress_path: Path,
+    callback: Any,
+    previous: str | None,
+) -> str | None:
     if not callable(callback) or not progress_path.exists():
         return previous
     try:
@@ -203,6 +218,30 @@ def _forward_worker_progress(progress_path: Path, callback: Any, previous: str |
         return raw
     except Exception:
         return previous
+
+
+def _apply_effective_request_settings(
+    settings: dict[str, Any],
+    runtime: dict[str, Any],
+) -> None:
+    """Persist actual generation dimensions while retaining requested values."""
+    plan = runtime.get("adaptive_request")
+    if not isinstance(plan, dict):
+        return
+
+    for requested_key in ("width", "height", "steps"):
+        value = plan.get(f"requested_{requested_key}")
+        if value is not None:
+            settings[f"requested_{requested_key}"] = value
+
+    for effective_key in ("width", "height", "steps"):
+        value = plan.get(f"effective_{effective_key}")
+        if value is not None:
+            settings[effective_key] = value
+
+    settings["krea_request_adapted"] = bool(
+        plan.get("resolution_scaled") or plan.get("steps_tuned")
+    )
 
 
 class Krea2DiffusersBackend(GenerationBackend):
@@ -269,14 +308,21 @@ class Krea2DiffusersBackend(GenerationBackend):
             "width": int(settings.get("width") or defaults.get("width") or 1024),
             "height": int(settings.get("height") or defaults.get("height") or 1024),
             "steps": int(settings.get("steps") or defaults.get("steps") or 28),
-            "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else defaults.get("cfg", 4.5)),
+            "guidance": float(
+                settings.get("cfg")
+                if settings.get("cfg") is not None
+                else defaults.get("cfg", 4.5)
+            ),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }
 
         python_exe = _runtime_python()
-        worker = Path(__file__).with_name("krea2_worker_safe.py")
-        timeout_seconds = max(30.0, float(os.getenv("WEBBDUCK_KREA2_TIMEOUT_SECONDS", "1800")))
+        worker = Path(__file__).with_name("krea2_worker_adaptive.py")
+        timeout_seconds = max(
+            30.0,
+            float(os.getenv("WEBBDUCK_KREA2_TIMEOUT_SECONDS", "1800")),
+        )
 
         with tempfile.TemporaryDirectory(prefix="webbduck_krea2_") as tmp_raw:
             tmp = Path(tmp_raw)
@@ -292,10 +338,14 @@ class Krea2DiffusersBackend(GenerationBackend):
                     [
                         python_exe,
                         str(worker),
-                        "--request", str(request_path),
-                        "--result", str(result_path),
-                        "--output-dir", str(tmp),
-                        "--progress", str(progress_path),
+                        "--request",
+                        str(request_path),
+                        "--result",
+                        str(result_path),
+                        "--output-dir",
+                        str(tmp),
+                        "--progress",
+                        str(progress_path),
                     ],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
@@ -319,11 +369,17 @@ class Krea2DiffusersBackend(GenerationBackend):
                         raise GenerationCancelledError("Krea 2 generation cancelled")
                     if time.monotonic() - started > timeout_seconds:
                         proc.kill()
-                        raise RuntimeError(f"Krea 2 runtime timed out after {int(timeout_seconds)} seconds")
+                        raise RuntimeError(
+                            f"Krea 2 runtime timed out after {int(timeout_seconds)} seconds"
+                        )
                     time.sleep(0.2)
                 _forward_worker_progress(progress_path, progress_callback, last_progress)
 
-            logs = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:] if log_path.exists() else []
+            logs = (
+                log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
+                if log_path.exists()
+                else []
+            )
             if not result_path.exists():
                 raise _worker_error({}, logs, proc.returncode)
 
@@ -344,6 +400,7 @@ class Krea2DiffusersBackend(GenerationBackend):
             runtime = result.get("runtime")
             if isinstance(runtime, dict):
                 settings["krea_runtime"] = runtime
+                _apply_effective_request_settings(settings, runtime)
 
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:

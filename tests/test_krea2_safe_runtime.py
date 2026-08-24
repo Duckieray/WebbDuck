@@ -70,11 +70,19 @@ def test_resident_oom_never_retries_resident():
     assert all(not mode.startswith("resident") for mode, _stream in retries)
 
 
-def test_backend_launches_hardened_worker():
+def test_backend_routes_through_adaptive_hardened_worker():
     source = (
         Path(__file__).resolve().parents[1]
         / "core"
         / "backends"
         / "krea2.py"
     ).read_text(encoding="utf-8")
-    assert 'with_name("krea2_worker_safe.py")' in source
+    assert 'with_name("krea2_worker_adaptive.py")' in source
+
+    adaptive_source = (
+        Path(__file__).resolve().parents[1]
+        / "core"
+        / "backends"
+        / "krea2_worker_adaptive.py"
+    ).read_text(encoding="utf-8")
+    assert "from core.backends import krea2_worker_safe as safe" in adaptive_source
