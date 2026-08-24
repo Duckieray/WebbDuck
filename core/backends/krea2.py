@@ -15,6 +15,7 @@ from PIL import Image
 from core.backends.base import GenerationBackend, backend_resolver
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
+from core.provider_credentials import resolve_provider_token
 from models.model_descriptor import ModelDescriptor
 
 
@@ -27,6 +28,14 @@ def _runtime_python() -> str:
     ).expanduser()
     suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
     return str(runtime_home / "krea2" / suffix)
+
+
+def _worker_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    token, _source = resolve_provider_token("huggingface")
+    if token:
+        env["HF_TOKEN"] = token
+    return env
 
 
 def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int | None) -> RuntimeError:
@@ -144,6 +153,7 @@ class Krea2DiffusersBackend(GenerationBackend):
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    env=_worker_environment(),
                 )
                 started = time.monotonic()
                 while proc.poll() is None:
