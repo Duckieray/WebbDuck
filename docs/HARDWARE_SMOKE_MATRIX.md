@@ -32,7 +32,7 @@ SDXL is isolated like the other image backends. Its job-scoped worker preserves
 the mature SDXL T2I/I2I/inpaint/outpaint, LoRA, textual-inversion, second-pass
 and identity-adapter paths while keeping Diffusers/model state out of the
 WebbDuck service process. SDXL currently pins the mature Diffusers 0.36.0 stack;
-FLUX, Krea and Qwen Image use their own isolated runtime requirement sets.
+FLUX, Krea and Qwen Image use their own independent requirement sets.
 Runtime preparation never downloads model weights.
 
 For a systemd deployment, add the four `WEBBDUCK_*_PYTHON` values to the service
@@ -46,6 +46,12 @@ GET /runtime-readiness
 
 Every selected smoke target should report `runtime.ready=true` and CUDA should
 identify the 5070 Ti from the interpreter that will actually run the backend.
+
+Generation now enforces the same backend readiness contract immediately before
+worker launch. A stale isolated environment therefore fails before a model
+subprocess starts, and the error includes the missing runtime imports plus the
+appropriate `python tools/prepare_model_runtimes.py <runtime>` repair command.
+After repairing an isolated runtime, restart WebbDuck before retrying generation.
 
 ## 2. Weight preparation
 
@@ -74,6 +80,16 @@ hf download krea/Krea-2-Turbo \
 ```
 
 Reference defaults are 1024x1024, 8 steps and guidance 0.0.
+
+For a community/local single-file Krea checkpoint, that `.safetensors` file
+replaces the transformer only. WebbDuck still needs the matching licensed Krea
+Raw/Turbo Diffusers support components (scheduler, tokenizer/text encoder, VAE,
+and transformer configuration). Before launching the Krea worker, WebbDuck now
+preflights access to the support repository using the configured Hugging Face
+credentials and reports license/token failures directly. An advanced fully-local
+component bundle can be supplied with `WEBBDUCK_KREA2_COMPONENT_MODEL`; it must
+be a complete Diffusers directory containing at least `model_index.json` and
+`transformer/config.json`.
 
 ### Dark Beast 3 FP8
 
