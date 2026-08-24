@@ -128,22 +128,36 @@ def _fit_token_budget(width: int, height: int, token_budget: int) -> tuple[int, 
     if current_tokens <= max(1, int(token_budget)):
         return width, height
 
-    scale = math.sqrt(float(token_budget) / float(current_tokens))
-    tuned_width = _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(round(width * scale))))
-    tuned_height = _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(round(height * scale))))
+    target_ratio = float(width) / float(max(1, height))
+    ideal_width_tokens = math.sqrt(float(token_budget) * target_ratio)
+    ideal_height_tokens = math.sqrt(float(token_budget) / target_ratio)
+    center_w = max(1, int(round(ideal_width_tokens)))
+    center_h = max(1, int(round(ideal_height_tokens)))
 
-    while _image_tokens(tuned_width, tuned_height) > token_budget:
-        if tuned_width >= tuned_height and tuned_width > _EFFECTIVE_TOKEN_MULTIPLE:
-            tuned_width -= _EFFECTIVE_TOKEN_MULTIPLE
-        elif tuned_height > _EFFECTIVE_TOKEN_MULTIPLE:
-            tuned_height -= _EFFECTIVE_TOKEN_MULTIPLE
-        else:
-            break
+    best: tuple[float, int, int] | None = None
+    for width_tokens in range(max(1, center_w - 10), center_w + 11):
+        for height_tokens in range(max(1, center_h - 10), center_h + 11):
+            area = width_tokens * height_tokens
+            if area > token_budget:
+                continue
+            ratio = float(width_tokens) / float(height_tokens)
+            ratio_error = abs(math.log(max(1e-9, ratio / target_ratio)))
+            unused_fraction = float(token_budget - area) / float(max(1, token_budget))
+            # Preserve composition shape much more strongly than squeezing the
+            # final few percent of theoretical token budget out of the GPU.
+            score = (ratio_error * 10.0) + unused_fraction
+            candidate = (score, width_tokens, height_tokens)
+            if best is None or candidate < best:
+                best = candidate
 
-    return max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_width), max(
-        _EFFECTIVE_TOKEN_MULTIPLE,
-        tuned_height,
-    )
+    if best is None:
+        scale = math.sqrt(float(token_budget) / float(current_tokens))
+        return (
+            _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(width * scale))),
+            _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(height * scale))),
+        )
+
+    return best[1] * _EFFECTIVE_TOKEN_MULTIPLE, best[2] * _EFFECTIVE_TOKEN_MULTIPLE
 
 
 def _tuned_default_steps(
