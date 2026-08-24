@@ -100,7 +100,7 @@ class SDXLDiffusersBackend(GenerationBackend):
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        return probe_python_runtime(
+        payload = probe_python_runtime(
             _runtime_python(),
             (
                 ("diffusers", "StableDiffusionXLPipeline"),
@@ -109,6 +109,12 @@ class SDXLDiffusersBackend(GenerationBackend):
                 ("transformers", "CLIPTokenizer"),
             ),
         )
+        if not payload.get("ready"):
+            payload["repair_hint"] = (
+                "Repair/update this isolated runtime with "
+                "`python tools/prepare_model_runtimes.py sdxl`, then restart WebbDuck."
+            )
+        return payload
 
     def generate(
         self,
@@ -209,6 +215,7 @@ class SDXLDiffusersBackend(GenerationBackend):
     def tokenize(self, descriptor: ModelDescriptor, text: str, *, which: str = "prompt") -> dict[str, Any]:
         if not self.can_handle(descriptor):
             raise ValueError("Checkpoint is not handled by the SDXL backend")
+        self.require_ready(descriptor)
 
         worker = Path(__file__).with_name("sdxl_worker.py")
         repo_root = Path(__file__).resolve().parents[2]

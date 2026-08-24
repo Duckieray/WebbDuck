@@ -3,6 +3,9 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
+
+from core.backends.base import GenerationBackend
 from core.backends.flux import FluxDiffusersBackend
 from core.backends.krea2 import Krea2DiffusersBackend
 from core.backends.qwen_image import QwenImageDiffusersBackend
@@ -61,10 +64,83 @@ def test_isolated_backends_probe_required_pipeline_classes(monkeypatch):
     assert captured[3] == ("/runtime/qwen/python", (("diffusers", "QwenImagePipeline"),))
 
 
+def test_generation_refuses_unready_runtime_before_backend_worker(monkeypatch):
+    import core.model_runtime as model_runtime
+
+    descriptor = _descriptor("known-sdxl", "sdxl", "sdxl_diffusers")
+    called = {"generate": False}
+
+    class FakeBackend(GenerationBackend):
+        backend_id = "sdxl_diffusers"
+
+        def can_handle(self, candidate):
+            return candidate is descriptor
+
+        def readiness(self, candidate):
+            assert candidate is descriptor
+            return {
+                "ready": False,
+                "python": "/runtime/sdxl/bin/python",
+                "reason": "One or more required runtime imports are unavailable.",
+                "missing": [
+                    {
+                        "module": "safetensors",
+                        "symbol": "safe_open",
+                        "error": "No module named 'safetensors'",
+                    }
+                ],
+                "repair_hint": (
+                    "Repair/update this isolated runtime with "
+                    "`python tools/prepare_model_runtimes.py sdxl`, then restart WebbDuck."
+                ),
+            }
+
+        def generate(self, candidate, settings, **kwargs):
+            called["generate"] = True
+            raise AssertionError("unready backend must never launch generation")
+
+    backend = FakeBackend()
+    monkeypatch.setattr(model_runtime, "descriptor_for_model", lambda _name: descriptor)
+    monkeypatch.setattr(model_runtime, "register_installed_backends", lambda: None)
+    monkeypatch.setattr(model_runtime.backend_resolver, "resolve", lambda _descriptor: backend)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        model_runtime.run_selected_model({"base_model": descriptor.name, "prompt": "duck"})
+
+    message = str(excinfo.value)
+    assert "runtime is not ready" in message
+    assert "safetensors.safe_open" in message
+    assert "prepare_model_runtimes.py sdxl" in message
+    assert called["generate"] is False
+
+
+def test_sdxl_failed_readiness_includes_runtime_sync_hint(monkeypatch):
+    monkeypatch.setattr(
+        "core.backends.sdxl.probe_python_runtime",
+        lambda *_args, **_kwargs: {
+            "ready": False,
+            "reason": "One or more required runtime imports are unavailable.",
+            "missing": [{"module": "safetensors", "symbol": "safe_open"}],
+        },
+    )
+    payload = SDXLDiffusersBackend().readiness(
+        _descriptor("sdxl", "sdxl", "sdxl_diffusers")
+    )
+    assert payload["ready"] is False
+    assert "prepare_model_runtimes.py sdxl" in payload["repair_hint"]
+
+
 def test_runtime_probe_always_checks_safetensors_before_reporting_ready():
     source = inspect.getsource(runtime_probe)
     assert '_SHARED_REQUIRED_SYMBOLS = (("safetensors", "safe_open"),)' in source
     assert "_SHARED_REQUIRED_SYMBOLS" in inspect.getsource(probe_python_runtime)
+
+
+def test_hard_readiness_gate_preserves_webbduck_cpu_fallback_contract():
+    source = inspect.getsource(runtime_probe)
+    assert "WEBBDUCK_STRICT_DEVICE" in source
+    assert "forced_device == \"cuda\" and strict_device" in source
+    assert "generation may use WebbDuck's CPU fallback" in source
 
 
 def test_image_isolated_requirements_are_pinned():
