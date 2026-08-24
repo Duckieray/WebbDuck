@@ -45,6 +45,7 @@ def probe_python_runtime(
     script = r'''
 import importlib
 import json
+import os
 import sys
 
 requirements = json.loads(sys.argv[1])
@@ -89,9 +90,17 @@ for module_name, symbol_name in requirements:
             "error": str(exc),
         })
 
+def is_true(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+forced_device = str(os.getenv("WEBBDUCK_DEVICE") or "").strip().lower()
+strict_device = is_true(os.getenv("WEBBDUCK_STRICT_DEVICE"))
 if out["ready"] and not out.get("cuda_available"):
-    out["ready"] = False
-    out["reason"] = "Runtime imports succeed, but CUDA is not available in this interpreter."
+    if forced_device == "cuda" and strict_device:
+        out["ready"] = False
+        out["reason"] = "WEBBDUCK_DEVICE=cuda was requested in strict mode, but CUDA is not available in this interpreter."
+    else:
+        out["note"] = "CUDA is not available in this interpreter; generation may use WebbDuck's CPU fallback."
 elif out["missing"]:
     out["reason"] = "One or more required runtime imports are unavailable."
 print(json.dumps(out))
