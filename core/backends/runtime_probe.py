@@ -12,9 +12,6 @@ import subprocess
 from typing import Iterable
 
 
-# Every currently installed image runtime reads safetensors checkpoints either
-# directly or through Diffusers. Probe it centrally so a stale venv cannot be
-# advertised as ready and then fail only after the user presses Generate.
 _SHARED_REQUIRED_SYMBOLS = (("safetensors", "safe_open"),)
 
 
@@ -49,24 +46,62 @@ import os
 import sys
 
 requirements = json.loads(sys.argv[1])
-out = {"ready": True, "python": sys.executable, "missing": []}
+out = {
+    "ready": True,
+    "python": sys.executable,
+    "missing": [],
+    "accelerator": "cpu",
+    "vendor": "cpu",
+    "cuda_available": False,
+    "mps_available": False,
+}
 try:
     import torch
     out["torch_version"] = getattr(torch, "__version__", None)
     out["cuda_available"] = bool(torch.cuda.is_available())
+    try:
+        out["mps_available"] = bool(torch.backends.mps.is_available())
+    except Exception:
+        out["mps_available"] = False
+
     if out["cuda_available"]:
+        is_rocm = bool(getattr(getattr(torch, "version", None), "hip", None))
+        out["accelerator"] = "rocm" if is_rocm else "cuda"
+        out["vendor"] = "amd" if is_rocm else "nvidia"
+        out["rocm_version"] = getattr(getattr(torch, "version", None), "hip", None)
+        out["cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
         try:
             out["gpu_name"] = torch.cuda.get_device_name(0)
         except Exception:
             out["gpu_name"] = None
+        if not is_rocm:
+            try:
+                out["cuda_capability"] = list(torch.cuda.get_device_capability(0))
+            except Exception:
+                out["cuda_capability"] = None
         try:
-            out["cuda_capability"] = list(torch.cuda.get_device_capability(0))
+            free, total = torch.cuda.mem_get_info(0)
+            out["vram_gb"] = round(total / 1024**3, 2)
+            out["free_vram_gb"] = round(free / 1024**3, 2)
         except Exception:
-            out["cuda_capability"] = None
+            try:
+                out["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)
+            except Exception:
+                out["vram_gb"] = None
         try:
-            out["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)
+            out["bf16_supported"] = bool(torch.cuda.is_bf16_supported())
         except Exception:
-            out["vram_gb"] = None
+            out["bf16_supported"] = False
+        try:
+            probe = torch.empty(1, device="cuda", dtype=torch.float8_e4m3fn)
+            del probe
+            out["fp8_storage_supported"] = True
+        except Exception:
+            out["fp8_storage_supported"] = False
+    elif out["mps_available"]:
+        out["accelerator"] = "mps"
+        out["vendor"] = "apple"
+        out["gpu_name"] = "Apple GPU"
 except Exception as exc:
     out["ready"] = False
     out["missing"].append({"module": "torch", "error": str(exc)})
@@ -95,12 +130,23 @@ def is_true(value):
 
 forced_device = str(os.getenv("WEBBDUCK_DEVICE") or "").strip().lower()
 strict_device = is_true(os.getenv("WEBBDUCK_STRICT_DEVICE"))
-if out["ready"] and not out.get("cuda_available"):
-    if forced_device == "cuda" and strict_device:
+accelerator = str(out.get("accelerator") or "cpu")
+
+if out["ready"] and strict_device and forced_device:
+    compatible = (
+        forced_device == accelerator
+        or (forced_device == "cuda" and accelerator in {"cuda", "rocm"})
+        or (forced_device == "cpu" and accelerator == "cpu")
+    )
+    if not compatible:
         out["ready"] = False
-        out["reason"] = "WEBBDUCK_DEVICE=cuda was requested in strict mode, but CUDA is not available in this interpreter."
-    else:
-        out["note"] = "CUDA is not available in this interpreter; generation may use WebbDuck's CPU fallback."
+        out["reason"] = (
+            f"WEBBDUCK_DEVICE={forced_device} was requested in strict mode, "
+            f"but this interpreter detected accelerator={accelerator}."
+        )
+
+if out["ready"] and accelerator == "cpu":
+    out["note"] = "No GPU accelerator is available in this interpreter; generation may use WebbDuck's CPU fallback."
 elif out["missing"]:
     out["reason"] = "One or more required runtime imports are unavailable."
 print(json.dumps(out))
