@@ -101,12 +101,35 @@ function neutralizeProductCopy() {
     if (workspaceCopy) workspaceCopy.textContent = 'Checkpoint-driven local image generation with controls that adapt to the selected model.';
 }
 
+function snapDimensionInput(input, multiple) {
+    if (!input) return false;
+    const numeric = Number(input.value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return false;
+
+    const min = Number(input.min || multiple);
+    const max = Number(input.max || Number.POSITIVE_INFINITY);
+    let snapped = Math.max(multiple, Math.round(numeric / multiple) * multiple);
+    if (Number.isFinite(min)) snapped = Math.max(min, snapped);
+    if (Number.isFinite(max)) snapped = Math.min(max, snapped);
+    // Clamp can break the grid when min/max themselves are not multiples.
+    snapped = Math.max(multiple, Math.round(snapped / multiple) * multiple);
+
+    if (snapped === numeric) return true;
+    input.value = String(snapped);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+}
+
 function applyDimensionConstraints(profile) {
     const multiple = Math.max(1, Number(profile?.constraints?.dimension_multiple || 8));
     for (const id of ['width', 'height']) {
         const input = byId(id);
         if (!input) continue;
         input.step = String(multiple);
+        // Resolution is user intent. Model switches may require a different
+        // pixel grid, but they should not throw away the current aspect ratio.
+        snapDimensionInput(input, multiple);
     }
 }
 
@@ -127,6 +150,16 @@ function applyDefaults(profile, { force = false } = {}) {
         if (defaults[field] === undefined || defaults[field] === null) continue;
         const input = byId(id);
         if (!input) continue;
+
+        // Width/height are sticky once the user/form already has a valid value.
+        // The selected model contributes only its grid constraint at that point.
+        // Steps/CFG remain model defaults because those values are part of the
+        // checkpoint's intended inference contract (for example Raw vs Turbo).
+        if ((field === 'width' || field === 'height') && Number(input.value) > 0) {
+            input.dataset.modelDefaultApplied = profile.name;
+            continue;
+        }
+
         if (!force && input.dataset.modelDefaultApplied === profile.name) continue;
         if (id === 'cfg') {
             const numeric = Number(defaults[field]);
