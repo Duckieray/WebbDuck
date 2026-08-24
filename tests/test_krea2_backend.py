@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from core.backends.krea2 import Krea2DiffusersBackend
+from core.backends.krea2 import Krea2DiffusersBackend, _runtime_python, _worker_error
 from models.model_descriptor import ModelDescriptor, capabilities_for_architecture, defaults_for_model
 
 
@@ -38,6 +38,30 @@ def test_krea2_descriptor_matches_turbo_contract():
     assert descriptor.constraints["dimension_multiple"] == 16
 
 
+def test_krea2_default_runtime_is_deterministic(monkeypatch, tmp_path):
+    monkeypatch.delenv("WEBBDUCK_KREA2_PYTHON", raising=False)
+    monkeypatch.setenv("WEBBDUCK_RUNTIME_HOME", str(tmp_path))
+    expected = tmp_path / "krea2" / "bin" / "python"
+    assert Path(_runtime_python()) == expected
+
+
+def test_krea2_gated_component_error_is_actionable():
+    error = _worker_error(
+        {
+            "error": (
+                "krea/Krea-2-Raw is not a local folder and is not a valid model identifier; "
+                "make sure to pass a token"
+            )
+        },
+        [],
+        1,
+    )
+    message = str(error)
+    assert "Krea 2 support components are gated on Hugging Face" in message
+    assert "Community License" in message
+    assert "WebbDuck Settings" in message
+
+
 def test_krea2_backend_serializes_request_and_reads_images(monkeypatch):
     captured = {}
 
@@ -60,6 +84,7 @@ def test_krea2_backend_serializes_request_and_reads_images(monkeypatch):
             return self.returncode
 
     monkeypatch.setattr("core.backends.krea2.subprocess.Popen", FakeProcess)
+    monkeypatch.setenv("WEBBDUCK_KREA2_PYTHON", "/runtime/krea/python")
     backend = Krea2DiffusersBackend()
     images, seed = backend.generate(
         _descriptor(),
@@ -77,6 +102,7 @@ def test_krea2_backend_serializes_request_and_reads_images(monkeypatch):
     assert seed == 321
     assert len(images) == 1
     assert images[0].size == (16, 16)
+    assert captured["cmd"][0] == "/runtime/krea/python"
     assert captured["payload"]["model_path"] == "/cache/krea2"
     assert captured["payload"]["model_format"] == "diffusers"
     assert captured["payload"]["variant"] == "turbo"
