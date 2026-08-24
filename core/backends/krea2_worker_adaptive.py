@@ -3,8 +3,8 @@
 This layer sits above ``krea2_worker_safe`` and makes request-level decisions
 that are easier to reason about than low-level offload policy:
 
-* constrain large Krea Raw requests to a GPU-aware image-token budget on
-  smaller cards so the worker stops repeatedly attempting pathological shapes;
+* constrain large Krea requests to accelerator- and VRAM-aware image-token
+  budgets so the worker stops repeatedly attempting pathological shapes;
 * reduce default-looking step counts on constrained cards to bring generation
   time down to something less punishing than 28-step offloaded denoising; and
 * report the effective request and post-run cleanup state back to WebbDuck.
@@ -46,37 +46,62 @@ def _image_tokens(width: int, height: int) -> int:
     return (width // _EFFECTIVE_TOKEN_MULTIPLE) * (height // _EFFECTIVE_TOKEN_MULTIPLE)
 
 
-def _base_token_budget(total_vram_gb: float, variant: str) -> int | None:
+def _base_token_budget(
+    total_vram_gb: float,
+    variant: str,
+    accelerator: str,
+) -> int | None:
     lowered_variant = str(variant or "base").lower()
+    accelerator = str(accelerator or "cpu").lower()
 
-    if lowered_variant == "turbo":
+    if accelerator == "cuda":
+        if lowered_variant == "turbo":
+            if total_vram_gb <= 12.5:
+                return 3584
+            if total_vram_gb <= 16.5:
+                return 4096
+            if total_vram_gb <= 20.5:
+                return 4608
+            return None
+
         if total_vram_gb <= 12.5:
-            return 3584
+            return 3072
         if total_vram_gb <= 16.5:
-            return 4096
+            return 3584
         if total_vram_gb <= 20.5:
+            return 4096
+        if total_vram_gb <= 24.5:
             return 4608
         return None
 
-    if total_vram_gb <= 12.5:
-        return 3072
-    if total_vram_gb <= 16.5:
-        return 3584
-    if total_vram_gb <= 20.5:
-        return 4096
-    if total_vram_gb <= 24.5:
-        return 4608
+    if accelerator == "rocm":
+        # ROCm currently uses synchronous group offload in the hardened worker,
+        # so keep a slightly more conservative request envelope until we have
+        # broad AMD hardware coverage.
+        if lowered_variant == "turbo":
+            if total_vram_gb <= 16.5:
+                return 3584
+            if total_vram_gb <= 24.5:
+                return 4096
+            return None
+
+        if total_vram_gb <= 16.5:
+            return 3072
+        if total_vram_gb <= 24.5:
+            return 4096
+        return None
+
     return None
 
 
 def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
-    device = safe.base._torch_device(hardware)
-    if device != "cuda":
+    accelerator = str(hardware.get("accelerator") or "cpu").lower()
+    if accelerator not in {"cuda", "rocm"}:
         return None
 
     total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
     free_vram_gb = float(hardware.get("free_vram_gb") or 0.0)
-    budget = _base_token_budget(total_vram_gb, variant)
+    budget = _base_token_budget(total_vram_gb, variant, accelerator)
     if budget is None:
         return None
 
@@ -128,8 +153,8 @@ def _tuned_default_steps(
     *,
     resized: bool,
 ) -> int:
-    device = safe.base._torch_device(hardware)
-    if device != "cuda":
+    accelerator = str(hardware.get("accelerator") or "cpu").lower()
+    if accelerator not in {"cuda", "rocm"}:
         return steps
 
     total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
@@ -138,6 +163,13 @@ def _tuned_default_steps(
     # Only tune the common Raw default-looking path. Custom non-default values
     # remain user intent and pass through unchanged.
     if lowered_variant == "turbo" or int(steps) != 28:
+        return steps
+
+    if accelerator == "rocm":
+        if total_vram_gb <= 16.5:
+            return 12 if resized else 14
+        if total_vram_gb <= 24.5:
+            return 16 if resized else 18
         return steps
 
     if total_vram_gb <= 12.5:
@@ -196,6 +228,7 @@ def _adaptive_request(
         "resolution_scaled": resized,
         "steps_tuned": tuned_steps != requested_steps,
         "variant": variant,
+        "accelerator": str(hardware.get("accelerator") or "cpu"),
         "hardware_total_vram_gb": round(
             float(hardware.get("total_vram_gb") or 0.0),
             3,
@@ -208,7 +241,7 @@ def _adaptive_request(
     return tuned, plan
 
 
-def _cleanup_cuda_state() -> None:
+def _cleanup_accelerator_state() -> None:
     gc.collect()
     if not torch.cuda.is_available():
         return
@@ -251,7 +284,7 @@ def _run(
     try:
         result = safe._run(tuned_request, output_dir, progress_path)
     finally:
-        _cleanup_cuda_state()
+        _cleanup_accelerator_state()
 
     post_cleanup = _post_cleanup_hardware()
     runtime = result.setdefault("runtime", {})
