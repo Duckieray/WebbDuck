@@ -81,7 +81,7 @@ def _memory_reserve_gb(
 
 
 def _retry_profiles(current_mode: str, hardware: dict[str, Any]) -> list[tuple[str, bool]]:
-    """Return progressively safer (mode_override, stream_prefetch) retries."""
+    """Return strictly more conservative (mode_override, stream_prefetch) retries."""
     retries: list[tuple[str, bool]] = []
     current = str(current_mode or "")
 
@@ -90,7 +90,9 @@ def _retry_profiles(current_mode: str, hardware: dict[str, Any]) -> list[tuple[s
     if current.startswith("resident") or "block-stream" in current:
         retries.append(("transformer-block", False))
 
-    if "block-sync" not in current:
+    # Any non-leaf, non-sequential profile can then fall to synchronous leaf
+    # offload. Never select leaf again when it is already the current profile.
+    if "leaf" not in current and current != "sequential":
         retries.append(("group", False))
 
     if current != "sequential":
