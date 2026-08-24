@@ -33,6 +33,51 @@ class GenerationBackend(ABC):
             "reason": None if ready else f"Installed backend cannot handle checkpoint '{descriptor.name}'.",
         }
 
+    def require_ready(self, descriptor: ModelDescriptor) -> dict[str, Any]:
+        """Fail before model execution when the backend runtime is unavailable.
+
+        Readiness is intentionally a backend-owned contract.  The generic
+        generation layer can enforce it without learning architecture/runtime
+        names, while each backend remains free to provide an actionable repair
+        hint for its isolated environment.
+        """
+        payload = self.readiness(descriptor)
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"Checkpoint '{descriptor.name}' runtime readiness check returned an invalid result."
+            )
+        if bool(payload.get("ready")):
+            return payload
+
+        parts = [
+            f"Checkpoint '{descriptor.name}' runtime is not ready.",
+            str(payload.get("reason") or "The selected backend runtime failed its readiness check.").strip(),
+        ]
+
+        missing = payload.get("missing")
+        if isinstance(missing, list) and missing:
+            labels: list[str] = []
+            for item in missing:
+                if not isinstance(item, dict):
+                    continue
+                module = str(item.get("module") or "").strip()
+                symbol = str(item.get("symbol") or "").strip()
+                label = f"{module}.{symbol}" if module and symbol else module
+                if label and label not in labels:
+                    labels.append(label)
+            if labels:
+                parts.append("Missing runtime imports: " + ", ".join(labels) + ".")
+
+        python_path = str(payload.get("python") or "").strip()
+        if python_path:
+            parts.append(f"Runtime Python: {python_path}.")
+
+        repair_hint = str(payload.get("repair_hint") or "").strip()
+        if repair_hint:
+            parts.append(repair_hint)
+
+        raise RuntimeError(" ".join(part for part in parts if part).strip())
+
     def unload(self) -> None:
         """Release backend-owned runtime resources when applicable."""
 
