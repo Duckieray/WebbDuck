@@ -14,6 +14,14 @@ def _cuda_hardware(total: float, free: float) -> dict:
     }
 
 
+def _rocm_hardware(total: float, free: float) -> dict:
+    return {
+        "accelerator": "rocm",
+        "total_vram_gb": total,
+        "free_vram_gb": free,
+    }
+
+
 def test_16gb_raw_portrait_is_scaled_to_safe_token_budget():
     request = {
         "variant": "base",
@@ -67,7 +75,21 @@ def test_live_vram_pressure_reduces_token_budget():
     assert pressured == 3072
 
 
-def test_non_cuda_runtime_does_not_apply_cuda_token_budget():
+def test_rocm_uses_its_own_conservative_budget():
+    cuda_budget = adaptive._token_budget(
+        _cuda_hardware(15.51, 13.5),
+        "base",
+    )
+    rocm_budget = adaptive._token_budget(
+        _rocm_hardware(15.51, 13.5),
+        "base",
+    )
+
+    assert cuda_budget == 3584
+    assert rocm_budget == 3072
+
+
+def test_non_accelerator_runtime_does_not_apply_gpu_token_budget():
     hardware = {
         "accelerator": "cpu",
         "total_vram_gb": 0.0,
