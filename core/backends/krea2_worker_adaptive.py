@@ -1,0 +1,258 @@
+"""Adaptive request planner for the hardened Krea 2 isolated worker.
+
+This layer sits above ``krea2_worker_safe`` and makes request-level decisions
+that are easier to reason about than low-level offload policy:
+
+* constrain large Krea Raw requests to a GPU-aware image-token budget on
+  smaller cards so the worker stops repeatedly attempting pathological shapes;
+* reduce default-looking step counts on constrained cards to bring generation
+  time down to something less punishing than 28-step offloaded denoising; and
+* report the effective request back to WebbDuck so the UI/logs can explain what
+  the backend actually ran.
+
+The underlying hardened worker still owns dtype coercion, offload fallback, and
+all Krea-specific execution details.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import json
+import math
+import sys
+import traceback
+from pathlib import Path
+from typing import Any
+
+import torch
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.backends import krea2_worker_safe as safe
+from runtime_hardware import detect_torch_hardware
+
+_EFFECTIVE_TOKEN_MULTIPLE = 16
+
+
+def _snap(value: int, multiple: int = _EFFECTIVE_TOKEN_MULTIPLE) -> int:
+    return max(multiple, int(round(float(value) / multiple) * multiple))
+
+
+def _image_tokens(width: int, height: int) -> int:
+    width = _snap(width)
+    height = _snap(height)
+    return (width // _EFFECTIVE_TOKEN_MULTIPLE) * (height // _EFFECTIVE_TOKEN_MULTIPLE)
+
+
+def _token_budget(hardware: dict[str, Any], variant: str) -> int | None:
+    device = safe.base._torch_device(hardware)
+    if device != "cuda":
+        return None
+
+    total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
+    lowered_variant = str(variant or "base").lower()
+
+    if lowered_variant == "turbo":
+        if total_vram_gb <= 12.5:
+            return 3584
+        if total_vram_gb <= 16.5:
+            return 4096
+        return None
+
+    if total_vram_gb <= 12.5:
+        return 3072
+    if total_vram_gb <= 16.5:
+        return 3584
+    if total_vram_gb <= 20.5:
+        return 4096
+    if total_vram_gb <= 24.5:
+        return 4608
+    return None
+
+
+def _fit_token_budget(width: int, height: int, token_budget: int) -> tuple[int, int]:
+    width = _snap(width)
+    height = _snap(height)
+    current_tokens = _image_tokens(width, height)
+    if current_tokens <= max(1, int(token_budget)):
+        return width, height
+
+    scale = math.sqrt(float(token_budget) / float(current_tokens))
+    tuned_width = _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(round(width * scale))))
+    tuned_height = _snap(max(_EFFECTIVE_TOKEN_MULTIPLE, int(round(height * scale))))
+
+    while _image_tokens(tuned_width, tuned_height) > token_budget:
+        if tuned_width >= tuned_height and tuned_width > _EFFECTIVE_TOKEN_MULTIPLE:
+            tuned_width -= _EFFECTIVE_TOKEN_MULTIPLE
+        elif tuned_height > _EFFECTIVE_TOKEN_MULTIPLE:
+            tuned_height -= _EFFECTIVE_TOKEN_MULTIPLE
+        else:
+            break
+
+    return max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_width), max(_EFFECTIVE_TOKEN_MULTIPLE, tuned_height)
+
+
+def _tuned_default_steps(
+    steps: int,
+    hardware: dict[str, Any],
+    variant: str,
+    *,
+    resized: bool,
+) -> int:
+    device = safe.base._torch_device(hardware)
+    if device != "cuda":
+        return steps
+
+    total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
+    lowered_variant = str(variant or "base").lower()
+
+    # Only tune the common Raw default-looking path. Custom non-default values
+    # remain user intent and pass through unchanged.
+    if lowered_variant == "turbo" or int(steps) != 28:
+        return steps
+
+    if total_vram_gb <= 12.5:
+        return 12 if resized else 14
+    if total_vram_gb <= 16.5:
+        return 14 if resized else 16
+    if total_vram_gb <= 20.5:
+        return 18 if resized else 20
+    return steps
+
+
+def _adaptive_request(
+    request: dict[str, Any],
+    hardware: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    tuned = dict(request)
+    variant = str(tuned.get("variant") or "base").lower()
+    requested_width = _snap(int(tuned.get("width") or 1024))
+    requested_height = _snap(int(tuned.get("height") or 1024))
+    requested_steps = max(
+        1,
+        int(tuned.get("steps") or (8 if variant == "turbo" else 28)),
+    )
+
+    budget = _token_budget(hardware, variant)
+    tuned_width, tuned_height = requested_width, requested_height
+    if budget:
+        tuned_width, tuned_height = _fit_token_budget(
+            requested_width,
+            requested_height,
+            budget,
+        )
+
+    resized = tuned_width != requested_width or tuned_height != requested_height
+    tuned_steps = _tuned_default_steps(
+        requested_steps,
+        hardware,
+        variant,
+        resized=resized,
+    )
+
+    tuned["width"] = tuned_width
+    tuned["height"] = tuned_height
+    tuned["steps"] = tuned_steps
+
+    plan = {
+        "requested_width": requested_width,
+        "requested_height": requested_height,
+        "effective_width": tuned_width,
+        "effective_height": tuned_height,
+        "requested_steps": requested_steps,
+        "effective_steps": tuned_steps,
+        "requested_image_tokens": _image_tokens(requested_width, requested_height),
+        "effective_image_tokens": _image_tokens(tuned_width, tuned_height),
+        "token_budget": budget,
+        "resolution_scaled": resized,
+        "steps_tuned": tuned_steps != requested_steps,
+        "variant": variant,
+        "hardware_total_vram_gb": round(
+            float(hardware.get("total_vram_gb") or 0.0),
+            3,
+        ),
+    }
+    return tuned, plan
+
+
+def _cleanup_cuda_state() -> None:
+    gc.collect()
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+    try:
+        torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
+def _run(
+    request: dict[str, Any],
+    output_dir: Path,
+    progress_path: Path | None = None,
+) -> dict[str, Any]:
+    hardware = detect_torch_hardware(torch)
+    tuned_request, plan = _adaptive_request(request, hardware)
+
+    if progress_path is not None and (plan["resolution_scaled"] or plan["steps_tuned"]):
+        safe.base._write_progress(
+            progress_path,
+            "Adapting Krea request for this GPU",
+            0.03,
+        )
+
+    try:
+        result = safe._run(tuned_request, output_dir, progress_path)
+    finally:
+        _cleanup_cuda_state()
+
+    runtime = result.setdefault("runtime", {})
+    if isinstance(runtime, dict):
+        runtime["adaptive_request"] = plan
+        runtime["requested_width"] = plan["requested_width"]
+        runtime["requested_height"] = plan["requested_height"]
+        runtime["requested_steps"] = plan["requested_steps"]
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Adaptive Krea 2 worker")
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--result", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--progress", default=None)
+    args = parser.parse_args()
+
+    request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    progress_path = Path(args.progress) if args.progress else None
+
+    try:
+        result = _run(request, Path(args.output_dir), progress_path)
+        payload = result if isinstance(result, dict) else {"ok": True, "result": result}
+        if "ok" not in payload:
+            payload["ok"] = True
+        exit_code = 0
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        exit_code = 1
+
+    Path(args.result).write_text(json.dumps(payload), encoding="utf-8")
+    raise SystemExit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
