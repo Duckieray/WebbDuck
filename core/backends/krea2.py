@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -19,6 +18,54 @@ from core.exceptions import GenerationCancelledError
 from models.model_descriptor import ModelDescriptor
 
 
+def _runtime_python() -> str:
+    configured = str(os.getenv("WEBBDUCK_KREA2_PYTHON") or "").strip()
+    if configured:
+        return configured
+    runtime_home = Path(
+        os.getenv("WEBBDUCK_RUNTIME_HOME", "~/.local/share/webbduck/runtimes")
+    ).expanduser()
+    suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
+    return str(runtime_home / "krea2" / suffix)
+
+
+def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int | None) -> RuntimeError:
+    detail = str(result.get("error") or "Krea 2 runtime failed")
+    worker_trace = str(result.get("traceback") or "").strip()
+    logs = "\n".join(log_lines[-20:]).strip()
+    combined = "\n".join(part for part in (detail, worker_trace, logs) if part)
+    lowered = combined.lower()
+
+    # Local single-file Krea checkpoints still use the official Krea repository
+    # for non-transformer components. Hugging Face intentionally reports gated
+    # repositories using the same generic repository-not-found wording, which is
+    # otherwise very misleading to a WebbDuck user.
+    if (
+        "krea/krea-2-" in lowered
+        and (
+            "not a valid model identifier" in lowered
+            or "gated repo" in lowered
+            or "restricted" in lowered
+            or "401" in lowered
+            or "403" in lowered
+        )
+    ):
+        detail = (
+            "Krea 2 support components are gated on Hugging Face. Accept the Krea 2 "
+            "Community License for the selected Raw/Turbo model and configure a Hugging "
+            "Face token in WebbDuck Settings. The local checkpoint itself does not need "
+            "to be re-downloaded."
+        )
+        if worker_trace:
+            detail = f"{detail}\n{worker_trace}"
+    else:
+        detail = combined
+
+    if returncode not in (None, 0):
+        detail = f"Krea 2 runtime exited with code {returncode}.\n{detail}"
+    return RuntimeError(detail.strip())
+
+
 class Krea2DiffusersBackend(GenerationBackend):
     backend_id = "krea2_diffusers"
 
@@ -28,9 +75,8 @@ class Krea2DiffusersBackend(GenerationBackend):
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        python_exe = os.getenv("WEBBDUCK_KREA2_PYTHON") or sys.executable
         return probe_python_runtime(
-            python_exe,
+            _runtime_python(),
             (
                 ("diffusers", "Krea2Pipeline"),
                 ("diffusers", "Krea2Transformer2DModel"),
@@ -75,7 +121,7 @@ class Krea2DiffusersBackend(GenerationBackend):
             "seed": seed,
         }
 
-        python_exe = os.getenv("WEBBDUCK_KREA2_PYTHON") or sys.executable
+        python_exe = _runtime_python()
         worker = Path(__file__).with_name("krea2_worker.py")
         timeout_seconds = max(30.0, float(os.getenv("WEBBDUCK_KREA2_TIMEOUT_SECONDS", "1800")))
 
@@ -113,17 +159,13 @@ class Krea2DiffusersBackend(GenerationBackend):
                         raise RuntimeError(f"Krea 2 runtime timed out after {int(timeout_seconds)} seconds")
                     time.sleep(0.2)
 
-            logs = log_path.read_text(encoding="utf-8").splitlines()[-80:] if log_path.exists() else []
+            logs = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:] if log_path.exists() else []
             if not result_path.exists():
-                raise RuntimeError(
-                    f"Krea 2 runtime exited without a result (code {proc.returncode}).\n" + "\n".join(logs[-20:])
-                )
+                raise _worker_error({}, logs, proc.returncode)
 
             result = json.loads(result_path.read_text(encoding="utf-8"))
             if not result.get("ok"):
-                raise RuntimeError(
-                    (str(result.get("error") or "Krea 2 runtime failed") + "\n" + "\n".join(logs[-20:])).strip()
-                )
+                raise _worker_error(result, logs, proc.returncode)
 
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:
