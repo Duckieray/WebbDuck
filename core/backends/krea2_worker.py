@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,33 @@ def _component_source(variant: str) -> str:
     if variant == "turbo":
         return str(os.getenv("WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL") or "krea/Krea-2-Turbo")
     return str(os.getenv("WEBBDUCK_KREA2_BASE_COMPONENT_MODEL") or "krea/Krea-2-Raw")
+
+
+def _write_progress(
+    progress_path: Path | None,
+    stage: str,
+    progress: float,
+    step: int = 0,
+    total_steps: int = 0,
+) -> None:
+    """Publish one atomic progress snapshot for the host WebbDuck process."""
+    if progress_path is None:
+        return
+    payload = {
+        "stage": str(stage),
+        "progress": max(0.0, min(1.0, float(progress))),
+        "step": max(0, int(step)),
+        "total_steps": max(0, int(total_steps)),
+        "updated_at": time.time(),
+    }
+    try:
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = progress_path.with_name(progress_path.name + ".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, progress_path)
+    except Exception:
+        # Progress is telemetry only and must never fail generation.
+        pass
 
 
 def _source_layer_prefix(weight_key: str) -> str | None:
@@ -156,6 +184,7 @@ def overlay_single_file_transformer(
     checkpoint_path: Path,
     *,
     target_dtype: Any | None = None,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     """Stream one Krea transformer checkpoint into a Diffusers model/scaffold."""
     import torch
@@ -181,46 +210,53 @@ def overlay_single_file_transformer(
                 "rotation and is intentionally not handled by the FP8/BF16 overlay loader."
             )
 
-        with torch.no_grad():
-            for source_key in sorted(keys):
-                if source_key.endswith(
-                    (
-                        ".comfy_quant",
-                        ".weight_scale",
-                        ".weight_scale_2",
-                        ".input_scale",
-                        ".pre_quant_scale",
-                    )
-                ):
-                    continue
+        ignored_suffixes = (
+            ".comfy_quant",
+            ".weight_scale",
+            ".weight_scale_2",
+            ".input_scale",
+            ".pre_quant_scale",
+        )
+        source_keys = [key for key in sorted(keys) if not key.endswith(ignored_suffixes)]
+        total_source_keys = max(1, len(source_keys))
+        report_every = max(1, total_source_keys // 50)
 
+        with torch.no_grad():
+            for source_index, source_key in enumerate(source_keys, start=1):
                 target_key, reshape_mode = map_krea2_source_key(source_key)
                 normalized = strip_krea2_prefix(source_key)
                 if target_key is None and normalized in target_state:
                     target_key = normalized
                 if target_key is None:
                     ignored.append(source_key)
-                    continue
+                else:
+                    target = target_state.get(target_key)
+                    if target is None:
+                        raise RuntimeError(
+                            f"Krea checkpoint tensor {source_key!r} maps to unknown Diffusers key {target_key!r}."
+                        )
 
-                target = target_state.get(target_key)
-                if target is None:
-                    raise RuntimeError(
-                        f"Krea checkpoint tensor {source_key!r} maps to unknown Diffusers key {target_key!r}."
+                    source = handle.get_tensor(source_key)
+                    effective_dtype = target_dtype if target_dtype is not None else target.dtype
+                    value = _dequantize_source_tensor(
+                        handle,
+                        keys,
+                        source_key,
+                        source,
+                        effective_dtype,
                     )
+                    value = _reshape_for_target(value, target, reshape_mode, source_key)
+                    _assign_target_tensor(transformer, target_key, target, value)
+                    mapped.add(target_key)
+                    del source, value
 
-                source = handle.get_tensor(source_key)
-                effective_dtype = target_dtype if target_dtype is not None else target.dtype
-                value = _dequantize_source_tensor(
-                    handle,
-                    keys,
-                    source_key,
-                    source,
-                    effective_dtype,
-                )
-                value = _reshape_for_target(value, target, reshape_mode, source_key)
-                _assign_target_tensor(transformer, target_key, target, value)
-                mapped.add(target_key)
-                del source, value
+                if callable(progress_callback) and (
+                    source_index == total_source_keys or source_index % report_every == 0
+                ):
+                    try:
+                        progress_callback(source_index, total_source_keys)
+                    except Exception:
+                        pass
 
     missing = sorted(expected - mapped)
     if missing:
@@ -255,13 +291,35 @@ def _configure_offload(pipe: Any, device: str, total_vram_gb: float) -> str:
         pipe.to("cpu")
         return "cpu"
 
+    import torch
+
     mode = str(os.getenv("WEBBDUCK_KREA2_OFFLOAD", "auto")).strip().lower()
     if mode == "auto":
-        # A BF16 Krea transformer is larger than a 16 GB card by itself. Model
-        # CPU offload moves whole components and is therefore insufficient on
-        # that class of GPU; sequential offload keeps individual submodules on
-        # the accelerator only while they execute.
-        mode = "sequential" if total_vram_gb < 20.0 else ("model" if total_vram_gb < 28.0 else "none")
+        # Krea's 13B transformer is ~26 GB in BF16, so a 16 GB card still needs
+        # leaf-level offload. Diffusers group offload with CUDA streams preserves
+        # that low-memory behavior while prefetching upcoming layers to reduce the
+        # synchronization overhead of sequential_cpu_offload.
+        mode = "group" if total_vram_gb < 20.0 else ("model" if total_vram_gb < 28.0 else "none")
+
+    if mode in {"group", "stream", "group-stream", "leaf"}:
+        low_cpu_mem_usage = str(
+            os.getenv("WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM", "1")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            pipe.enable_group_offload(
+                onload_device=torch.device("cuda"),
+                offload_device=torch.device("cpu"),
+                offload_type="leaf_level",
+                use_stream=True,
+                record_stream=True,
+                low_cpu_mem_usage=low_cpu_mem_usage,
+            )
+            return "group-leaf-stream"
+        except Exception:
+            # Compatibility fallback for a component/hook combination that does
+            # not support group offloading on the installed Diffusers build.
+            pipe.enable_sequential_cpu_offload(device="cuda")
+            return "sequential-fallback"
 
     if mode in {"sequential", "seq"}:
         pipe.enable_sequential_cpu_offload(device="cuda")
@@ -274,7 +332,7 @@ def _configure_offload(pipe: Any, device: str, total_vram_gb: float) -> str:
     return "none"
 
 
-def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
+def _load_pipeline(request: dict, dtype: Any, report: Any | None = None) -> tuple[Any, dict[str, Any]]:
     from diffusers import Krea2Pipeline
 
     model_path = Path(str(request["model_path"])).expanduser()
@@ -282,11 +340,15 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
     variant = str(request.get("variant") or "base").lower()
 
     if model_format != "single" and model_path.is_dir():
+        if callable(report):
+            report("Loading Krea pipeline", 0.10)
         pipe = Krea2Pipeline.from_pretrained(
             str(model_path),
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
         )
+        if callable(report):
+            report("Krea pipeline loaded", 0.42)
         return pipe, {"source": "diffusers", "variant": variant}
 
     if not model_path.is_file():
@@ -299,13 +361,27 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
             "the generic single-file loader will not silently mis-handle them."
         )
 
-    component_source = _component_source(variant)
+    component_source = str(request.get("component_source") or _component_source(variant))
+    if callable(report):
+        report("Building Krea transformer", 0.08)
     transformer = _build_empty_transformer(component_source)
+
+    if callable(report):
+        report("Loading Krea checkpoint", 0.12)
+
+    def overlay_progress(current: int, total: int) -> None:
+        fraction = float(current) / float(max(1, total))
+        if callable(report):
+            report("Loading Krea checkpoint", 0.12 + (0.20 * fraction), current, total)
+
     overlay = overlay_single_file_transformer(
         transformer,
         model_path,
         target_dtype=dtype,
+        progress_callback=overlay_progress,
     )
+    if callable(report):
+        report("Loading Krea support models", 0.34)
     pipe = Krea2Pipeline.from_pretrained(
         component_source,
         transformer=transformer,
@@ -320,6 +396,8 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
     if callable(register_to_config):
         register_to_config(is_distilled=is_distilled)
 
+    if callable(report):
+        report("Krea pipeline loaded", 0.42)
     return pipe, {
         "source": "single",
         "variant": variant,
@@ -330,7 +408,7 @@ def _load_pipeline(request: dict, dtype: Any) -> tuple[Any, dict[str, Any]]:
     }
 
 
-def _run(request: dict, output_dir: Path) -> dict:
+def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     import torch
 
     prompt = str(request["prompt"])
@@ -340,7 +418,12 @@ def _run(request: dict, output_dir: Path) -> dict:
     guidance = float(request.get("guidance") if request.get("guidance") is not None else 4.5)
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") or 0)
+    timing: dict[str, float] = {}
 
+    def report(stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+        _write_progress(progress_path, stage, progress, step, total_steps)
+
+    report("Initializing Krea runtime", 0.06)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         try:
@@ -350,7 +433,9 @@ def _run(request: dict, output_dir: Path) -> dict:
     else:
         dtype = torch.float32
 
-    pipe, load_info = _load_pipeline(request, dtype)
+    load_started = time.perf_counter()
+    pipe, load_info = _load_pipeline(request, dtype, report=report)
+    timing["pipeline_load_seconds"] = time.perf_counter() - load_started
 
     total_vram_gb = 0.0
     if device == "cuda":
@@ -358,34 +443,70 @@ def _run(request: dict, output_dir: Path) -> dict:
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         except Exception:
             total_vram_gb = 0.0
-    offload = _configure_offload(pipe, device, total_vram_gb)
 
-    try:
-        pipe.vae.enable_tiling()
-    except Exception:
-        pass
+    report("Optimizing Krea GPU path", 0.44)
+    offload_started = time.perf_counter()
+    offload = _configure_offload(pipe, device, total_vram_gb)
+    timing["offload_setup_seconds"] = time.perf_counter() - offload_started
+
+    # Diffusers warns that VAE tiling combined with streamed group offload may
+    # need a dummy forward pass to establish device placement. Skip tiling for
+    # the streamed group mode; the transformer has already been offloaded, so a
+    # 1024px VAE decode is normally safe on the target 16 GB class GPU.
+    if not offload.startswith("group"):
+        try:
+            pipe.vae.enable_tiling()
+        except Exception:
+            pass
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
+    total_denoise_steps = max(1, steps * num_images)
+    inference_started = time.perf_counter()
+
     for index in range(num_images):
         generator_device = device if device == "cuda" else "cpu"
-        result = pipe(
-            prompt,
-            height=height,
-            width=width,
-            num_inference_steps=steps,
-            guidance_scale=guidance,
-            generator=torch.Generator(device=generator_device).manual_seed(seed + index),
+        report(
+            "Encoding Krea prompt",
+            0.46 + (0.47 * (index * steps) / total_denoise_steps),
+            index * steps,
+            total_denoise_steps,
         )
+
+        def on_step_end(_pipe: Any, step_index: int, _timestep: Any, callback_kwargs: dict) -> dict:
+            completed = index * steps + step_index + 1
+            progress = 0.48 + (0.47 * completed / total_denoise_steps)
+            stage = "Denoising with Krea 2"
+            if completed >= total_denoise_steps:
+                stage = "Decoding Krea image"
+            report(stage, progress, completed, total_denoise_steps)
+            return callback_kwargs
+
+        with torch.inference_mode():
+            result = pipe(
+                prompt,
+                height=height,
+                width=width,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                generator=torch.Generator(device=generator_device).manual_seed(seed + index),
+                callback_on_step_end=on_step_end,
+            )
         image = result.images[0]
+        report("Writing Krea image", 0.97, (index + 1) * steps, total_denoise_steps)
         path = output_dir / f"krea2_{index:03d}.png"
         image.save(path)
         saved.append(str(path))
+
+    timing["inference_seconds"] = time.perf_counter() - inference_started
+    timing["worker_total_seconds"] = sum(timing.values())
+    report("Returning Krea image", 0.975, total_denoise_steps, total_denoise_steps)
 
     return {
         "ok": True,
         "images": saved,
         "seed": seed,
+        "timing": {key: round(value, 6) for key, value in timing.items()},
         "runtime": {
             **load_info,
             "offload": offload,
@@ -401,13 +522,16 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--progress")
     args = parser.parse_args()
 
     result_path = Path(args.result)
+    progress_path = Path(args.progress) if args.progress else None
     try:
         request = json.loads(Path(args.request).read_text(encoding="utf-8"))
-        result = _run(request, Path(args.output_dir))
+        result = _run(request, Path(args.output_dir), progress_path=progress_path)
     except Exception as exc:
+        _write_progress(progress_path, "Krea generation error", 0.0)
         result = {
             "ok": False,
             "error": str(exc or exc.__class__.__name__),

@@ -47,7 +47,7 @@ def register_installed_backends() -> None:
     ensure_qwen_image_registered()
 
 
-def run_selected_model(settings: dict[str, Any], cancel_event=None):
+def run_selected_model(settings: dict[str, Any], cancel_event=None, progress_callback=None):
     """Resolve the selected checkpoint and execute its backend."""
     model_name = str(settings.get("base_model") or "").strip()
     if not model_name:
@@ -74,4 +74,9 @@ def run_selected_model(settings: dict[str, Any], cancel_event=None):
     backend.require_ready(descriptor)
 
     settings["model_profile"] = descriptor.to_public_dict()
-    return backend.generate(descriptor, settings, cancel_event=cancel_event)
+    return backend.generate(
+        descriptor,
+        settings,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
