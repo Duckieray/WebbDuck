@@ -175,6 +175,36 @@ def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int 
     return RuntimeError(detail.strip())
 
 
+def _report_progress(callback: Any, stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+    if not callable(callback):
+        return
+    try:
+        callback(stage, progress, step, total_steps)
+    except Exception:
+        # UI progress must never be allowed to fail inference.
+        pass
+
+
+def _forward_worker_progress(progress_path: Path, callback: Any, previous: str | None) -> str | None:
+    if not callable(callback) or not progress_path.exists():
+        return previous
+    try:
+        raw = progress_path.read_text(encoding="utf-8").strip()
+        if not raw or raw == previous:
+            return previous
+        event = json.loads(raw)
+        _report_progress(
+            callback,
+            str(event.get("stage") or "Generating with Krea 2"),
+            float(event.get("progress") or 0.0),
+            int(event.get("step") or 0),
+            int(event.get("total_steps") or 0),
+        )
+        return raw
+    except Exception:
+        return previous
+
+
 class Krea2DiffusersBackend(GenerationBackend):
     backend_id = "krea2_diffusers"
 
@@ -206,6 +236,7 @@ class Krea2DiffusersBackend(GenerationBackend):
         **kwargs: Any,
     ) -> tuple[list[Image.Image], int]:
         cancel_event = kwargs.get("cancel_event")
+        progress_callback = kwargs.get("progress_callback")
         if cancel_event is not None and cancel_event.is_set():
             raise GenerationCancelledError("Generation cancelled before Krea 2 runtime start")
 
@@ -225,6 +256,7 @@ class Krea2DiffusersBackend(GenerationBackend):
         variant = str(descriptor.detection.get("variant") or "base").lower()
         component_source = _component_source(variant)
         if descriptor.format == "single":
+            _report_progress(progress_callback, "Checking Krea components", 0.03)
             _preflight_component_access(component_source)
 
         payload = {
@@ -250,9 +282,11 @@ class Krea2DiffusersBackend(GenerationBackend):
             tmp = Path(tmp_raw)
             request_path = tmp / "request.json"
             result_path = tmp / "result.json"
+            progress_path = tmp / "progress.json"
             log_path = tmp / "worker.log"
             request_path.write_text(json.dumps(payload), encoding="utf-8")
 
+            _report_progress(progress_callback, "Starting Krea runtime", 0.05)
             with log_path.open("w", encoding="utf-8") as log_file:
                 proc = subprocess.Popen(
                     [
@@ -261,6 +295,7 @@ class Krea2DiffusersBackend(GenerationBackend):
                         "--request", str(request_path),
                         "--result", str(result_path),
                         "--output-dir", str(tmp),
+                        "--progress", str(progress_path),
                     ],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
@@ -268,7 +303,13 @@ class Krea2DiffusersBackend(GenerationBackend):
                     env=_worker_environment(),
                 )
                 started = time.monotonic()
+                last_progress: str | None = None
                 while proc.poll() is None:
+                    last_progress = _forward_worker_progress(
+                        progress_path,
+                        progress_callback,
+                        last_progress,
+                    )
                     if cancel_event is not None and cancel_event.is_set():
                         proc.terminate()
                         try:
@@ -280,6 +321,7 @@ class Krea2DiffusersBackend(GenerationBackend):
                         proc.kill()
                         raise RuntimeError(f"Krea 2 runtime timed out after {int(timeout_seconds)} seconds")
                     time.sleep(0.2)
+                _forward_worker_progress(progress_path, progress_callback, last_progress)
 
             logs = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:] if log_path.exists() else []
             if not result_path.exists():
@@ -288,6 +330,20 @@ class Krea2DiffusersBackend(GenerationBackend):
             result = json.loads(result_path.read_text(encoding="utf-8"))
             if not result.get("ok"):
                 raise _worker_error(result, logs, proc.returncode)
+
+            timing = result.get("timing")
+            if isinstance(timing, dict):
+                perf = settings.setdefault("performance_timing", {})
+                if isinstance(perf, dict):
+                    for key, value in timing.items():
+                        try:
+                            perf[f"krea_{key}"] = round(float(value), 6)
+                        except (TypeError, ValueError):
+                            continue
+
+            runtime = result.get("runtime")
+            if isinstance(runtime, dict):
+                settings["krea_runtime"] = runtime
 
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:
