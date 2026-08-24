@@ -149,6 +149,8 @@ def test_image_isolated_requirements_are_pinned():
     sdxl = (root / "sdxl.txt").read_text(encoding="utf-8")
     assert "diffusers==0.36.0" in sdxl
     assert "safetensors==0.5.3" in sdxl
+    # SentencePiece 0.2.0 has no CPython 3.13 wheel and tries a fragile source build.
+    assert "sentencepiece==0.2.2" in sdxl
     assert "git+https://github.com/huggingface/diffusers" not in sdxl
 
     for filename in ("flux.txt", "krea2.txt", "qwen_image.txt"):
