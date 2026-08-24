@@ -220,6 +220,30 @@ def _forward_worker_progress(
         return previous
 
 
+def _apply_effective_request_settings(
+    settings: dict[str, Any],
+    runtime: dict[str, Any],
+) -> None:
+    """Persist actual generation dimensions while retaining requested values."""
+    plan = runtime.get("adaptive_request")
+    if not isinstance(plan, dict):
+        return
+
+    for requested_key in ("width", "height", "steps"):
+        value = plan.get(f"requested_{requested_key}")
+        if value is not None:
+            settings[f"requested_{requested_key}"] = value
+
+    for effective_key in ("width", "height", "steps"):
+        value = plan.get(f"effective_{effective_key}")
+        if value is not None:
+            settings[effective_key] = value
+
+    settings["krea_request_adapted"] = bool(
+        plan.get("resolution_scaled") or plan.get("steps_tuned")
+    )
+
+
 class Krea2DiffusersBackend(GenerationBackend):
     backend_id = "krea2_diffusers"
 
@@ -376,6 +400,7 @@ class Krea2DiffusersBackend(GenerationBackend):
             runtime = result.get("runtime")
             if isinstance(runtime, dict):
                 settings["krea_runtime"] = runtime
+                _apply_effective_request_settings(settings, runtime)
 
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:
