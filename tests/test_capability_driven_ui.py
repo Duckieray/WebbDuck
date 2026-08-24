@@ -54,3 +54,23 @@ def test_unsupported_models_and_operations_are_blocked_in_browser():
 def test_visible_product_copy_is_neutralized_by_capability_layer():
     assert "Local Model-Driven Image Studio" in CAPS
     assert "Checkpoint-driven local image generation" in CAPS
+
+
+def test_studio_only_hides_mature_controls_when_capability_is_explicitly_false():
+    assert "function capabilityAllowed(caps, key)" in CAPS
+    assert "return caps?.[key] !== false" in CAPS
+    assert "restoreLegacyStudioControls" in CAPS
+    for section in (
+        "section-refiner",
+        "section-lora",
+        "section-embeddings",
+        "section-ip-adapter",
+    ):
+        assert f"setSectionVisible('{section}', capabilityAllowed" in CAPS
+
+
+def test_model_selection_refreshes_its_profile_instead_of_relying_on_catalog_timing():
+    assert "async function refreshSelectedProfile" in CAPS
+    assert "fetch(`/model-catalog/${encodeURIComponent(name)}`" in CAPS
+    assert "cache: 'no-store'" in CAPS
+    assert "select.addEventListener('change'" in CAPS
