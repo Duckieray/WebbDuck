@@ -19,6 +19,7 @@ from core.backends.krea2 import (
 )
 from core.backends.krea2_worker import (
     ScaledFP8Linear,
+    _activation_reserve_gb,
     _auto_execution_mode,
     _configure_execution,
     _encode_prompt_phase,
@@ -42,6 +43,20 @@ def _descriptor() -> ModelDescriptor:
         constraints={"dimension_multiple": 16},
         detection=detection,
     )
+
+
+def _cuda_hardware(*, free: float = 15.0, total: float = 16.0, fp8: bool = True) -> dict:
+    return {
+        "accelerator": "cuda",
+        "vendor": "nvidia",
+        "name": "Test GPU",
+        "free_vram_gb": free,
+        "total_vram_gb": total,
+        "bf16": True,
+        "fp8_storage": fp8,
+        "stream_prefetch": True,
+        "memory_tier": "constrained",
+    }
 
 
 def test_krea2_descriptor_matches_turbo_contract():
@@ -112,13 +127,7 @@ def test_krea2_component_preflight_rejects_incomplete_local_override(tmp_path):
 
 def test_krea2_progress_snapshot_round_trips_to_host_callback(tmp_path):
     progress_path = tmp_path / "progress.json"
-    _write_progress(
-        progress_path,
-        "Denoising with Krea 2",
-        0.75,
-        step=6,
-        total_steps=8,
-    )
+    _write_progress(progress_path, "Denoising with Krea 2", 0.75, step=6, total_steps=8)
     received = []
     raw = _forward_worker_progress(
         progress_path,
@@ -150,90 +159,116 @@ def test_scaled_fp8_overlay_replaces_linear_without_expanding_full_weight():
         [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
         dtype=torch.float8_e4m3fn,
     )
-    assert _install_scaled_fp8_linear(
-        model,
-        "0.weight",
-        qweight,
-        torch.tensor(0.5),
-        None,
-    )
+    assert _install_scaled_fp8_linear(model, "0.weight", qweight, torch.tensor(0.5), None)
     assert isinstance(model[0], ScaledFP8Linear)
     assert model[0].qweight.dtype == torch.float8_e4m3fn
     torch.testing.assert_close(model[0].bias, original_bias)
 
 
-def test_krea2_16gb_scaled_fp8_auto_path_is_resident():
-    assert _auto_execution_mode(preserved_fp8_linears=100, total_vram_gb=16.0) == "resident-fp8"
-    assert _auto_execution_mode(preserved_fp8_linears=0, total_vram_gb=16.0) == "transformer-block"
+def test_krea_activation_reserve_scales_with_resolution():
+    reserve_1k = _activation_reserve_gb(16.0, 1024, 1024)
+    reserve_2k = _activation_reserve_gb(16.0, 2048, 2048)
+    assert reserve_1k >= 2.0
+    assert reserve_2k > reserve_1k
 
 
-def test_krea2_resident_fp8_moves_only_vae_and_transformer_to_gpu(monkeypatch):
-    monkeypatch.setenv("WEBBDUCK_KREA2_OFFLOAD", "auto")
-    moved = []
-
-    class FakeModule:
-        def __init__(self, name):
-            self.name = name
-
-        def to(self, device):
-            moved.append((self.name, str(device)))
-            return self
-
-    class FakePipe:
-        vae = FakeModule("vae")
-        transformer = FakeModule("transformer")
-
-    mode = _configure_execution(
-        FakePipe(),
-        device="cuda",
-        total_vram_gb=16.0,
-        load_info={"preserved_fp8_linears": 100},
+def test_krea_auto_profile_uses_live_free_vram_not_only_card_capacity():
+    resident = _auto_execution_mode(
+        preserved_fp8_linears=100,
+        hardware=_cuda_hardware(free=15.0),
+        transformer_storage_gb=12.0,
+        reserve_gb=2.0,
     )
-    assert mode == "resident-fp8"
-    assert ("vae", "cuda") in moved
-    assert ("transformer", "cuda") in moved
+    constrained = _auto_execution_mode(
+        preserved_fp8_linears=100,
+        hardware=_cuda_hardware(free=13.0),
+        transformer_storage_gb=12.0,
+        reserve_gb=2.0,
+    )
+    assert resident == "resident-fp8"
+    assert constrained == "transformer-block"
 
 
-def test_krea2_dense_16gb_auto_uses_block_group_offload(monkeypatch):
+def test_krea_auto_profile_does_not_use_fp8_resident_when_device_lacks_fp8_storage():
+    mode = _auto_execution_mode(
+        preserved_fp8_linears=100,
+        hardware=_cuda_hardware(free=15.0, fp8=False),
+        transformer_storage_gb=12.0,
+        reserve_gb=2.0,
+    )
+    assert mode == "transformer-block"
+
+
+def test_krea_dense_model_can_be_resident_on_large_free_vram():
+    mode = _auto_execution_mode(
+        preserved_fp8_linears=0,
+        hardware=_cuda_hardware(free=34.0, total=40.0),
+        transformer_storage_gb=26.0,
+        reserve_gb=4.0,
+    )
+    assert mode == "resident"
+
+
+def test_krea_cuda_block_profile_uses_streamed_single_block_groups(monkeypatch):
     monkeypatch.setenv("WEBBDUCK_KREA2_OFFLOAD", "auto")
-    monkeypatch.setenv("WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM", "0")
     captured = {}
-
-    class FakeVAE:
-        def to(self, device):
-            captured["vae_device"] = str(device)
-            return self
 
     class FakeTransformer:
         def enable_group_offload(self, **kwargs):
             captured.update(kwargs)
 
+        def to(self, _device):
+            return self
+
     class FakePipe:
-        vae = FakeVAE()
         transformer = FakeTransformer()
 
     mode = _configure_execution(
         FakePipe(),
-        device="cuda",
-        total_vram_gb=16.0,
-        load_info={"preserved_fp8_linears": 0},
+        hardware=_cuda_hardware(free=10.0),
+        load_info={"preserved_fp8_linears": 100},
+        transformer_storage_gb=12.0,
+        reserve_gb=2.0,
     )
-    assert mode == "transformer-block-stream-2"
-    assert captured["vae_device"] == "cuda"
+    assert mode == "transformer-block-stream-1"
     assert captured["offload_type"] == "block_level"
-    assert captured["num_blocks_per_group"] == 2
+    assert captured["num_blocks_per_group"] == 1
     assert captured["use_stream"] is True
     assert captured["record_stream"] is True
-    assert captured["low_cpu_mem_usage"] is False
 
 
-def test_krea2_block_offload_falls_back_to_transformer_leaf(monkeypatch):
-    monkeypatch.setenv("WEBBDUCK_KREA2_OFFLOAD", "block")
-    calls = []
+def test_krea_rocm_block_profile_uses_conservative_sync_offload(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_KREA2_OFFLOAD", "auto")
+    captured = {}
 
-    class FakeVAE:
+    class FakeTransformer:
+        def enable_group_offload(self, **kwargs):
+            captured.update(kwargs)
+
         def to(self, _device):
             return self
+
+    class FakePipe:
+        transformer = FakeTransformer()
+
+    hardware = _cuda_hardware(free=10.0)
+    hardware.update({"accelerator": "rocm", "vendor": "amd", "stream_prefetch": False})
+    mode = _configure_execution(
+        FakePipe(),
+        hardware=hardware,
+        load_info={"preserved_fp8_linears": 0},
+        transformer_storage_gb=22.0,
+        reserve_gb=2.0,
+    )
+    assert mode == "transformer-block-sync-2"
+    assert captured["offload_type"] == "block_level"
+    assert captured["num_blocks_per_group"] == 2
+    assert captured["use_stream"] is False
+
+
+def test_krea_block_offload_falls_back_to_transformer_leaf(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_KREA2_OFFLOAD", "block")
+    calls = []
 
     class FakeTransformer:
         def enable_group_offload(self, **kwargs):
@@ -241,55 +276,60 @@ def test_krea2_block_offload_falls_back_to_transformer_leaf(monkeypatch):
             if kwargs["offload_type"] == "block_level":
                 raise RuntimeError("unsupported block grouping")
 
+        def to(self, _device):
+            return self
+
     class FakePipe:
-        vae = FakeVAE()
         transformer = FakeTransformer()
 
     mode = _configure_execution(
         FakePipe(),
-        device="cuda",
-        total_vram_gb=16.0,
+        hardware=_cuda_hardware(free=10.0),
         load_info={"preserved_fp8_linears": 0},
+        transformer_storage_gb=26.0,
+        reserve_gb=2.0,
     )
     assert mode == "transformer-leaf-stream-fallback"
     assert [call["offload_type"] for call in calls] == ["block_level", "leaf_level"]
 
 
-def test_krea2_prompt_encoding_is_one_gpu_phase_then_encoder_returns_to_cpu(monkeypatch):
+def test_krea_prompt_encoding_is_one_gpu_phase_and_detaches_encoder(monkeypatch):
     moved = []
     encoded = []
 
-    class FakeEncoder:
-        def eval(self):
-            return self
-
-        def requires_grad_(self, _value):
-            return self
+    class FakeEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.zeros(4))
 
         def to(self, device):
             moved.append(str(device))
             return self
 
     class FakePipe:
-        text_encoder = FakeEncoder()
+        def __init__(self):
+            self.text_encoder = FakeEncoder()
 
         def encode_prompt(self, *, prompt, device, **_kwargs):
             encoded.append((prompt, str(device)))
             return torch.ones(1, 2, 3), torch.ones(1, 2, dtype=torch.bool)
 
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
-    positive, mask, negative, negative_mask = _encode_prompt_phase(
-        FakePipe(),
+    pipe = FakePipe()
+    positive, mask, negative, negative_mask, mode = _encode_prompt_phase(
+        pipe,
         prompt="duck",
         guidance=4.5,
-        device="cuda",
+        hardware=_cuda_hardware(free=15.0),
     )
-    assert moved == ["cuda", "cpu"]
+    assert mode == "resident"
+    assert moved == ["cuda"]
     assert encoded == [("duck", "cuda"), ("", "cuda")]
-    assert positive.shape == (1, 2, 3)
-    assert mask.shape == (1, 2)
-    assert negative is not None
-    assert negative_mask is not None
+    assert pipe.text_encoder is None
+    assert positive.device.type == "cpu"
+    assert mask.device.type == "cpu"
+    assert negative is not None and negative.device.type == "cpu"
+    assert negative_mask is not None and negative_mask.device.type == "cpu"
 
 
 def test_krea2_backend_serializes_request_reads_progress_and_runtime(monkeypatch):
@@ -325,13 +365,22 @@ def test_krea2_backend_serializes_request_reads_progress_and_runtime(monkeypatch
                         "timing": {
                             "pipeline_load_seconds": 10.0,
                             "prompt_encode_seconds": 2.0,
+                            "denoise_seconds": 16.0,
+                            "decode_seconds": 2.0,
                             "denoise_decode_seconds": 18.0,
                             "inference_seconds": 20.0,
                         },
                         "runtime": {
-                            "offload": "resident-fp8",
+                            "offload": "transformer-block-stream-1",
+                            "initial_offload": "resident-fp8",
+                            "fallback_reason": "resident_oom",
                             "device": "cuda",
                             "execution_quantization": "scaled-fp8",
+                            "hardware": {
+                                "name": "Test GPU",
+                                "total_vram_gb": 16.0,
+                                "free_vram_gb": 12.0,
+                            },
                         },
                     }
                 ),
@@ -377,7 +426,8 @@ def test_krea2_backend_serializes_request_reads_progress_and_runtime(monkeypatch
     assert ("Denoising with Krea 2", 0.75, 6, 8) in progress_events
     assert settings["performance_timing"]["krea_pipeline_load_seconds"] == 10.0
     assert settings["performance_timing"]["krea_prompt_encode_seconds"] == 2.0
-    assert settings["performance_timing"]["krea_denoise_decode_seconds"] == 18.0
+    assert settings["performance_timing"]["krea_denoise_seconds"] == 16.0
+    assert settings["performance_timing"]["krea_decode_seconds"] == 2.0
     assert settings["performance_timing"]["krea_inference_seconds"] == 20.0
-    assert settings["krea_runtime"]["offload"] == "resident-fp8"
-    assert settings["krea_runtime"]["execution_quantization"] == "scaled-fp8"
+    assert settings["krea_runtime"]["offload"] == "transformer-block-stream-1"
+    assert settings["krea_runtime"]["fallback_reason"] == "resident_oom"
