@@ -68,5 +68,10 @@ def run_selected_model(settings: dict[str, Any], cancel_event=None):
     register_installed_backends()
     backend = backend_resolver.resolve(descriptor)
 
+    # Readiness is the hard boundary between model routing and worker launch.
+    # Never discover a stale/missing isolated runtime only after a GPU job has
+    # started and a backend-specific subprocess has imported half its stack.
+    backend.require_ready(descriptor)
+
     settings["model_profile"] = descriptor.to_public_dict()
     return backend.generate(descriptor, settings, cancel_event=cancel_event)
