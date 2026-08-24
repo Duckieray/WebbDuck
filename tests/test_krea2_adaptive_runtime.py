@@ -36,12 +36,18 @@ def test_16gb_raw_portrait_is_scaled_to_safe_token_budget():
 
     assert plan["requested_image_tokens"] == 4704
     assert plan["token_budget"] == 3584
-    assert tuned["width"] == 784
-    assert tuned["height"] == 1168
+    assert tuned["width"] == 768
+    assert tuned["height"] == 1152
     assert plan["effective_image_tokens"] <= 3584
     assert plan["resolution_scaled"] is True
     assert tuned["steps"] == 14
     assert plan["steps_tuned"] is True
+
+
+def test_square_request_stays_square_when_scaled():
+    width, height = adaptive._fit_token_budget(1024, 1024, 3584)
+    assert width == height
+    assert adaptive._image_tokens(width, height) <= 3584
 
 
 def test_custom_step_count_is_preserved_when_resolution_is_scaled():
@@ -136,8 +142,8 @@ def test_effective_request_replaces_saved_generation_dimensions():
             "requested_width": 896,
             "requested_height": 1344,
             "requested_steps": 28,
-            "effective_width": 784,
-            "effective_height": 1168,
+            "effective_width": 768,
+            "effective_height": 1152,
             "effective_steps": 14,
             "resolution_scaled": True,
             "steps_tuned": True,
@@ -149,8 +155,8 @@ def test_effective_request_replaces_saved_generation_dimensions():
     assert settings["requested_width"] == 896
     assert settings["requested_height"] == 1344
     assert settings["requested_steps"] == 28
-    assert settings["width"] == 784
-    assert settings["height"] == 1168
+    assert settings["width"] == 768
+    assert settings["height"] == 1152
     assert settings["steps"] == 14
     assert settings["krea_request_adapted"] is True
 
