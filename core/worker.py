@@ -151,6 +151,21 @@ def _build_kernel_compat_message(exc: Exception) -> str:
     return f"{base} Original error: {exc}"
 
 
+def _generation_progress_callback(loop: asyncio.AbstractEventLoop):
+    """Bridge synchronous/backend-worker progress into the async UI state bus."""
+
+    def report(stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+        update_stage(str(stage or "Generating"))
+        update_progress(max(0.0, min(1.0, float(progress))), int(step), int(total_steps))
+        try:
+            asyncio.run_coroutine_threadsafe(broadcast_state(snapshot()), loop)
+        except Exception:
+            # Progress is best-effort and must never fail a generation job.
+            pass
+
+    return report
+
+
 async def run_upscale(job, cancel_event=None):
     """Execute upscale task."""
     if cancel_event is not None and cancel_event.is_set():
@@ -281,7 +296,11 @@ async def gpu_worker(queue):
             gen_started_monotonic = time.perf_counter()
             gen_started_utc = datetime.utcnow().isoformat() + "Z"
             images, seed = await loop.run_in_executor(
-                None, run_selected_model, job["settings"], cancel_event
+                None,
+                run_selected_model,
+                job["settings"],
+                cancel_event,
+                _generation_progress_callback(loop),
             )
             gen_finished_monotonic = time.perf_counter()
             gen_finished_utc = datetime.utcnow().isoformat() + "Z"
