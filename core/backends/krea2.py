@@ -275,7 +275,7 @@ class Krea2DiffusersBackend(GenerationBackend):
         }
 
         python_exe = _runtime_python()
-        worker = Path(__file__).with_name("krea2_worker.py")
+        worker = Path(__file__).with_name("krea2_worker_safe.py")
         timeout_seconds = max(30.0, float(os.getenv("WEBBDUCK_KREA2_TIMEOUT_SECONDS", "1800")))
 
         with tempfile.TemporaryDirectory(prefix="webbduck_krea2_") as tmp_raw:
