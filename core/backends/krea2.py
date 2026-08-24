@@ -30,12 +30,116 @@ def _runtime_python() -> str:
     return str(runtime_home / "krea2" / suffix)
 
 
+def _component_source(variant: str) -> str:
+    explicit = str(os.getenv("WEBBDUCK_KREA2_COMPONENT_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    if variant == "turbo":
+        return str(os.getenv("WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL") or "krea/Krea-2-Turbo")
+    return str(os.getenv("WEBBDUCK_KREA2_BASE_COMPONENT_MODEL") or "krea/Krea-2-Raw")
+
+
+def _huggingface_token() -> tuple[str, str | None]:
+    """Resolve WebbDuck Settings/env credentials, then honor normal HF CLI auth."""
+    token, source = resolve_provider_token("huggingface")
+    if token:
+        return token, source
+    try:
+        from huggingface_hub import get_token
+
+        token = str(get_token() or "").strip()
+    except Exception:
+        token = ""
+    return (token, "huggingface-cli") if token else ("", None)
+
+
 def _worker_environment() -> dict[str, str]:
     env = dict(os.environ)
-    token, _source = resolve_provider_token("huggingface")
+    token, _source = _huggingface_token()
     if token:
         env["HF_TOKEN"] = token
     return env
+
+
+def _component_access_error(component_source: str, exc: Exception, *, token_configured: bool) -> RuntimeError:
+    text = str(exc or exc.__class__.__name__)
+    lowered = text.lower()
+    repo_url = f"https://huggingface.co/{component_source}"
+
+    if "403" in lowered or "gated" in lowered or "restricted" in lowered:
+        if token_configured:
+            return RuntimeError(
+                f"Krea 2 support components are gated on Hugging Face and the configured token is not "
+                f"authorized for {component_source}. Accept the Krea 2 Community License for that model "
+                f"at {repo_url}, then retry. The selected local checkpoint does not need to be re-downloaded."
+            )
+        return RuntimeError(
+            f"Krea 2 support components are gated on Hugging Face. Accept the Krea 2 Community License "
+            f"for {component_source} at {repo_url}, then configure a Hugging Face token in WebbDuck "
+            "Settings. The selected local checkpoint does not need to be re-downloaded."
+        )
+
+    if "401" in lowered or "unauthorized" in lowered or "invalid token" in lowered:
+        return RuntimeError(
+            f"Hugging Face rejected the credentials needed for Krea 2 support components ({component_source}). "
+            "Replace the Hugging Face token in WebbDuck Settings and make sure the Krea 2 Community License "
+            f"has been accepted at {repo_url}."
+        )
+
+    if "offline" in lowered or "localentrynotfound" in lowered or "local entry" in lowered:
+        return RuntimeError(
+            f"Krea 2 needs support components from {component_source}, but they are not available in the "
+            "local Hugging Face cache while offline. Cache the licensed support-component repository first "
+            "or set WEBBDUCK_KREA2_COMPONENT_MODEL to a complete local Diffusers component directory."
+        )
+
+    return RuntimeError(
+        f"Unable to verify Krea 2 support components from {component_source}: {text}"
+    )
+
+
+def _preflight_component_access(component_source: str) -> None:
+    """Verify a single-file Krea checkpoint can obtain its non-transformer assets.
+
+    This intentionally downloads at most tiny JSON configuration files. It does
+    not fetch model weights. The purpose is to detect gated/license/token failures
+    before the expensive Krea transformer scaffold/overlay path starts.
+    """
+    local = Path(component_source).expanduser()
+    if local.exists():
+        if not local.is_dir():
+            raise RuntimeError(
+                "WEBBDUCK_KREA2_COMPONENT_MODEL must point to a complete local Diffusers directory, "
+                f"not a file: {local}"
+            )
+        required = (
+            local / "model_index.json",
+            local / "transformer" / "config.json",
+        )
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "The configured local Krea 2 component directory is incomplete. Missing: "
+                + ", ".join(missing)
+            )
+        return
+
+    token, _source = _huggingface_token()
+    try:
+        from huggingface_hub import hf_hub_download
+
+        for filename in ("model_index.json", "transformer/config.json"):
+            hf_hub_download(
+                repo_id=component_source,
+                filename=filename,
+                token=token or None,
+            )
+    except Exception as exc:
+        raise _component_access_error(
+            component_source,
+            exc,
+            token_configured=bool(token),
+        ) from exc
 
 
 def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int | None) -> RuntimeError:
@@ -45,10 +149,9 @@ def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int 
     combined = "\n".join(part for part in (detail, worker_trace, logs) if part)
     lowered = combined.lower()
 
-    # Local single-file Krea checkpoints still use the official Krea repository
-    # for non-transformer components. Hugging Face intentionally reports gated
-    # repositories using the same generic repository-not-found wording, which is
-    # otherwise very misleading to a WebbDuck user.
+    # Keep this as a worker-side fallback in case access disappears after the
+    # host preflight. Known gating failures stay concise in the UI; the worker
+    # traceback remains in its job log for debugging.
     if (
         "krea/krea-2-" in lowered
         and (
@@ -60,13 +163,10 @@ def _worker_error(result: dict[str, Any], log_lines: list[str], returncode: int 
         )
     ):
         detail = (
-            "Krea 2 support components are gated on Hugging Face. Accept the Krea 2 "
-            "Community License for the selected Raw/Turbo model and configure a Hugging "
-            "Face token in WebbDuck Settings. The local checkpoint itself does not need "
-            "to be re-downloaded."
+            "Krea 2 support components are gated on Hugging Face. Accept the Krea 2 Community License "
+            "for the selected Raw/Turbo support model and configure an authorized Hugging Face token in "
+            "WebbDuck Settings. The selected local checkpoint does not need to be re-downloaded."
         )
-        if worker_trace:
-            detail = f"{detail}\n{worker_trace}"
     else:
         detail = combined
 
@@ -84,7 +184,7 @@ class Krea2DiffusersBackend(GenerationBackend):
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        return probe_python_runtime(
+        payload = probe_python_runtime(
             _runtime_python(),
             (
                 ("diffusers", "Krea2Pipeline"),
@@ -92,6 +192,12 @@ class Krea2DiffusersBackend(GenerationBackend):
                 ("accelerate", "init_empty_weights"),
             ),
         )
+        if not payload.get("ready"):
+            payload["repair_hint"] = (
+                "Repair/update this isolated runtime with "
+                "`python tools/prepare_model_runtimes.py krea2`, then restart WebbDuck."
+            )
+        return payload
 
     def generate(
         self,
@@ -116,11 +222,17 @@ class Krea2DiffusersBackend(GenerationBackend):
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
         seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
+        variant = str(descriptor.detection.get("variant") or "base").lower()
+        component_source = _component_source(variant)
+        if descriptor.format == "single":
+            _preflight_component_access(component_source)
+
         payload = {
             "model_path": descriptor.path,
             "model_format": descriptor.format,
-            "variant": descriptor.detection.get("variant"),
+            "variant": variant,
             "quantization": descriptor.detection.get("quantization"),
+            "component_source": component_source,
             "prompt": prompt,
             "width": int(settings.get("width") or defaults.get("width") or 1024),
             "height": int(settings.get("height") or defaults.get("height") or 1024),
