@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.backends import krea2
 from core.backends import krea2_worker_adaptive as adaptive
 
 
@@ -100,6 +101,36 @@ def test_turbo_keeps_its_step_contract():
 
     assert tuned["steps"] == 8
     assert plan["steps_tuned"] is False
+
+
+def test_effective_request_replaces_saved_generation_dimensions():
+    settings = {
+        "width": 896,
+        "height": 1344,
+        "steps": 28,
+    }
+    runtime = {
+        "adaptive_request": {
+            "requested_width": 896,
+            "requested_height": 1344,
+            "requested_steps": 28,
+            "effective_width": 784,
+            "effective_height": 1168,
+            "effective_steps": 14,
+            "resolution_scaled": True,
+            "steps_tuned": True,
+        }
+    }
+
+    krea2._apply_effective_request_settings(settings, runtime)
+
+    assert settings["requested_width"] == 896
+    assert settings["requested_height"] == 1344
+    assert settings["requested_steps"] == 28
+    assert settings["width"] == 784
+    assert settings["height"] == 1168
+    assert settings["steps"] == 14
+    assert settings["krea_request_adapted"] is True
 
 
 def test_backend_launches_adaptive_worker():
