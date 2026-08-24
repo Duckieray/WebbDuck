@@ -48,7 +48,17 @@ def test_streamed_block_oom_downgrades_to_synchronous_profiles():
         {"accelerator": "cuda"},
     )
     assert retries[0] == ("transformer-block", False)
+    assert ("group", False) in retries
     assert ("sequential", False) in retries
+
+
+def test_leaf_oom_does_not_retry_the_same_leaf_profile():
+    retries = safe._retry_profiles(
+        "transformer-leaf-sync",
+        {"accelerator": "cuda"},
+    )
+    assert ("group", False) not in retries
+    assert retries == [("sequential", False)]
 
 
 def test_resident_oom_never_retries_resident():
