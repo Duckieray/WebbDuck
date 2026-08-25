@@ -2593,7 +2593,7 @@ async function handleRegenerateFromLightbox(curr) {
 }
 
 async function handleStageSettingsFromLightbox(curr) {
-    const ok = await applyLightboxSettingsToStudio(curr, { preserveSeed: true });
+    const ok = await applyLightboxSettingsToStudio(curr, { preserveSeed: false });
     if (!ok) return;
     toast('Settings staged in Studio', 'success');
 }
