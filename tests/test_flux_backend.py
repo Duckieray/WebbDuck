@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from core.backends.flux import FluxDiffusersBackend
+from core.backends.flux import FluxDiffusersBackend, _worker_environment
 from models.model_descriptor import ModelDescriptor, capabilities_for_architecture, defaults_for_architecture
 
 
@@ -106,11 +106,12 @@ def test_flux_backend_serializes_gguf_component_contract(monkeypatch):
     captured = {}
 
     class FakeProcess:
-        def __init__(self, cmd, **_kwargs):
+        def __init__(self, cmd, **kwargs):
             request_path = Path(cmd[cmd.index("--request") + 1])
             result_path = Path(cmd[cmd.index("--result") + 1])
             output_dir = Path(cmd[cmd.index("--output-dir") + 1])
             captured["payload"] = json.loads(request_path.read_text(encoding="utf-8"))
+            captured["env"] = dict(kwargs.get("env") or {})
             image_path = output_dir / "flux_000.png"
             Image.new("RGB", (16, 16), "white").save(image_path)
             result_path.write_text(
@@ -133,6 +134,11 @@ def test_flux_backend_serializes_gguf_component_contract(monkeypatch):
         def poll(self):
             return self.returncode
 
+    monkeypatch.setattr("core.backends.flux._preflight_component_access", lambda _model: None)
+    monkeypatch.setattr(
+        "core.backends.flux.resolve_provider_token",
+        lambda _provider: ("hf_test_token", "settings"),
+    )
     monkeypatch.setattr("core.backends.flux.subprocess.Popen", FakeProcess)
     backend = FluxDiffusersBackend()
     settings = {
@@ -151,7 +157,21 @@ def test_flux_backend_serializes_gguf_component_contract(monkeypatch):
     assert captured["payload"]["model_format"] == "gguf"
     assert captured["payload"]["component_model"] == "black-forest-labs/FLUX.2-klein-9B"
     assert captured["payload"]["detection"]["quantization"] == "Q5_K_M"
+    assert captured["env"]["HF_TOKEN"] == "hf_test_token"
+    assert captured["env"]["HUGGING_FACE_HUB_TOKEN"] == "hf_test_token"
     assert settings["flux_runtime"]["offload_mode"] == "model_cpu"
+
+
+def test_flux_worker_environment_propagates_settings_token(monkeypatch):
+    monkeypatch.setattr(
+        "core.backends.flux.resolve_provider_token",
+        lambda _provider: ("hf_settings_token", "settings"),
+    )
+
+    env = _worker_environment()
+
+    assert env["HF_TOKEN"] == "hf_settings_token"
+    assert env["HUGGING_FACE_HUB_TOKEN"] == "hf_settings_token"
 
 
 def test_flux_worker_uses_explicit_klein_config_for_gguf():
