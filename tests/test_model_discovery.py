@@ -43,6 +43,39 @@ def test_local_discovery_finds_all_installed_diffusers_image_families(tmp_path):
     assert models["Qwen-Image-2512"]["arch"] == "qwen_image"
 
 
+def test_local_discovery_finds_flux2_klein_9b_gguf(tmp_path):
+    root = tmp_path / "checkpoint"
+    checkpoint = root / "flux" / "flux-2-klein-9b-Q5_K_M.gguf"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"")
+
+    models = discover_local_image_models(root)
+    entry = models["flux-2-klein-9b-Q5_K_M"]
+
+    assert entry["arch"] == "flux"
+    assert entry["type"] == "gguf"
+    assert entry["path"] == checkpoint
+    assert entry["detection"]["family"] == "flux2_klein"
+    assert entry["detection"]["variant"] == "distilled"
+    assert entry["detection"]["parameter_size"] == "9B"
+    assert entry["detection"]["quantization"] == "Q5_K_M"
+    assert entry["detection"]["component_model"] == "black-forest-labs/FLUX.2-klein-9B"
+
+    payload = public_model_catalog(models)[0]
+    assert payload["supported"] is True
+    assert payload["defaults"]["steps"] == 4
+    assert payload["defaults"]["cfg"] == 1.0
+
+
+def test_local_discovery_ignores_unknown_gguf(tmp_path):
+    root = tmp_path / "checkpoint"
+    checkpoint = root / "misc" / "something-Q5_K_M.gguf"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"")
+
+    assert discover_local_image_models(root) == {}
+
+
 def test_single_file_uses_explicit_family_folder_hint_only(tmp_path):
     root = tmp_path / "checkpoint"
     (root / "sdxl").mkdir(parents=True)
