@@ -15,6 +15,8 @@ import time
 import traceback
 from pathlib import Path
 
+from flux_lora import apply_flux_loras
+
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
 
@@ -290,6 +292,17 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     pipe, runtime = _load_flux_pipeline(request, dtype, progress_path)
     pipeline_load_seconds = time.monotonic() - load_started
 
+    raw_loras = request.get("loras") or []
+
+    def _lora_progress(stage: str, progress: float) -> None:
+        _write_progress(progress_path, stage, progress)
+
+    applied_loras = apply_flux_loras(
+        pipe,
+        raw_loras,
+        progress=_lora_progress if raw_loras else None,
+    )
+
     offload_requested = str(os.getenv("WEBBDUCK_FLUX_OFFLOAD", "auto")).strip().lower()
     detection = request.get("detection") or {}
     is_gguf_9b = model_format == "gguf" and str(detection.get("parameter_size") or "").upper() == "9B"
@@ -454,6 +467,8 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             "effective_height": height,
             "steps": steps,
             "guidance": guidance,
+            "lora_count": len(applied_loras),
+            "loras": applied_loras,
         }
     )
     _write_progress(progress_path, "FLUX.2 complete", 1.0, steps, steps)
