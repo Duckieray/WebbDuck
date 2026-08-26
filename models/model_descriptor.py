@@ -98,7 +98,16 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         identity_adapter=True,
         tokenize=True,
     ),
+    # Generic FLUX entries currently route to the FLUX.2 Klein runtime, so keep
+    # native identity references available for backward-compatible descriptors.
     "flux": ModelCapabilities(
+        text2img=True,
+        img2img=True,
+        lora=True,
+        identity_adapter=True,
+    ),
+    "flux1": ModelCapabilities(text2img=True, img2img=True, lora=True),
+    "flux2": ModelCapabilities(
         text2img=True,
         img2img=True,
         lora=True,
@@ -115,6 +124,8 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
 _BACKENDS: dict[str, str] = {
     "sdxl": "sdxl_diffusers",
     "flux": "flux_diffusers",
+    "flux1": "flux_diffusers",
+    "flux2": "flux_diffusers",
     "krea2": "krea2_diffusers",
     "qwen_image": "qwen_image_diffusers",
 }
@@ -129,12 +140,26 @@ _IMPLEMENTED_BACKENDS = {
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "sdxl": {"dimension_multiple": 8},
     "flux": {"dimension_multiple": 8},
+    "flux1": {"dimension_multiple": 8},
+    "flux2": {"dimension_multiple": 8},
     "krea2": {"dimension_multiple": 16},
     "qwen_image": {"dimension_multiple": 16},
 }
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
     "flux": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 4,
+        "cfg": 1.0,
+    },
+    "flux1": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 20,
+        "cfg": 3.5,
+    },
+    "flux2": {
         "width": 1024,
         "height": 1024,
         "steps": 4,
