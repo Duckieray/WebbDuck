@@ -1,9 +1,9 @@
 """Native FP8 inference kernel for WebbDuck's scaled Krea linears.
 
 Krea community checkpoints can store a linear weight as FP8 qweight plus a
-scalar or per-output-channel dequantization scale.  The original WebbDuck
+scalar or per-output-channel dequantization scale. The original WebbDuck
 storage wrapper preserved the FP8 checkpoint in memory but converted the whole
-weight to BF16/FP16 on *every* ``F.linear`` call.  For Krea's large transformer
+weight to BF16/FP16 on *every* ``F.linear`` call. For Krea's large transformer
 that repeated dequantization is both a latency and transient-VRAM penalty.
 
 This module keeps the same checkpoint math while using PyTorch's native FP8
@@ -19,9 +19,9 @@ The post-GEMM output scaling is algebraically equivalent to multiplying every
 row of qweight by its stored output-channel scale before the matmul, but avoids
 Blackwell's currently problematic per-row ``_scaled_mm`` scaling path.
 
-This is an optional optimization.  Unsupported hardware, unsupported scale
+This is an optional optimization. Unsupported hardware, unsupported scale
 shapes, kernel probe failures, or non-FP8 inputs automatically retain the
-existing storage-only implementation.  CUDA OOMs are re-raised so the hardened
+existing storage-only implementation. CUDA OOMs are re-raised so the hardened
 Krea offload ladder can still downgrade the request safely.
 """
 
@@ -190,30 +190,30 @@ def _native_forward(self: Any, x: torch.Tensor) -> torch.Tensor:
         x2d = x.reshape(-1, int(self.in_features)).contiguous()
         fp8_dtype = qweight.dtype
         fp8_max = float(torch.finfo(fp8_dtype).max)
-        amax = x2d.abs().amax().float()
 
-        if not bool(torch.isfinite(amax)):
-            raise RuntimeError("non-finite activation range")
-        if float(amax.item()) == 0.0:
-            output = torch.zeros(
-                (x2d.shape[0], int(self.out_features)),
-                device=x.device,
-                dtype=x.dtype,
-            )
-        else:
-            dequant_a = (amax / fp8_max).reshape(1, 1)
-            quant_multiplier = (1.0 / dequant_a).to(dtype=x.dtype)
-            x_fp8 = torch.clamp(x2d * quant_multiplier, -fp8_max, fp8_max).to(fp8_dtype)
-            scale_b = torch.ones((1, 1), device=x.device, dtype=torch.float32)
-            output = torch._scaled_mm(
-                x_fp8,
-                qweight.t(),
-                scale_a=dequant_a,
-                scale_b=scale_b,
-                out_dtype=x.dtype,
-                use_fast_accum=True,
-            )
-            del dequant_a, quant_multiplier, x_fp8, scale_b
+        # Keep dynamic activation quantization fully on the accelerator. Host
+        # reads such as ``amax.item()`` would synchronize every linear layer and
+        # destroy the throughput benefit of the native GEMM path.
+        amax = x2d.abs().amax().float()
+        amax = torch.nan_to_num(
+            amax,
+            nan=1.0,
+            posinf=fp8_max,
+            neginf=fp8_max,
+        ).clamp_min(torch.finfo(torch.float32).tiny)
+        dequant_a = (amax / fp8_max).reshape(1, 1)
+        quant_multiplier = (1.0 / dequant_a).to(dtype=x.dtype)
+        x_fp8 = torch.clamp(x2d * quant_multiplier, -fp8_max, fp8_max).to(fp8_dtype)
+        scale_b = torch.ones((1, 1), device=x.device, dtype=torch.float32)
+        output = torch._scaled_mm(
+            x_fp8,
+            qweight.t(),
+            scale_a=dequant_a,
+            scale_b=scale_b,
+            out_dtype=x.dtype,
+            use_fast_accum=True,
+        )
+        del dequant_a, quant_multiplier, x_fp8, scale_b
 
         output = _apply_output_scale(output, scale, int(self.out_features))
         bias = getattr(self, "bias", None)
