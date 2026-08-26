@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.flux_lora import inject_lora_trigger, lora_trigger_phrase, resolve_flux_loras
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
 from core.provider_credentials import resolve_provider_token
@@ -190,7 +191,10 @@ class FluxDiffusersBackend(GenerationBackend):
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
         python_exe = os.getenv("WEBBDUCK_FLUX_PYTHON") or sys.executable
-        required = [("diffusers", "Flux2KleinPipeline")]
+        required = [
+            ("diffusers", "Flux2KleinPipeline"),
+            ("peft", "LoraConfig"),
+        ]
         if descriptor.format == "gguf":
             required.extend(
                 [
@@ -229,6 +233,13 @@ class FluxDiffusersBackend(GenerationBackend):
         if not prompt:
             raise ValueError("Prompt is required.")
 
+        resolved_loras = resolve_flux_loras(settings.get("loras", []))
+        trigger_phrase = lora_trigger_phrase(resolved_loras)
+        prompt = inject_lora_trigger(prompt, trigger_phrase)
+        if resolved_loras:
+            settings["prompt"] = prompt
+            settings["lora_trigger_phrase"] = trigger_phrase
+
         defaults = descriptor.defaults or {}
         seed_raw = settings.get("seed")
         seed = int(seed_raw) if seed_raw is not None else int(time.time_ns() & 0xFFFFFFFF)
@@ -247,6 +258,7 @@ class FluxDiffusersBackend(GenerationBackend):
             "component_model": component_model,
             "detection": dict(descriptor.detection or {}),
             "prompt": prompt,
+            "loras": resolved_loras,
             "input_image": str(settings.get("image") or "").strip() or None,
             "width": int(settings.get("width") or defaults.get("width") or 1024),
             "height": int(settings.get("height") or defaults.get("height") or 1024),
