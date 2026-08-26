@@ -9,9 +9,9 @@ function byId(id) {
     return document.getElementById(id);
 }
 
-function selectedModelLooksFlux() {
+function selectedModelLooksFlux2() {
     const value = String(byId('base_model')?.value || '').toLowerCase();
-    return value.includes('flux');
+    return value.includes('klein') || /flux[._\s-]*2(?:\b|[._\s-])/.test(value);
 }
 
 function ensureNativeFluxOption() {
@@ -57,8 +57,8 @@ function syncProviderForSelectedModel() {
     if (!select) return;
     ensureNativeFluxOption();
 
-    const isFlux = selectedModelLooksFlux();
-    if (isFlux) {
+    const isFlux2 = selectedModelLooksFlux2();
+    if (isFlux2) {
         select.value = 'flux2_native';
         setScaleControlsVisible(false);
         const hint = byId('identity-persona-hint');
