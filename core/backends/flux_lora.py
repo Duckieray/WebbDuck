@@ -116,9 +116,21 @@ def apply_flux_loras(
 
         adapter_name = _adapter_name(name, index)
         if progress is not None:
-            progress(f"Loading FLUX.2 LoRA {index + 1}/{total}: {name}", 0.49 + 0.03 * ((index + 1) / total))
+            progress(
+                f"Loading FLUX.2 LoRA {index + 1}/{total}: {name}",
+                0.49 + 0.03 * ((index + 1) / total),
+            )
         print(f"[flux] loading LoRA {name} from {path} at weight={weight}", flush=True)
-        pipe.load_lora_weights(str(path), adapter_name=adapter_name)
+
+        # Diffusers 0.39 documents local LoRA loading as a directory plus
+        # ``weight_name``. Using that explicit form also avoids a local file path
+        # being interpreted as a Hub model id by loader validation.
+        pipe.load_lora_weights(
+            str(path.parent),
+            weight_name=path.name,
+            adapter_name=adapter_name,
+            low_cpu_mem_usage=True,
+        )
         adapter_names.append(adapter_name)
         adapter_weights.append(weight)
         applied.append(
