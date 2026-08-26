@@ -10,7 +10,9 @@ that are easier to reason about than low-level offload policy:
 * report the effective request and post-run cleanup state back to WebbDuck.
 
 The underlying hardened worker still owns dtype coercion, offload fallback, and
-all Krea-specific execution details.
+all Krea-specific execution details. When the installed CUDA/PyTorch runtime
+passes a native FP8 GEMM probe, scaled Krea linears also use the optional
+``krea2_native_fp8`` kernel instead of reconstructing BF16 weights every call.
 """
 
 from __future__ import annotations
@@ -19,10 +21,16 @@ import argparse
 import gc
 import json
 import math
+import os
 import sys
 import traceback
 from pathlib import Path
 from typing import Any
+
+# Fragmentation can become visible during Krea's text-encoder -> transformer ->
+# VAE phase transitions. Set the PyTorch allocator policy before importing torch
+# while preserving an explicit operator/user override.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 
@@ -30,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.backends import krea2_native_fp8 as native_fp8
 from core.backends import krea2_worker_safe as safe
 from runtime_hardware import detect_torch_hardware
 
@@ -286,6 +295,7 @@ def _run(
     progress_path: Path | None = None,
 ) -> dict[str, Any]:
     hardware = detect_torch_hardware(torch)
+    native_fp8.enable_for_hardware(hardware, safe.base)
     tuned_request, plan = _adaptive_request(request, hardware)
 
     if progress_path is not None and (plan["resolution_scaled"] or plan["steps_tuned"]):
@@ -307,6 +317,7 @@ def _run(
         runtime["requested_width"] = plan["requested_width"]
         runtime["requested_height"] = plan["requested_height"]
         runtime["requested_steps"] = plan["requested_steps"]
+        runtime["native_fp8"] = native_fp8.stats()
         runtime["post_cleanup_free_vram_gb"] = round(
             float(post_cleanup.get("free_vram_gb") or 0.0),
             3,
