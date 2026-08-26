@@ -166,3 +166,11 @@ def test_studio_lora_api_uses_runtime_catalog_route():
     source = Path("ui/core/api.js").read_text(encoding="utf-8")
 
     assert "`/model-catalog/${encodeURIComponent(modelName)}/loras`" in source
+
+
+def test_studio_drops_loras_not_offered_by_new_checkpoint():
+    source = Path("ui/modules/LoraManager.js").read_text(encoding="utf-8")
+
+    assert "for (const name of Array.from(this.selectedLoras.keys()))" in source
+    assert "if (this.availableLorasMap.has(name)) continue;" in source
+    assert "this.selectedLoras.delete(name);" in source
