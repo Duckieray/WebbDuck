@@ -181,3 +181,22 @@ def test_flux_worker_uses_explicit_klein_config_for_gguf():
     assert "GGUFQuantizationConfig" in worker_source
     assert 'config=component_model' in worker_source
     assert 'subfolder="transformer"' in worker_source
+
+
+def test_flux_worker_phases_qwen_prompt_encoding_on_constrained_9b_gpus():
+    worker_source = Path("core/backends/flux_worker.py").read_text(encoding="utf-8")
+
+    assert "_encode_prompt_on_cpu" in worker_source
+    assert "total_vram_gb < 20.0" in worker_source
+    assert "free_vram_gb < 19.0" in worker_source
+    assert 'kwargs["prompt_embeds"] = prompt_embeds_cpu.to(device=device, dtype=dtype)' in worker_source
+    assert 'kwargs["prompt"] = None' in worker_source
+    assert '"phased_prompt_encoding": phased_prompt_encoding' in worker_source
+
+
+def test_flux_worker_adapts_qwen_padding_to_real_prompt_length():
+    worker_source = Path("core/backends/flux_worker.py").read_text(encoding="utf-8")
+
+    assert "WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH" in worker_source
+    assert "token_count + 16" in worker_source
+    assert "for bucket in (64, 96, 128, 192, 256, 384, 512)" in worker_source
