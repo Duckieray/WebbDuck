@@ -68,14 +68,17 @@ def resolve_flux_loras(raw_loras: Any) -> list[dict[str, Any]]:
 
 
 def lora_trigger_phrase(loras: list[dict[str, Any]]) -> str:
-    """Build trigger text using the same weighted syntax as the mature SDXL path."""
+    """Build natural-language trigger text for FLUX.2's Qwen prompt encoder.
+
+    The Studio weight slider controls PEFT adapter strength separately. Unlike
+    the mature SDXL conditioning path, FLUX.2 does not parse ``(token:weight)``
+    syntax, so passing that notation would only feed literal punctuation to Qwen.
+    """
     phrases: list[str] = []
     for entry in loras:
         trigger = str(entry.get("trigger") or "").strip()
-        if not trigger:
-            continue
-        weight = float(entry.get("weight", 1.0))
-        phrases.append(f"({trigger}:{weight})")
+        if trigger and trigger not in phrases:
+            phrases.append(trigger)
     return ", ".join(phrases)
 
 
