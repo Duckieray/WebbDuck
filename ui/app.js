@@ -3,3 +3,4 @@
 // independently auditable while preserving the existing /ui/app.js URL.
 import './app_main.js';
 import './modules/ProviderCredentialsSettings.js';
+import './modules/PersonaIdentityUI.js';
