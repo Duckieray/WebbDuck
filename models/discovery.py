@@ -250,8 +250,35 @@ def _repo_display_name(repo: Path) -> str:
     return repo.name.removeprefix("models--").replace("--", "/")
 
 
+def _hf_snapshot_has_primary_weights(snapshot: Path, architecture: str) -> bool:
+    """Return whether a cached Diffusers snapshot contains its runnable core weights.
+
+    Hugging Face snapshots may be intentionally partial. WebbDuck's GGUF FLUX
+    path, for example, downloads tokenizer/text-encoder/VAE/scheduler assets and
+    only ``transformer/config.json`` because a local GGUF supplies transformer
+    weights. Such a support-component snapshot still has ``model_index.json``
+    and looks structurally like a full model, but ``from_pretrained(snapshot)``
+    cannot run it. Never surface those partial caches as selectable checkpoints.
+    """
+    component_name = "unet" if architecture == "sdxl" else "transformer"
+    component = Path(snapshot) / component_name
+    if not component.is_dir():
+        return False
+
+    try:
+        for candidate in component.iterdir():
+            if not candidate.is_file():
+                continue
+            name = candidate.name.lower()
+            if name.endswith(".safetensors") or name.endswith(".bin"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def discover_hf_image_models(hf_cache: Path) -> dict[str, dict[str, Any]]:
-    """Discover recognized image Diffusers snapshots in a Hugging Face hub cache."""
+    """Discover complete, recognized image Diffusers snapshots in an HF cache."""
     cache = Path(hf_cache)
     models: dict[str, dict[str, Any]] = {}
     if not cache.exists():
@@ -269,6 +296,11 @@ def discover_hf_image_models(hf_cache: Path) -> dict[str, dict[str, Any]]:
                 continue
             architecture, detection = detect_diffusers_architecture(snapshot)
             if architecture not in IMAGE_ARCHITECTURES:
+                continue
+            if not _hf_snapshot_has_primary_weights(snapshot, architecture):
+                # Partial support-component caches are dependencies, not models.
+                # Keep scanning older snapshots in case a complete revision is
+                # also cached for the same repository.
                 continue
             models[name] = _registry_entry(
                 path=snapshot,
