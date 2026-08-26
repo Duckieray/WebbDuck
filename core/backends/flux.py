@@ -47,6 +47,36 @@ def _worker_environment() -> dict[str, str]:
     return env
 
 
+def _normalized_flux_detection(
+    descriptor: ModelDescriptor,
+    component_model: str,
+) -> dict[str, Any]:
+    """Normalize runtime-critical FLUX metadata from the actual support model.
+
+    Community GGUF merges are frequently renamed or exported without WebbDuck's
+    filename-derived ``parameter_size`` metadata. The support-component model is
+    authoritative for the Qwen/text-encoder footprint, so recover 4B/9B from it
+    before the worker's GPU planner decides whether prompt encoding must stay on
+    CPU. This keeps the memory policy independent of a particular GGUF filename.
+    """
+    detection = dict(descriptor.detection or {})
+    if descriptor.format != "gguf":
+        return detection
+
+    detection["component_model"] = str(component_model)
+    current_size = str(detection.get("parameter_size") or "").strip().upper()
+    if current_size not in {"4B", "9B"}:
+        lowered = str(component_model or "").lower()
+        if "-9b" in lowered or "_9b" in lowered:
+            detection["parameter_size"] = "9B"
+        elif "-4b" in lowered or "_4b" in lowered:
+            detection["parameter_size"] = "4B"
+
+    if "flux.2-klein" in str(component_model or "").lower():
+        detection.setdefault("family", "flux2_klein")
+    return detection
+
+
 def _component_access_error(
     component_model: str,
     exc: Exception,
@@ -252,11 +282,12 @@ class FluxDiffusersBackend(GenerationBackend):
             _report_progress(progress_callback, "Checking FLUX.2 access", 0.03)
             _preflight_component_access(component_model)
 
+        normalized_detection = _normalized_flux_detection(descriptor, component_model)
         payload = {
             "model_path": descriptor.path,
             "model_format": descriptor.format,
             "component_model": component_model,
-            "detection": dict(descriptor.detection or {}),
+            "detection": normalized_detection,
             "prompt": prompt,
             "loras": resolved_loras,
             "input_image": str(settings.get("image") or "").strip() or None,
