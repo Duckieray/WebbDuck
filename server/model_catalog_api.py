@@ -40,6 +40,9 @@ def list_model_loras(model_name: str):
     if not descriptor.capabilities.lora:
         return []
 
+    checkpoint_arch = str(descriptor.architecture or "").lower()
+    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
+
     return [
         {
             "name": name,
@@ -47,8 +50,30 @@ def list_model_loras(model_name: str):
             "weight": cfg.get("weight", 1.0),
         }
         for name, cfg in LORA_REGISTRY.items()
-        if str(cfg.get("arch") or "").lower() == descriptor.architecture
+        if _lora_matches_checkpoint(cfg, checkpoint_arch, _FLUX_FAMILY)
     ]
+
+
+def _lora_matches_checkpoint(
+    lora_cfg: dict[str, Any],
+    checkpoint_arch: str,
+    flux_family: set[str],
+) -> bool:
+    """Return True if a LoRA entry is compatible with the given checkpoint arch.
+
+    FLUX.1 and FLUX.2 are distinct architectures with incompatible transformer
+    shapes, but the checkpoint is often discovered as generic ``"flux"``.  A
+    generic checkpoint accepts any FLUX-family LoRA; a version-specific
+    checkpoint (``"flux1"`` or ``"flux2"``) only accepts matching LoRAs.
+    """
+    lora_arch = str(lora_cfg.get("arch") or "").lower()
+    if lora_arch == checkpoint_arch:
+        return True
+    if checkpoint_arch == "flux" and lora_arch in flux_family:
+        return True
+    if lora_arch == "flux" and checkpoint_arch in flux_family:
+        return True
+    return False
 
 
 @router.get("/model-catalog/{model_name:path}")

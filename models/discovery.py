@@ -173,13 +173,28 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
             if item.is_file() and item.suffix.lower() == ".gguf":
                 detection = _flux2_klein_gguf_detection(item)
                 if detection is None:
-                    continue
+                    hint = _architecture_hint_from_path(item, root)
+                    if hint not in IMAGE_ARCHITECTURES:
+                        continue
+                    size_match = re.search(
+                        r"(?:^|[-_])(4b|9b)(?:[-_.]|$)", item.name, re.IGNORECASE
+                    )
+                    parameter_size = size_match.group(1).upper() if size_match else None
+                    detection = {
+                        "method": "gguf_path_hint",
+                        "confidence": "medium",
+                        "family": hint,
+                        "parameter_size": parameter_size,
+                    }
+                arch = detection.get("family", "flux")
+                if arch not in IMAGE_ARCHITECTURES:
+                    arch = "flux"
                 _register_unique(
                     models,
                     item.stem,
                     _registry_entry(
                         path=item,
-                        architecture="flux",
+                        architecture=arch,
                         source="local",
                         format_name="gguf",
                         detection=detection,

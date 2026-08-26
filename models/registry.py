@@ -111,12 +111,63 @@ def detect_arch(path: Path) -> str | None:
     return None
 
 
+def _detect_flux_lora_version(keys: list[str]) -> str:
+    """Distinguish FLUX.1 from FLUX.2 LoRA by key patterns and tensor shapes.
+
+    FLUX.1 LoRAs (Kohya/Comfy exports) use ``diffusion_model.*`` or
+    ``lora_unet_*`` key prefixes.  FLUX.2 LoRAs carry ``guidance_in`` or
+    ``to_qkv_mlp_proj`` keys unique to the Klein/Dev architecture.  When the
+    keys use the generic ``transformer.*`` Diffusers/PEFT namespace the two
+    versions are indistinguishable by name alone, so fall back to tensor shapes:
+    FLUX.1 dev/schnell has hidden_size 3072 while FLUX.2 klein 9B uses 4096.
+    """
+    joined = " ".join(keys).lower()
+
+    # --- FLUX.1 key patterns (Kohya / Comfy exports) ---
+    if any(marker in joined for marker in ("diffusion_model.", "lora_unet_")):
+        return "flux1"
+
+    # --- FLUX.2 exclusive keys ---
+    if "guidance_in" in joined:
+        return "flux2"
+    if "to_qkv_mlp_proj" in joined:
+        return "flux2"
+
+    # --- Generic transformer.* namespace — disambiguate by tensor shapes ---
+    try:
+        with safe_open(None, framework="pt", device="cpu") as _noop:  # pragma: no cover
+            pass
+    except Exception:
+        pass
+
+    try:
+        from safetensors import safe_open as _safe_open
+
+        with _safe_open(str(lora_path), framework="pt", device="cpu") as sf:
+            for key in keys:
+                if ".to_q." in key and "lora_A" in key:
+                    tensor = sf.get_tensor(key)
+                    if tensor.ndim == 2:
+                        hidden = tensor.shape[0]
+                        if hidden <= 3072:
+                            return "flux1"
+                        return "flux2"
+    except Exception:
+        pass
+
+    # Default: treat unclassifiable transformer-keyed LoRA as generic flux.
+    return "flux"
+
+
 def detect_lora_arch(lora_path: Path) -> str | None:
     """Detect LoRA architecture from safetensors keys.
 
     FLUX exporters use several naming conventions (Diffusers/PEFT, Kohya,
     Comfy-style transformer paths, and model-difference exports). Recognize the
     structural FLUX block names without depending on a literal ``flux`` token.
+
+    Returns ``"flux1"`` or ``"flux2"`` when the version can be determined, or
+    plain ``"flux"`` for unclassifiable FLUX-family LoRAs.
     """
     try:
         with safe_open(lora_path, framework="pt", device="cpu") as f:
@@ -137,7 +188,7 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         "transformer.single_transformer_blocks",
     )
     if any(marker in joined for marker in flux_markers):
-        return "flux"
+        return _detect_flux_lora_version(keys)
 
     # Some Diffusers/PEFT FLUX exports prefix adapter parameters with the module
     # path rather than the architecture name. Require the transformer namespace
@@ -145,7 +196,7 @@ def detect_lora_arch(lora_path: Path) -> str | None:
     if "transformer." in joined and (
         "transformer_blocks" in joined or "single_transformer_blocks" in joined
     ):
-        return "flux"
+        return _detect_flux_lora_version(keys)
 
     if "lora_te2_" in joined:
         return "sdxl"

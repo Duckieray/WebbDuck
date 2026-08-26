@@ -81,6 +81,35 @@ def test_local_discovery_ignores_unknown_gguf(tmp_path):
     assert discover_local_image_models(root) == {}
 
 
+def test_local_discovery_gguf_infers_arch_from_flux_directory(tmp_path):
+    root = tmp_path / "checkpoint"
+    checkpoint = root / "flux" / "pGGUFSNOFSSexNudesAndOther_v14Distilled.gguf"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"")
+
+    models = discover_local_image_models(root)
+    entry = models["pGGUFSNOFSSexNudesAndOther_v14Distilled"]
+
+    assert entry["arch"] == "flux"
+    assert entry["type"] == "gguf"
+    assert entry["path"] == checkpoint
+    assert entry["detection"]["method"] == "gguf_path_hint"
+    assert entry["detection"]["confidence"] == "medium"
+
+
+def test_local_discovery_gguf_path_hint_extracts_9b(tmp_path):
+    root = tmp_path / "checkpoint"
+    checkpoint = root / "flux" / "custom-model-9b-distilled.gguf"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"")
+
+    models = discover_local_image_models(root)
+    entry = models["custom-model-9b-distilled"]
+
+    assert entry["arch"] == "flux"
+    assert entry["detection"]["parameter_size"] == "9B"
+
+
 def test_single_file_uses_explicit_family_folder_hint_only(tmp_path):
     root = tmp_path / "checkpoint"
     (root / "sdxl").mkdir(parents=True)

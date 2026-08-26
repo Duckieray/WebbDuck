@@ -1407,6 +1407,7 @@ def list_model_loras(base_model: str):
         return []
 
     model_arch = MODEL_REGISTRY[base_model]["arch"]
+    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
 
     return [
         {
@@ -1415,8 +1416,22 @@ def list_model_loras(base_model: str):
             "weight": cfg.get("weight", 1.0),
         }
         for name, cfg in LORA_REGISTRY.items()
-        if cfg["arch"] == model_arch
+        if _lora_matches_arch(cfg["arch"], model_arch, _FLUX_FAMILY)
     ]
+
+
+def _lora_matches_arch(
+    lora_arch: str, checkpoint_arch: str, flux_family: set[str]
+) -> bool:
+    lora_arch = str(lora_arch or "").lower()
+    checkpoint_arch = str(checkpoint_arch or "").lower()
+    if lora_arch == checkpoint_arch:
+        return True
+    if checkpoint_arch == "flux" and lora_arch in flux_family:
+        return True
+    if lora_arch == "flux" and checkpoint_arch in flux_family:
+        return True
+    return False
 
 
 @app.get("/models/{base_model:path}/embeddings")

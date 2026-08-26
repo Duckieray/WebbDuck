@@ -62,6 +62,22 @@ def test_resolve_flux_loras_rejects_incompatible_architecture(tmp_path, monkeypa
         resolve_flux_loras([{"name": "Wrong", "weight": 1.0}])
 
 
+def test_resolve_flux_loras_accepts_flux1_and_flux2(tmp_path, monkeypatch):
+    from models import registry as asset_registry
+
+    for arch in ("flux", "flux1", "flux2"):
+        path = tmp_path / f"{arch}.safetensors"
+        path.write_bytes(b"adapter")
+        monkeypatch.setattr(
+            asset_registry,
+            "LORA_REGISTRY",
+            {f"LoRA_{arch}": {"path": path, "arch": arch, "weight": 1.0}},
+        )
+        resolved = resolve_flux_loras([{"name": f"LoRA_{arch}", "weight": 0.5}])
+        assert len(resolved) == 1
+        assert resolved[0]["name"] == f"LoRA_{arch}"
+
+
 def test_apply_flux_loras_uses_named_weighted_adapters_without_fusing(tmp_path):
     first = tmp_path / "first.safetensors"
     second = tmp_path / "second.safetensors"
@@ -118,16 +134,49 @@ def test_detect_lora_arch_recognizes_modern_flux_key_layouts(monkeypatch):
         def keys(self):
             return self._keys
 
-    key_sets = [
-        ["transformer.transformer_blocks.0.attn.to_q.lora_A.weight"],
-        ["transformer.single_transformer_blocks.3.proj_mlp.lora_B.weight"],
+    # FLUX.1 key patterns (Kohya / Comfy exports)
+    flux1_key_sets = [
         ["lora_unet_double_blocks_0_img_attn_q.lora_down.weight"],
         ["diffusion_model.single_blocks.1.linear1.lora_A.weight"],
     ]
+    for keys in flux1_key_sets:
+        monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
+        assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == "flux1"
 
-    for keys in key_sets:
+    # Generic transformer.* namespace without FLUX.2 markers falls back to "flux"
+    generic_key_sets = [
+        ["transformer.transformer_blocks.0.attn.to_q.lora_A.weight"],
+        ["transformer.single_transformer_blocks.3.proj_mlp.lora_B.weight"],
+    ]
+    for keys in generic_key_sets:
         monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
         assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == "flux"
+
+
+def test_detect_lora_arch_distinguishes_flux2_by_key_patterns(monkeypatch):
+    from models import registry as asset_registry
+
+    class FakeSafeOpen:
+        def __init__(self, keys):
+            self._keys = keys
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def keys(self):
+            return self._keys
+
+    # FLUX.2 exclusive keys
+    flux2_key_sets = [
+        ["guidance_in.in_layer.lora_A.weight", "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight"],
+        ["transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight"],
+    ]
+    for keys in flux2_key_sets:
+        monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
+        assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == "flux2"
 
 
 def test_runtime_catalog_lora_endpoint_supports_gguf_models(monkeypatch):
@@ -160,6 +209,41 @@ def test_runtime_catalog_lora_endpoint_supports_gguf_models(monkeypatch):
     result = model_catalog_api.list_model_loras("flux-2-klein-9b-Q5_K_M")
 
     assert result == [{"name": "RedCraft", "description": "FLUX", "weight": 1.0}]
+
+
+def test_catalog_lora_endpoint_filters_flux1_from_flux2_checkpoint(monkeypatch):
+    from server import model_catalog_api
+
+    registry = {
+        "flux-2-klein-9b": {
+            "type": "gguf",
+            "arch": "flux",
+            "backend": backend_for_architecture("flux"),
+            "path": "/models/flux/flux-2-klein-9b.gguf",
+            "source": "local",
+            "detection": {"family": "flux2_klein"},
+        }
+    }
+    monkeypatch.setattr(model_catalog_api, "runtime_registry", lambda: registry)
+    monkeypatch.setattr(
+        model_catalog_api,
+        "LORA_REGISTRY",
+        {
+            "Flux1_LoRA": {"arch": "flux1", "description": "FLUX.1 style", "weight": 1.0},
+            "Flux2_LoRA": {"arch": "flux2", "description": "FLUX.2 style", "weight": 1.0},
+            "Generic_Flux": {"arch": "flux", "description": "Generic", "weight": 1.0},
+            "SDXL_LoRA": {"arch": "sdxl", "description": "SDXL", "weight": 1.0},
+        },
+    )
+
+    result = model_catalog_api.list_model_loras("flux-2-klein-9b")
+    names = [entry["name"] for entry in result]
+
+    # Generic "flux" checkpoint shows all FLUX-family LoRAs
+    assert "Flux1_LoRA" in names
+    assert "Flux2_LoRA" in names
+    assert "Generic_Flux" in names
+    assert "SDXL_LoRA" not in names
 
 
 def test_studio_lora_api_uses_runtime_catalog_route():
