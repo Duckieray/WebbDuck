@@ -39,7 +39,7 @@ def resolve_flux_loras(raw_loras: Any) -> list[dict[str, Any]]:
             raise ValueError(f"Unknown LoRA: {name}")
 
         arch = str(registry_entry.get("arch") or "").strip().lower()
-        if arch != "flux":
+        if arch not in ("flux", "flux1", "flux2"):
             raise ValueError(
                 f"LoRA '{name}' targets {arch or 'an unknown architecture'}, not FLUX."
             )
