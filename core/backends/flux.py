@@ -16,10 +16,127 @@ from PIL import Image
 from core.backends.base import GenerationBackend, backend_resolver
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
+from core.provider_credentials import resolve_provider_token
 from models.model_descriptor import ModelDescriptor
 
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
+
+
+def _huggingface_token() -> tuple[str, str | None]:
+    """Resolve WebbDuck Settings/env credentials, then honor normal HF CLI auth."""
+    token, source = resolve_provider_token("huggingface")
+    if token:
+        return token, source
+    try:
+        from huggingface_hub import get_token
+
+        token = str(get_token() or "").strip()
+    except Exception:
+        token = ""
+    return (token, "huggingface-cli") if token else ("", None)
+
+
+def _worker_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    token, _source = _huggingface_token()
+    if token:
+        env["HF_TOKEN"] = token
+        env["HUGGING_FACE_HUB_TOKEN"] = token
+    return env
+
+
+def _component_access_error(
+    component_model: str,
+    exc: Exception,
+    *,
+    token_configured: bool,
+) -> RuntimeError:
+    text = str(exc or exc.__class__.__name__)
+    lowered = text.lower()
+    repo_url = f"https://huggingface.co/{component_model}"
+
+    gated_markers = (
+        "gated",
+        "403",
+        "forbidden",
+        "restricted",
+        "not a valid model identifier",
+        "repository not found",
+    )
+    if any(marker in lowered for marker in gated_markers):
+        if token_configured:
+            return RuntimeError(
+                f"FLUX.2 Klein 9B support components are gated on Hugging Face and the "
+                f"configured token is not authorized for {component_model}. Open {repo_url}, "
+                "accept the FLUX Non-Commercial License / access terms with the same Hugging "
+                "Face account that owns the token, then retry. Your local GGUF does not need "
+                "to be re-downloaded."
+            )
+        return RuntimeError(
+            f"FLUX.2 Klein 9B support components are gated on Hugging Face. Open {repo_url}, "
+            "accept the FLUX Non-Commercial License / access terms, then configure that "
+            "account's Hugging Face token in WebbDuck Settings. Your local GGUF does not "
+            "need to be re-downloaded."
+        )
+
+    if "401" in lowered or "unauthorized" in lowered or "invalid token" in lowered:
+        return RuntimeError(
+            f"Hugging Face rejected the credentials needed for {component_model}. Replace "
+            "the Hugging Face token in WebbDuck Settings and make sure the FLUX.2 Klein 9B "
+            f"access terms have been accepted at {repo_url}."
+        )
+
+    if "offline" in lowered or "localentrynotfound" in lowered or "local entry" in lowered:
+        return RuntimeError(
+            f"FLUX.2 Klein 9B needs support components from {component_model}, but they are "
+            "not available in the local Hugging Face cache while offline. Cache the licensed "
+            "support-component repository first or set WEBBDUCK_FLUX2_COMPONENT_MODEL to a "
+            "complete local Diffusers component directory."
+        )
+
+    return RuntimeError(
+        f"Unable to verify FLUX.2 Klein 9B support components from {component_model}: {text}"
+    )
+
+
+def _preflight_component_access(component_model: str) -> None:
+    """Verify a GGUF checkpoint can obtain its non-transformer FLUX components."""
+    local = Path(component_model).expanduser()
+    if local.exists():
+        if not local.is_dir():
+            raise RuntimeError(
+                "WEBBDUCK_FLUX2_COMPONENT_MODEL must point to a complete local Diffusers "
+                f"directory, not a file: {local}"
+            )
+        required = (
+            local / "model_index.json",
+            local / "transformer" / "config.json",
+        )
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "The configured local FLUX.2 component directory is incomplete. Missing: "
+                + ", ".join(missing)
+            )
+        return
+
+    token, _source = _huggingface_token()
+    try:
+        from huggingface_hub import hf_hub_download
+
+        for filename in ("model_index.json", "transformer/config.json"):
+            hf_hub_download(
+                repo_id=component_model,
+                filename=filename,
+                token=token or None,
+            )
+    except Exception as exc:
+        raise _component_access_error(
+            component_model,
+            exc,
+            token_configured=bool(token),
+        ) from exc
 
 
 class FluxDiffusersBackend(GenerationBackend):
@@ -51,6 +168,9 @@ class FluxDiffusersBackend(GenerationBackend):
                 or os.getenv("WEBBDUCK_FLUX2_COMPONENT_MODEL")
                 or _DEFAULT_FLUX2_9B_COMPONENT_MODEL
             )
+            token, source = _huggingface_token()
+            payload["huggingface_credentials_configured"] = bool(token)
+            payload["huggingface_credentials_source"] = source
             if not payload.get("ready"):
                 payload["repair"] = "python tools/prepare_model_runtimes.py flux"
         return payload
@@ -77,6 +197,9 @@ class FluxDiffusersBackend(GenerationBackend):
             or descriptor.detection.get("component_model")
             or _DEFAULT_FLUX2_9B_COMPONENT_MODEL
         )
+        if descriptor.format == "gguf":
+            _preflight_component_access(component_model)
+
         payload = {
             "model_path": descriptor.path,
             "model_format": descriptor.format,
@@ -122,6 +245,7 @@ class FluxDiffusersBackend(GenerationBackend):
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    env=_worker_environment(),
                 )
                 started = time.monotonic()
                 while proc.poll() is None:
