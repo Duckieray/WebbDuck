@@ -112,16 +112,39 @@ def detect_arch(path: Path) -> str | None:
 
 
 def detect_lora_arch(lora_path: Path) -> str | None:
-    """Detect LoRA architecture from safetensors keys."""
+    """Detect LoRA architecture from safetensors keys.
+
+    FLUX exporters use several naming conventions (Diffusers/PEFT, Kohya,
+    Comfy-style transformer paths, and model-difference exports). Recognize the
+    structural FLUX block names without depending on a literal ``flux`` token.
+    """
     try:
         with safe_open(lora_path, framework="pt", device="cpu") as f:
             keys = list(f.keys())
     except Exception:
         return None
 
-    joined = " ".join(keys)
+    joined = " ".join(keys).lower()
+    flux_markers = (
+        "flux",
+        "lora_unet_double_blocks",
+        "lora_unet_single_blocks",
+        "diffusion_model.double_blocks",
+        "diffusion_model.single_blocks",
+        "transformer.double_blocks",
+        "transformer.single_blocks",
+        "transformer.transformer_blocks",
+        "transformer.single_transformer_blocks",
+    )
+    if any(marker in joined for marker in flux_markers):
+        return "flux"
 
-    if "transformer.blocks" in joined or "flux" in joined:
+    # Some Diffusers/PEFT FLUX exports prefix adapter parameters with the module
+    # path rather than the architecture name. Require the transformer namespace
+    # plus FLUX's block naming to avoid classifying arbitrary transformer LoRAs.
+    if "transformer." in joined and (
+        "transformer_blocks" in joined or "single_transformer_blocks" in joined
+    ):
         return "flux"
 
     if "lora_te2_" in joined:
@@ -407,7 +430,7 @@ def load_lora_registry():
 
         registry[name] = {
             "path": file_path,
-            "arch": detect_lora_arch(file_path) or "sdxl",
+            "arch": cfg.get("arch") or detect_lora_arch(file_path) or "sdxl",
             "trigger": cfg.get("trigger"),
             "weight": float(cfg.get("weight", 1.0)),
             "description": cfg.get("description", ""),
