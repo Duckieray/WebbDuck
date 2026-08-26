@@ -14,6 +14,11 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_weight(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"weights")
+
+
 def test_checkpoint_root_prefers_generic_parent(tmp_path):
     (tmp_path / "checkpoint" / "sdxl").mkdir(parents=True)
     assert resolve_checkpoint_root(tmp_path) == tmp_path / "checkpoint"
@@ -89,10 +94,12 @@ def test_single_file_uses_explicit_family_folder_hint_only(tmp_path):
     assert "unknown" not in models
 
 
-def test_hf_cache_discovers_transformer_image_models_without_unet(tmp_path):
+def test_hf_cache_discovers_complete_transformer_image_model_without_unet(tmp_path):
     cache = tmp_path / "hub"
     snapshot = cache / "models--black-forest-labs--FLUX.2-klein-4B" / "snapshots" / "abc123"
     _write_json(snapshot / "model_index.json", {"_class_name": "Flux2KleinPipeline"})
+    _write_json(snapshot / "transformer" / "config.json", {"_class_name": "Flux2Transformer2DModel"})
+    _write_weight(snapshot / "transformer" / "diffusion_pytorch_model.safetensors")
 
     models = discover_hf_image_models(cache)
 
@@ -101,10 +108,49 @@ def test_hf_cache_discovers_transformer_image_models_without_unet(tmp_path):
     assert models["black-forest-labs/FLUX.2-klein-4B"]["source"] == "hf_cache"
 
 
+def test_hf_cache_ignores_partial_flux_support_component_snapshot(tmp_path):
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--black-forest-labs--FLUX.2-klein-9B" / "snapshots" / "supportonly"
+    _write_json(snapshot / "model_index.json", {"_class_name": "Flux2KleinPipeline"})
+    _write_json(snapshot / "transformer" / "config.json", {"_class_name": "Flux2Transformer2DModel"})
+    _write_weight(snapshot / "text_encoder" / "model.safetensors")
+    _write_weight(snapshot / "vae" / "diffusion_pytorch_model.safetensors")
+
+    models = discover_hf_image_models(cache)
+
+    assert "black-forest-labs/FLUX.2-klein-9B" not in models
+
+
+def test_hf_cache_prefers_complete_older_snapshot_over_newer_partial_snapshot(tmp_path):
+    cache = tmp_path / "hub"
+    repo = cache / "models--black-forest-labs--FLUX.2-klein-9B" / "snapshots"
+
+    complete = repo / "complete"
+    _write_json(complete / "model_index.json", {"_class_name": "Flux2KleinPipeline"})
+    _write_json(complete / "transformer" / "config.json", {"_class_name": "Flux2Transformer2DModel"})
+    _write_weight(complete / "transformer" / "diffusion_pytorch_model-00001-of-00002.safetensors")
+
+    partial = repo / "partial"
+    _write_json(partial / "model_index.json", {"_class_name": "Flux2KleinPipeline"})
+    _write_json(partial / "transformer" / "config.json", {"_class_name": "Flux2Transformer2DModel"})
+
+    complete.touch()
+    partial.touch()
+    partial_mtime = complete.stat().st_mtime + 10
+    import os
+    os.utime(partial, (partial_mtime, partial_mtime))
+
+    models = discover_hf_image_models(cache)
+
+    assert models["black-forest-labs/FLUX.2-klein-9B"]["path"] == complete
+
+
 def test_hf_cache_discovers_qwen_image_2512_as_runnable(tmp_path):
     cache = tmp_path / "hub"
     snapshot = cache / "models--Qwen--Qwen-Image-2512" / "snapshots" / "deadbeef"
     _write_json(snapshot / "model_index.json", {"_class_name": "QwenImagePipeline"})
+    _write_json(snapshot / "transformer" / "config.json", {"_class_name": "QwenImageTransformer2DModel"})
+    _write_weight(snapshot / "transformer" / "diffusion_pytorch_model.safetensors")
 
     models = discover_hf_image_models(cache)
     payload = public_model_catalog(models)[0]
