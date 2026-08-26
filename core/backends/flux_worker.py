@@ -19,6 +19,7 @@ from flux_lora import apply_flux_loras
 
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
+_MAX_FLUX_IDENTITY_REFERENCES = 5
 
 
 def _snap(value: int, multiple: int = 8) -> int:
@@ -249,9 +250,19 @@ def _encode_prompt_on_cpu(
     return prompt_embeds, sequence_length, elapsed
 
 
+def _load_rgb_image(path_value) -> object:
+    """Load an RGB PIL image without leaving a file handle open."""
+    from PIL import Image
+
+    path = Path(str(path_value))
+    if not path.is_file():
+        raise FileNotFoundError(f"FLUX conditioning image does not exist: {path}")
+    with Image.open(path) as source:
+        return source.convert("RGB").copy()
+
+
 def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     import torch
-    from PIL import Image
 
     model_format = str(request.get("model_format") or "diffusers").strip().lower()
     prompt = str(request["prompt"])
@@ -376,10 +387,22 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             except Exception:
                 pass
 
-    input_image = None
     input_path = request.get("input_image")
-    if input_path:
-        input_image = Image.open(str(input_path)).convert("RGB")
+    input_image = _load_rgb_image(input_path) if input_path else None
+
+    raw_reference_images = request.get("reference_images") or []
+    if not isinstance(raw_reference_images, list):
+        raise ValueError("FLUX reference_images must be a list.")
+    if len(raw_reference_images) > _MAX_FLUX_IDENTITY_REFERENCES:
+        raise ValueError(
+            f"FLUX.2 identity supports at most {_MAX_FLUX_IDENTITY_REFERENCES} reference images."
+        )
+    reference_images = [_load_rgb_image(path) for path in raw_reference_images]
+
+    conditioning_images = []
+    if input_image is not None:
+        conditioning_images.append(input_image)
+    conditioning_images.extend(reference_images)
 
     try:
         call_sig = inspect.signature(pipe.__call__)
@@ -408,10 +431,14 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         else:
             kwargs["prompt"] = prompt
 
-        if input_image is not None:
+        if conditioning_images:
             if call_params and "image" not in call_params:
                 raise RuntimeError("Installed Flux2KleinPipeline does not expose image editing support")
-            kwargs["image"] = input_image
+            kwargs["image"] = (
+                conditioning_images
+                if len(conditioning_images) > 1
+                else conditioning_images[0]
+            )
         generator_device = device if device == "cuda" else "cpu"
         kwargs["generator"] = torch.Generator(device=generator_device).manual_seed(seed + index)
 
@@ -438,7 +465,8 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         _write_progress(progress_path, start_stage, 0.62, 0, steps)
         print(
             f"[flux] inference {index + 1}/{num_images}: "
-            f"{width}x{height}, steps={steps}, guidance={guidance}",
+            f"{width}x{height}, steps={steps}, guidance={guidance}, "
+            f"identity_refs={len(reference_images)}",
             flush=True,
         )
         result = pipe(**kwargs)
@@ -469,6 +497,10 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             "guidance": guidance,
             "lora_count": len(applied_loras),
             "loras": applied_loras,
+            "identity_provider": request.get("identity_provider"),
+            "identity_name": request.get("identity_name"),
+            "identity_reference_count": len(reference_images),
+            "conditioning_image_count": len(conditioning_images),
         }
     )
     _write_progress(progress_path, "FLUX.2 complete", 1.0, steps, steps)
