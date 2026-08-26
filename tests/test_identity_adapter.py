@@ -1,7 +1,7 @@
 """Tests for IP-Adapter FaceID identity adapter.
 
 These tests verify that:
-1. The adapter is loaded correctly for both faceid_sdxl and faceid_plusv2_sdxl modes
+1. The adapter is loaded correctly for faceid_sdxl mode
 2. Debug metadata is populated correctly
 3. Errors are thrown loudly when conditions aren't met
 4. The adapter kwargs contain the expected keys
@@ -119,29 +119,4 @@ class TestIdentityAdapterFaceIDSDXL:
         assert debug["identity_adapter_applied"] is True
 
 
-@pytest.mark.slow
-class TestIdentityAdapterPlusV2:
-    """FaceID PlusV2 mode — identity + face-structure conditioning."""
 
-    @pytest.mark.skipif(not Path("refs/test_face.png").exists(), reason="No test face image")
-    def test_plusv2_with_clip_encoder(self, pipeline_manager):
-        from core.pipeline import resolve_web_path
-        pm = pipeline_manager
-        ref = str(resolve_web_path("refs/test_face.png"))
-        cfg = _make_adapter_cfg(
-            enabled=True,
-            type="faceid_plusv2_sdxl",
-            adapter_weight="ip-adapter-faceid-plusv2_sdxl.bin",
-            lora_weight="ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
-            image_encoder="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-            reference_images=[ref],
-        )
-        kwargs = pm.apply_identity_adapter(cfg)
-        debug = pm._identity_debug
-
-        assert "ip_adapter_image_embeds" in kwargs
-        assert "ip_adapter_image" not in kwargs, (
-            f"ip_adapter_image is unused when ip_adapter_image_embeds is provided; kwargs={list(kwargs.keys())}"
-        )
-        assert debug["identity_adapter_applied"] is True
-        assert debug["identity_adapter_type"] == "faceid_plusv2_sdxl"

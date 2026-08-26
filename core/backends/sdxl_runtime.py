@@ -420,13 +420,6 @@ def run_generation(settings, cancel_event=None):
     seed = int(seed_raw) if seed_raw is not None else random.randint(0, 2**32 - 1)
     generator = torch.Generator(pipe.device).manual_seed(seed)
 
-    if settings.get("identity_adapter", {}).get("type") == "official_faceid_sdxl":
-        from core.backends.sdxl_faceid import run_official_faceid_sdxl
-        with stage_timer("mode_run_seconds"):
-            images, out_seed = run_official_faceid_sdxl(settings, pipe, generator, cancel_event)
-        settings["performance_timing"] = snapshot_metrics()
-        return images, out_seed
-
     mode = select_mode(settings, pipe, img2img, base_img2img, base_inpaint)
     if smart_extend_enabled and mode.__class__.__name__ != "InpaintMode":
         raise RuntimeError(
