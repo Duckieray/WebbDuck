@@ -51,7 +51,7 @@ def test_flux_descriptor_exposes_current_workflows_and_defaults():
     assert descriptor.capabilities.text2img is True
     assert descriptor.capabilities.img2img is True
     assert descriptor.capabilities.inpaint is False
-    assert descriptor.capabilities.lora is False
+    assert descriptor.capabilities.lora is True
     assert descriptor.defaults["steps"] == 4
     assert descriptor.defaults["cfg"] == 1.0
     assert descriptor.constraints["dimension_multiple"] == 8
@@ -100,6 +100,7 @@ def test_flux_backend_serializes_request_and_reads_images(monkeypatch):
     assert captured["payload"]["model_format"] == "diffusers"
     assert captured["payload"]["steps"] == 4
     assert captured["payload"]["guidance"] == 1.0
+    assert captured["payload"]["loras"] == []
 
 
 def test_flux_backend_serializes_gguf_component_contract(monkeypatch):
@@ -157,6 +158,7 @@ def test_flux_backend_serializes_gguf_component_contract(monkeypatch):
     assert captured["payload"]["model_format"] == "gguf"
     assert captured["payload"]["component_model"] == "black-forest-labs/FLUX.2-klein-9B"
     assert captured["payload"]["detection"]["quantization"] == "Q5_K_M"
+    assert captured["payload"]["loras"] == []
     assert captured["env"]["HF_TOKEN"] == "hf_test_token"
     assert captured["env"]["HUGGING_FACE_HUB_TOKEN"] == "hf_test_token"
     assert settings["flux_runtime"]["offload_mode"] == "model_cpu"
@@ -200,3 +202,15 @@ def test_flux_worker_adapts_qwen_padding_to_real_prompt_length():
     assert "WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH" in worker_source
     assert "token_count + 16" in worker_source
     assert "for bucket in (64, 96, 128, 192, 256, 384, 512)" in worker_source
+
+
+def test_flux_lora_helper_uses_live_weighted_adapters_without_fusion():
+    helper_source = Path("core/backends/flux_lora.py").read_text(encoding="utf-8")
+    worker_source = Path("core/backends/flux_worker.py").read_text(encoding="utf-8")
+
+    assert "load_lora_weights" in helper_source
+    assert "set_adapters" in helper_source
+    assert "adapter_weights=adapter_weights" in helper_source
+    assert "fuse_lora(" not in helper_source
+    assert "apply_flux_loras" in worker_source
+    assert '"lora_count": len(applied_loras)' in worker_source
