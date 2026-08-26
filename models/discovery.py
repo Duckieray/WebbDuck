@@ -8,6 +8,7 @@ correctly and reported as non-runnable until their adapter is wired.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -78,6 +79,48 @@ def _architecture_hint_from_path(path: Path, root: Path) -> str:
     return UNKNOWN_ARCHITECTURE
 
 
+def _flux2_klein_gguf_detection(path: Path) -> dict[str, Any] | None:
+    """Recognize released FLUX.2 Klein GGUF transformer filenames conservatively.
+
+    GGUF is a component checkpoint, not a whole Diffusers pipeline. The filename
+    therefore needs to identify a known FLUX.2 Klein family strongly enough for
+    WebbDuck to select the matching support-component repository without parsing
+    multi-gigabyte tensor data during catalog discovery.
+    """
+    filename = path.name.lower()
+    normalized = filename.replace("_", "-").replace(".", "-")
+    if "flux-2-klein" not in normalized:
+        return None
+
+    size_match = re.search(r"(?:^|[-_])(4b|9b)(?:[-_.]|$)", filename, re.IGNORECASE)
+    if not size_match:
+        return None
+    parameter_size = size_match.group(1).upper()
+    component_model = f"black-forest-labs/FLUX.2-klein-{parameter_size}"
+
+    quantization = "unknown"
+    quant_match = re.search(
+        r"(?:^|[-_])(Q\d+(?:_[A-Z0-9]+)*|BF16|F16)$",
+        path.stem.upper(),
+    )
+    if quant_match:
+        quantization = quant_match.group(1)
+
+    is_base = "klein-base" in normalized
+    if is_base:
+        component_model = f"black-forest-labs/FLUX.2-klein-base-{parameter_size}"
+
+    return {
+        "method": "gguf_filename",
+        "confidence": "high",
+        "family": "flux2_klein",
+        "variant": "base" if is_base else "distilled",
+        "parameter_size": parameter_size,
+        "quantization": quantization,
+        "component_model": component_model,
+    }
+
+
 def _registry_entry(
     *,
     path: Path,
@@ -127,6 +170,23 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
         except OSError:
             return
         for item in children:
+            if item.is_file() and item.suffix.lower() == ".gguf":
+                detection = _flux2_klein_gguf_detection(item)
+                if detection is None:
+                    continue
+                _register_unique(
+                    models,
+                    item.stem,
+                    _registry_entry(
+                        path=item,
+                        architecture="flux",
+                        source="local",
+                        format_name="gguf",
+                        detection=detection,
+                    ),
+                )
+                continue
+
             if item.is_file() and item.suffix.lower() == ".safetensors":
                 architecture, detection = inspect_single_image_checkpoint(item)
                 if architecture not in IMAGE_ARCHITECTURES:
