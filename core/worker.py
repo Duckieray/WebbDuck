@@ -15,7 +15,7 @@ from datetime import datetime
 
 from core.model_runtime import run_selected_model
 from core.exceptions import GenerationCancelledError
-from core.gpu_lease import release_gpu_lease, wait_for_gpu_lease_async
+from core.gpu_lease import get_gpu_lease, release_gpu_lease, wait_for_gpu_lease_async
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry, to_web_path
 from server.events import broadcast_state
@@ -89,9 +89,17 @@ async def _acquire_worker_gpu_lease(job):
     await broadcast_state(snapshot())
     timeout_raw = str(os.getenv("WEBBDUCK_GPU_LEASE_WAIT_SECONDS", "180")).strip()
     try:
-        timeout_seconds = max(5.0, float(timeout_raw))
+        base_timeout = max(5.0, float(timeout_raw))
     except Exception:
-        timeout_seconds = 180.0
+        base_timeout = 180.0
+
+    lease = get_gpu_lease()
+    current_holder = str((lease or {}).get("owner") or "").strip().lower()
+    if current_holder == "duckmotion":
+        timeout_seconds = max(base_timeout, 600.0)
+    else:
+        timeout_seconds = base_timeout
+
     attempt = await wait_for_gpu_lease_async(
         owner="webbduck-core",
         owner_kind="webbduck",
