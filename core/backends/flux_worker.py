@@ -154,6 +154,99 @@ def _load_flux_pipeline(request: dict, dtype, progress_path: Path | None = None)
     }
 
 
+def _prompt_sequence_length(pipe, prompt: str) -> tuple[int, int]:
+    """Choose the smallest safe Qwen context bucket for the actual prompt.
+
+    Flux2Klein pads every prompt to max_sequence_length. Running all prompts at
+    the default 512 tokens wastes substantial Qwen compute, especially when the
+    text encoder must remain on CPU. The attention mask makes shorter padding
+    equivalent for the real prompt tokens, so use a compact bucket with margin.
+    """
+    explicit = str(os.getenv("WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH") or "").strip()
+    if explicit:
+        try:
+            value = max(32, min(512, int(explicit)))
+            return value, value
+        except ValueError:
+            pass
+
+    token_count = 128
+    tokenizer = getattr(pipe, "tokenizer", None)
+    if tokenizer is not None:
+        try:
+            text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            encoded = tokenizer(
+                text,
+                padding=False,
+                truncation=False,
+                add_special_tokens=False,
+            )
+            ids = encoded.get("input_ids") if isinstance(encoded, dict) else None
+            if ids and isinstance(ids[0], list):
+                ids = ids[0]
+            if ids:
+                token_count = int(len(ids))
+        except Exception:
+            token_count = 128
+
+    needed = min(512, max(32, token_count + 16))
+    for bucket in (64, 96, 128, 192, 256, 384, 512):
+        if needed <= bucket:
+            return bucket, token_count
+    return 512, token_count
+
+
+def _encode_prompt_on_cpu(
+    pipe,
+    prompt: str,
+    *,
+    progress_path: Path | None,
+):
+    """Encode Qwen prompt embeddings without ever materializing Qwen on GPU."""
+    import torch
+
+    text_encoder = getattr(pipe, "text_encoder", None)
+    if text_encoder is None:
+        raise RuntimeError("FLUX.2 pipeline has no text encoder for prompt encoding")
+
+    sequence_length, token_count = _prompt_sequence_length(pipe, prompt)
+    _write_progress(
+        progress_path,
+        f"Encoding FLUX.2 prompt on CPU ({token_count} tokens)",
+        0.53,
+    )
+    print(
+        f"[flux] constrained-memory prompt phase: CPU Qwen3 encode "
+        f"(tokens={token_count}, padded={sequence_length})",
+        flush=True,
+    )
+
+    started = time.monotonic()
+    try:
+        text_encoder.to("cpu")
+    except Exception:
+        pass
+
+    with torch.inference_mode():
+        prompt_embeds, _text_ids = pipe.encode_prompt(
+            prompt=prompt,
+            device=torch.device("cpu"),
+            num_images_per_prompt=1,
+            max_sequence_length=sequence_length,
+        )
+
+    prompt_embeds = prompt_embeds.detach().to("cpu")
+    elapsed = time.monotonic() - started
+    _write_progress(progress_path, "FLUX.2 prompt encoded", 0.57)
+    print(f"[flux] CPU prompt encoding completed in {elapsed:.2f}s", flush=True)
+    return prompt_embeds, sequence_length, elapsed
+
+
 def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     import torch
     from PIL import Image
@@ -200,6 +293,32 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     offload_requested = str(os.getenv("WEBBDUCK_FLUX_OFFLOAD", "auto")).strip().lower()
     detection = request.get("detection") or {}
     is_gguf_9b = model_format == "gguf" and str(detection.get("parameter_size") or "").upper() == "9B"
+
+    # FLUX.2 Klein 9B ships an ~16.4 GB BF16 Qwen3 text encoder. It cannot fit
+    # by itself on a nominal 16 GB card. Model CPU offload is insufficient here:
+    # Accelerate still moves the entire text encoder to the execution device when
+    # encode_prompt runs. Precompute prompt_embeds on CPU first, then skip Qwen
+    # during the GPU pipeline call. Also use this path on larger cards when live
+    # free VRAM is too low to materialize Qwen safely.
+    phased_prompt_encoding = bool(
+        device == "cuda"
+        and is_gguf_9b
+        and (total_vram_gb < 20.0 or (free_vram_gb and free_vram_gb < 19.0))
+    )
+    prompt_embeds_cpu = None
+    prompt_sequence_length = None
+    prompt_encode_seconds = 0.0
+    if phased_prompt_encoding:
+        prompt_embeds_cpu, prompt_sequence_length, prompt_encode_seconds = _encode_prompt_on_cpu(
+            pipe,
+            prompt,
+            progress_path=progress_path,
+        )
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     use_cpu_offload = device == "cuda" and (
         offload_requested in {"1", "true", "yes", "cpu", "model_cpu"}
         or (
@@ -211,7 +330,7 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         )
     )
 
-    _write_progress(progress_path, "Configuring FLUX.2 GPU memory", 0.52)
+    _write_progress(progress_path, "Configuring FLUX.2 GPU memory", 0.58 if phased_prompt_encoding else 0.52)
     if use_cpu_offload:
         print(
             f"[flux] enabling model CPU offload "
@@ -219,7 +338,7 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             flush=True,
         )
         pipe.enable_model_cpu_offload()
-        selected_offload = "model_cpu"
+        selected_offload = "phased_prompt+model_cpu" if phased_prompt_encoding else "model_cpu"
     else:
         print(
             f"[flux] placing pipeline on {device} "
@@ -227,7 +346,7 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             flush=True,
         )
         pipe.to(device)
-        selected_offload = "resident"
+        selected_offload = "phased_prompt+resident" if phased_prompt_encoding else "resident"
 
     # Decode memory is independent of transformer quantization. Tiling/slicing
     # are cheap safeguards for 1024-class images and constrained accelerators.
@@ -260,12 +379,22 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     inference_started = time.monotonic()
     for index in range(num_images):
         kwargs = {
-            "prompt": prompt,
             "height": height,
             "width": width,
             "guidance_scale": guidance,
             "num_inference_steps": steps,
         }
+        if prompt_embeds_cpu is not None:
+            # Diffusers accepts pre-generated embeddings, but encode_prompt does
+            # not move supplied embeddings to the execution device. They are only
+            # a few MB, so transfer them explicitly after Qwen has finished.
+            kwargs["prompt"] = None
+            kwargs["prompt_embeds"] = prompt_embeds_cpu.to(device=device, dtype=dtype)
+            if prompt_sequence_length is not None:
+                kwargs["max_sequence_length"] = int(prompt_sequence_length)
+        else:
+            kwargs["prompt"] = prompt
+
         if input_image is not None:
             if call_params and "image" not in call_params:
                 raise RuntimeError("Installed Flux2KleinPipeline does not expose image editing support")
@@ -280,7 +409,7 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
                 _write_progress(
                     progress_path,
                     "Denoising FLUX.2",
-                    0.60 + 0.32 * fraction,
+                    0.64 + 0.28 * fraction,
                     completed,
                     steps,
                 )
@@ -288,7 +417,12 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
 
             kwargs["callback_on_step_end"] = _on_step_end
 
-        _write_progress(progress_path, "Encoding prompt / starting FLUX.2 inference", 0.58, 0, steps)
+        start_stage = (
+            "Starting FLUX.2 denoising with cached prompt"
+            if prompt_embeds_cpu is not None
+            else "Encoding prompt / starting FLUX.2 inference"
+        )
+        _write_progress(progress_path, start_stage, 0.62, 0, steps)
         print(
             f"[flux] inference {index + 1}/{num_images}: "
             f"{width}x{height}, steps={steps}, guidance={guidance}",
@@ -310,6 +444,10 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             "total_vram_gb": round(total_vram_gb, 2),
             "free_vram_gb_before_load": round(free_vram_gb, 2),
             "offload_mode": selected_offload,
+            "phased_prompt_encoding": phased_prompt_encoding,
+            "prompt_encoding_device": "cpu" if phased_prompt_encoding else device,
+            "prompt_sequence_length": prompt_sequence_length,
+            "prompt_encode_seconds": round(prompt_encode_seconds, 3),
             "pipeline_load_seconds": round(pipeline_load_seconds, 3),
             "inference_seconds": round(inference_seconds, 3),
             "effective_width": width,
