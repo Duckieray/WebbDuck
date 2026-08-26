@@ -23,11 +23,31 @@ def _snap(value: int, multiple: int = 8) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
 
 
-def _is_truthy(value: object) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+def _write_progress(
+    progress_path: Path | None,
+    stage: str,
+    progress: float,
+    step: int = 0,
+    total_steps: int = 0,
+) -> None:
+    if progress_path is None:
+        return
+    try:
+        payload = {
+            "stage": str(stage),
+            "progress": max(0.0, min(1.0, float(progress))),
+            "step": int(step),
+            "total_steps": int(total_steps),
+            "updated_at": time.time(),
+        }
+        temp = progress_path.with_name(f".{progress_path.name}.tmp")
+        temp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(temp, progress_path)
+    except Exception:
+        pass
 
 
-def _load_flux_pipeline(request: dict, dtype):
+def _load_flux_pipeline(request: dict, dtype, progress_path: Path | None = None):
     from diffusers import Flux2KleinPipeline
 
     model_path = str(request["model_path"])
@@ -37,10 +57,17 @@ def _load_flux_pipeline(request: dict, dtype):
         or os.getenv("WEBBDUCK_FLUX2_COMPONENT_MODEL")
         or _DEFAULT_FLUX2_9B_COMPONENT_MODEL
     )
+    hf_token = str(os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") or "").strip()
 
     if model_format != "gguf":
+        _write_progress(progress_path, "Loading FLUX.2 pipeline", 0.10)
         print(f"[flux] loading Diffusers pipeline from {model_path}", flush=True)
-        pipe = Flux2KleinPipeline.from_pretrained(model_path, torch_dtype=dtype)
+        pipe = Flux2KleinPipeline.from_pretrained(
+            model_path,
+            torch_dtype=dtype,
+            token=hf_token or None,
+        )
+        _write_progress(progress_path, "FLUX.2 pipeline loaded", 0.48)
         return pipe, {
             "model_format": model_format,
             "component_model": model_path,
@@ -62,6 +89,7 @@ def _load_flux_pipeline(request: dict, dtype):
 
     detection = request.get("detection") or {}
     quantization = str(detection.get("quantization") or "unknown")
+    _write_progress(progress_path, f"Loading FLUX.2 GGUF transformer ({quantization})", 0.08)
     print(
         f"[flux] loading GGUF transformer {model_path} "
         f"({quantization}) with config {component_model}/transformer",
@@ -77,8 +105,10 @@ def _load_flux_pipeline(request: dict, dtype):
         config=component_model,
         subfolder="transformer",
         torch_dtype=dtype,
+        token=hf_token or None,
     )
 
+    _write_progress(progress_path, "Loading FLUX.2 support components", 0.22)
     print(
         f"[flux] loading support components from {component_model} "
         "(transformer supplied by local GGUF)",
@@ -89,11 +119,23 @@ def _load_flux_pipeline(request: dict, dtype):
             component_model,
             transformer=transformer,
             torch_dtype=dtype,
+            token=hf_token or None,
         )
     except Exception as exc:
         message = str(exc or exc.__class__.__name__)
         lower = message.lower()
-        if any(token in lower for token in ("gated", "401", "403", "unauthorized", "forbidden")):
+        if any(
+            token in lower
+            for token in (
+                "gated",
+                "401",
+                "403",
+                "unauthorized",
+                "forbidden",
+                "not a valid model identifier",
+                "repository not found",
+            )
+        ):
             raise RuntimeError(
                 f"FLUX.2 GGUF support components come from gated repository {component_model}. "
                 "Accept the model terms on Hugging Face and configure an authorized Hugging Face "
@@ -101,6 +143,7 @@ def _load_flux_pipeline(request: dict, dtype):
             ) from exc
         raise
 
+    _write_progress(progress_path, "FLUX.2 model components ready", 0.48)
     return pipe, {
         "model_format": "gguf",
         "component_model": component_model,
@@ -111,7 +154,7 @@ def _load_flux_pipeline(request: dict, dtype):
     }
 
 
-def _run(request: dict, output_dir: Path) -> dict:
+def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     import torch
     from PIL import Image
 
@@ -149,8 +192,9 @@ def _run(request: dict, output_dir: Path) -> dict:
         except Exception:
             free_vram_gb = 0.0
 
+    _write_progress(progress_path, "Preparing FLUX.2 runtime", 0.06)
     load_started = time.monotonic()
-    pipe, runtime = _load_flux_pipeline(request, dtype)
+    pipe, runtime = _load_flux_pipeline(request, dtype, progress_path)
     pipeline_load_seconds = time.monotonic() - load_started
 
     offload_requested = str(os.getenv("WEBBDUCK_FLUX_OFFLOAD", "auto")).strip().lower()
@@ -167,6 +211,7 @@ def _run(request: dict, output_dir: Path) -> dict:
         )
     )
 
+    _write_progress(progress_path, "Configuring FLUX.2 GPU memory", 0.52)
     if use_cpu_offload:
         print(
             f"[flux] enabling model CPU offload "
@@ -227,12 +272,30 @@ def _run(request: dict, output_dir: Path) -> dict:
             kwargs["image"] = input_image
         generator_device = device if device == "cuda" else "cpu"
         kwargs["generator"] = torch.Generator(device=generator_device).manual_seed(seed + index)
+
+        if not call_params or "callback_on_step_end" in call_params:
+            def _on_step_end(_pipe, step_index, _timestep, callback_kwargs):
+                completed = int(step_index) + 1
+                fraction = completed / max(1, steps)
+                _write_progress(
+                    progress_path,
+                    "Denoising FLUX.2",
+                    0.60 + 0.32 * fraction,
+                    completed,
+                    steps,
+                )
+                return callback_kwargs
+
+            kwargs["callback_on_step_end"] = _on_step_end
+
+        _write_progress(progress_path, "Encoding prompt / starting FLUX.2 inference", 0.58, 0, steps)
         print(
             f"[flux] inference {index + 1}/{num_images}: "
             f"{width}x{height}, steps={steps}, guidance={guidance}",
             flush=True,
         )
         result = pipe(**kwargs)
+        _write_progress(progress_path, "Decoding and saving FLUX.2 image", 0.94, steps, steps)
         image = result.images[0]
         path = output_dir / f"flux_{index:03d}.png"
         image.save(path)
@@ -255,6 +318,7 @@ def _run(request: dict, output_dir: Path) -> dict:
             "guidance": guidance,
         }
     )
+    _write_progress(progress_path, "FLUX.2 complete", 1.0, steps, steps)
     return {"ok": True, "images": saved, "seed": seed, "runtime": runtime}
 
 
@@ -263,13 +327,16 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--progress")
     args = parser.parse_args()
 
     result_path = Path(args.result)
+    progress_path = Path(args.progress) if args.progress else None
     try:
         request = json.loads(Path(args.request).read_text(encoding="utf-8"))
-        result = _run(request, Path(args.output_dir))
+        result = _run(request, Path(args.output_dir), progress_path)
     except Exception as exc:
+        _write_progress(progress_path, f"FLUX.2 failed: {exc}", 0.0)
         result = {
             "ok": False,
             "error": str(exc or exc.__class__.__name__),
