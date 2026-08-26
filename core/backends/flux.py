@@ -291,7 +291,10 @@ class FluxDiffusersBackend(GenerationBackend):
     backend_id = "flux_diffusers"
 
     def can_handle(self, descriptor: ModelDescriptor) -> bool:
-        return descriptor.backend == self.backend_id and descriptor.architecture == "flux"
+        return (
+            descriptor.backend == self.backend_id
+            and descriptor.architecture in {"flux", "flux2"}
+        )
 
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
