@@ -98,7 +98,12 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         identity_adapter=True,
         tokenize=True,
     ),
-    "flux": ModelCapabilities(text2img=True, img2img=True, lora=True),
+    "flux": ModelCapabilities(
+        text2img=True,
+        img2img=True,
+        lora=True,
+        identity_adapter=True,
+    ),
     "krea2": ModelCapabilities(text2img=True),
     # Qwen-Image-2512 is the currently installed Qwen target and is officially
     # published as Text-to-Image. Qwen edit checkpoints will receive their own
