@@ -13,9 +13,9 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-from core.generation import run_generation
+from core.model_runtime import run_selected_model
 from core.exceptions import GenerationCancelledError
-from core.gpu_lease import release_gpu_lease, wait_for_gpu_lease_async
+from core.gpu_lease import get_gpu_lease, release_gpu_lease, wait_for_gpu_lease_async
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry, to_web_path
 from server.events import broadcast_state
@@ -89,9 +89,17 @@ async def _acquire_worker_gpu_lease(job):
     await broadcast_state(snapshot())
     timeout_raw = str(os.getenv("WEBBDUCK_GPU_LEASE_WAIT_SECONDS", "180")).strip()
     try:
-        timeout_seconds = max(5.0, float(timeout_raw))
+        base_timeout = max(5.0, float(timeout_raw))
     except Exception:
-        timeout_seconds = 180.0
+        base_timeout = 180.0
+
+    lease = get_gpu_lease()
+    current_holder = str((lease or {}).get("owner") or "").strip().lower()
+    if current_holder == "duckmotion":
+        timeout_seconds = max(base_timeout, 600.0)
+    else:
+        timeout_seconds = base_timeout
+
     attempt = await wait_for_gpu_lease_async(
         owner="webbduck-core",
         owner_kind="webbduck",
@@ -149,6 +157,21 @@ def _build_kernel_compat_message(exc: Exception) -> str:
     if hint:
         base = f"{base} {hint}"
     return f"{base} Original error: {exc}"
+
+
+def _generation_progress_callback(loop: asyncio.AbstractEventLoop):
+    """Bridge synchronous/backend-worker progress into the async UI state bus."""
+
+    def report(stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+        update_stage(str(stage or "Generating"))
+        update_progress(max(0.0, min(1.0, float(progress))), int(step), int(total_steps))
+        try:
+            asyncio.run_coroutine_threadsafe(broadcast_state(snapshot()), loop)
+        except Exception:
+            # Progress is best-effort and must never fail a generation job.
+            pass
+
+    return report
 
 
 async def run_upscale(job, cancel_event=None):
@@ -281,7 +304,11 @@ async def gpu_worker(queue):
             gen_started_monotonic = time.perf_counter()
             gen_started_utc = datetime.utcnow().isoformat() + "Z"
             images, seed = await loop.run_in_executor(
-                None, run_generation, job["settings"], cancel_event
+                None,
+                run_selected_model,
+                job["settings"],
+                cancel_event,
+                _generation_progress_callback(loop),
             )
             gen_finished_monotonic = time.perf_counter()
             gen_finished_utc = datetime.utcnow().isoformat() + "Z"

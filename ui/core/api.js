@@ -1,9 +1,12 @@
+import './modelCapabilities.js';
+
 /**
  * WebbDuck Core API Module
  * Centralized fetch wrappers for all API endpoints
  */
 
 const API_BASE = '';
+let modelCatalogCache = null;
 
 /**
  * Generic fetch wrapper with error handling
@@ -23,7 +26,8 @@ async function request(url, options = {}) {
             try {
                 const parsed = JSON.parse(text);
                 if (parsed.error) message = parsed.error;
-                else if (parsed.detail) message = parsed.detail;
+                else if (typeof parsed.detail === 'string') message = parsed.detail;
+                else if (parsed.detail?.message) message = parsed.detail.message;
             } catch {
                 if (text) message = text;
             }
@@ -41,16 +45,10 @@ async function request(url, options = {}) {
     }
 }
 
-/**
- * GET request helper
- */
 export async function get(url) {
     return request(url, { method: 'GET' });
 }
 
-/**
- * POST request with JSON body
- */
 export async function post(url, data) {
     return request(url, {
         method: 'POST',
@@ -61,9 +59,6 @@ export async function post(url, data) {
     });
 }
 
-/**
- * POST request with FormData
- */
 export async function postForm(url, formData) {
     return request(url, {
         method: 'POST',
@@ -71,97 +66,117 @@ export async function postForm(url, formData) {
     });
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SPECIFIC API ENDPOINTS
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Fetch available models
- */
-export async function getModels() {
-    return get('/models');
+function normalizeCatalog(catalog) {
+    if (!Array.isArray(catalog)) return [];
+    return catalog
+        .filter(item => item && item.name)
+        .map(item => ({
+            ...item,
+            value: item.name,
+            label: item.supported === false
+                ? `${item.name} — runtime unavailable`
+                : item.name,
+        }));
 }
 
-/**
- * Fetch LoRAs for a specific model
- */
+function cachedProfile(modelName) {
+    if (!modelName || !Array.isArray(modelCatalogCache)) return null;
+    return modelCatalogCache.find(item => item?.name === modelName) || null;
+}
+
+function publishCatalog(catalog) {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('webbduck:model-catalog', {
+        detail: Array.isArray(catalog) ? catalog : [],
+    }));
+}
+
+function publishProfile(profile) {
+    if (typeof window === 'undefined' || !profile) return;
+    window.dispatchEvent(new CustomEvent('webbduck:model-profile', {
+        detail: profile,
+    }));
+}
+
+export function getCachedModelProfile(modelName) {
+    return cachedProfile(modelName);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODEL-DRIVEN API
+// ═══════════════════════════════════════════════════════════════
+
+export async function getModels() {
+    const catalog = normalizeCatalog(await get('/model-catalog'));
+    modelCatalogCache = catalog;
+    publishCatalog(catalog);
+    return catalog;
+}
+
+export async function getModelProfile(modelName) {
+    const cached = cachedProfile(modelName);
+    if (cached?.capabilities) {
+        publishProfile(cached);
+        return cached;
+    }
+    const profile = await get(`/model-catalog/${encodeURIComponent(modelName)}`);
+    publishProfile(profile);
+    return profile;
+}
+
 export async function getLoras(modelName) {
+    const profile = cachedProfile(modelName);
+    if (profile?.capabilities?.lora === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/loras`);
 }
 
-/**
- * Fetch embeddings for a specific model
- */
 export async function getEmbeddings(modelName) {
+    const profile = cachedProfile(modelName);
+    if (profile?.capabilities?.embeddings === false) return [];
     return get(`/models/${encodeURIComponent(modelName)}/embeddings`);
 }
 
-/**
- * Fetch second pass / refiner models
- */
 export async function getSecondPassModels() {
-    return get('/second_pass_models');
+    if (!Array.isArray(modelCatalogCache)) {
+        await getModels();
+    }
+    return (modelCatalogCache || [])
+        .filter(item => item?.supported !== false && item?.capabilities?.second_pass === true)
+        .map(item => item.name);
 }
 
-/**
- * Fetch available schedulers
- */
 export async function getSchedulers() {
     return get('/schedulers');
 }
 
-/**
- * Fetch captioner availability
- */
 export async function getCaptioners() {
     return get('/captioners');
 }
 
-/**
- * Fetch discovered web plugins.
- */
 export async function getWebPlugins() {
     return get('/plugins/web');
 }
 
-/**
- * Fetch connected remote web plugins.
- */
 export async function getRemoteWebPlugins() {
     return get('/plugins/web/remote');
 }
 
-/**
- * Connect a remote web plugin by base URL.
- */
 export async function connectRemoteWebPlugin(baseUrl) {
     return post('/plugins/web/remote/connect', { base_url: baseUrl });
 }
 
-/**
- * Disconnect a remote web plugin by plugin ID.
- */
 export async function disconnectRemoteWebPlugin(pluginId) {
     return request(`/plugins/web/remote/${encodeURIComponent(pluginId)}`, { method: 'DELETE' });
 }
 
-/**
- * Generate images (full batch)
- */
 export async function generate(formData) {
     return postForm('/generate', formData);
 }
 
-/**
- * Test generation (single image)
- */
 export async function testGenerate(formData) {
     return postForm('/test', formData);
 }
 
-/**
- * Upscale an image
- */
 export async function upscale(formData) {
     return postForm('/upscale', formData);
 }
@@ -170,82 +185,56 @@ export async function upscaleInput(formData) {
     return postForm('/upscale-input', formData);
 }
 
-/**
- * Caption an image
- */
 export async function caption(formData) {
     return postForm('/caption', formData);
 }
 
-/**
- * Tokenize prompt for counting
- */
 export async function tokenize(prompt, baseModel) {
+    const profile = cachedProfile(baseModel);
+    if (profile?.capabilities?.tokenize !== true) {
+        return { tokens: 0, available: false };
+    }
     const formData = new FormData();
     formData.append('text', prompt);
     formData.append('base_model', baseModel);
     return postForm('/tokenize', formData);
 }
 
-/**
- * Fetch gallery data
- */
 export async function getGallery(start = 0, limit = 50) {
     const url = `/gallery?start=${start}&limit=${limit}&_=${Date.now()}`;
     return get(url);
 }
 
-/**
- * Search gallery sessions globally via manifest index.
- */
 export async function searchGallery(query, start = 0, limit = 2000) {
     const q = encodeURIComponent(query || '');
     return get(`/gallery/search?q=${q}&start=${start}&limit=${limit}&_=${Date.now()}`);
 }
 
-/**
- * Filter gallery sessions by tag (`hd`, `favorites`) globally via manifest index.
- */
 export async function filterGallery(kind, start = 0, limit = 2000) {
     const k = encodeURIComponent(kind || '');
     return get(`/gallery/filter?kind=${k}&start=${start}&limit=${limit}&_=${Date.now()}`);
 }
 
-/**
- * Fetch queued/running job metadata.
- */
 export async function getQueue() {
     return get('/queue');
 }
 
-/**
- * Cancel a queued job by ID.
- */
 export async function cancelQueue(jobId) {
     const formData = new FormData();
     formData.append('job_id', jobId);
     return postForm('/queue/cancel', formData);
 }
 
-/**
- * Unload all loaded generation models from memory.
- */
 export async function unloadAllModels() {
     const formData = new FormData();
     return postForm('/models/unload_all', formData);
 }
 
-/**
- * Shut down the WebbDuck server process.
- */
 export async function shutdownApp() {
     const formData = new FormData();
     return postForm('/app/shutdown', formData);
 }
 
-/**
- * Favorite/unfavorite an image.
- */
 export async function setFavorite(imagePath, favorite = true) {
     const formData = new FormData();
     formData.append('path', imagePath);
@@ -253,27 +242,18 @@ export async function setFavorite(imagePath, favorite = true) {
     return postForm('/favorite', formData);
 }
 
-/**
- * Delete a single image
- */
 export async function deleteImage(imagePath) {
     const formData = new FormData();
     formData.append('path', imagePath);
     return postForm('/delete_image', formData);
 }
 
-/**
- * Delete an entire run/session
- */
 export async function deleteRun(runId) {
     const formData = new FormData();
     formData.append('path', runId);
     return postForm('/delete_run', formData);
 }
 
-/**
- * Delete multiple images in one request
- */
 export async function deleteImages(paths = []) {
     return post('/delete_images', { paths: Array.isArray(paths) ? paths : [] });
 }

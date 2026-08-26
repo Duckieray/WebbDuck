@@ -1,0 +1,22 @@
+# Mature SDXL backend runtime. PyTorch/torchvision are installed separately by
+# tools/prepare_model_runtimes.py so the CUDA wheel channel stays explicit.
+
+diffusers==0.36.0
+transformers==4.57.6
+accelerate==1.12.0
+huggingface-hub==0.36.0
+safetensors==0.5.3
+peft==0.18.1
+Pillow==11.2.1
+numpy==2.1.2
+opencv-python==4.11.0.86
+scipy==1.15.2
+einops==0.8.1
+# 0.2.0 has no CPython 3.13 wheels and falls back to a fragile CMake source build.
+# 0.2.2 ships CPython 3.13 wheels while preserving the SentencePiece API used by Transformers.
+sentencepiece==0.2.2
+ftfy==6.3.1
+protobuf==5.29.4
+scikit-image==0.25.2
+insightface==0.7.3
+onnxruntime-gpu>=1.20,<2

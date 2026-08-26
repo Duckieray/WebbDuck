@@ -99,8 +99,8 @@ def first_available_model(available_models):
 
 @pytest.fixture
 def pipeline_manager():
-    """Provide a PipelineManager instance (pipe may be None)."""
-    from core.pipeline import PipelineManager
+    """Provide the mature backend-owned SDXL PipelineManager."""
+    from core.backends.sdxl_pipeline import PipelineManager
     return PipelineManager()
 
 

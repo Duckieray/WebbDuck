@@ -1,0 +1,14 @@
+# Krea 2 isolated runtime
+#
+# Install PyTorch separately for the target CUDA stack, then install this file
+# in a backend-specific environment and set WEBBDUCK_KREA2_PYTHON to that
+# Python. Diffusers 0.39.0 contains Krea2Pipeline/Krea2Transformer2DModel.
+diffusers==0.39.0
+transformers>=4.57.0,<6
+accelerate>=1.12.0,<2
+safetensors>=0.5.3
+huggingface-hub>=0.36.0
+sentencepiece>=0.2.0
+protobuf>=5.29.0
+pillow>=11.0.0
+numpy>=2.0.0
