@@ -22,6 +22,7 @@ from models.model_descriptor import ModelDescriptor
 
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
+_MAX_FLUX_IDENTITY_REFERENCES = 5
 
 
 def _huggingface_token() -> tuple[str, str | None]:
@@ -75,6 +76,81 @@ def _normalized_flux_detection(
     if "flux.2-klein" in str(component_model or "").lower():
         detection.setdefault("family", "flux2_klein")
     return detection
+
+
+def _resolve_flux_identity(settings: dict[str, Any]) -> tuple[list[str], str | None]:
+    """Resolve generic WebbDuck identity references for native FLUX.2 conditioning.
+
+    Studio stores reference images as web paths (normally ``/outputs/refs/...``),
+    while API clients may submit absolute/local paths. Convert both forms to real
+    files before the isolated worker starts so failures are immediate and clear.
+    """
+    adapter = settings.get("identity_adapter")
+    if not isinstance(adapter, dict) or not bool(adapter.get("enabled")):
+        return [], None
+
+    raw_refs = adapter.get("reference_images") or []
+    if not isinstance(raw_refs, list):
+        raise ValueError("FLUX identity reference_images must be a list.")
+    if len(raw_refs) > _MAX_FLUX_IDENTITY_REFERENCES:
+        raise ValueError(
+            f"FLUX.2 identity supports at most {_MAX_FLUX_IDENTITY_REFERENCES} reference images."
+        )
+
+    resolved: list[str] = []
+    for index, raw in enumerate(raw_refs):
+        value = str(raw or "").strip()
+        if not value:
+            continue
+
+        if value.startswith("/outputs/") or value.startswith("outputs/"):
+            # Lazy import keeps the standalone backend import surface independent
+            # from FastAPI/server initialization while reusing WebbDuck's safe
+            # output path resolver for UI-managed persona references.
+            from server.storage import resolve_web_path
+
+            path = resolve_web_path(value)
+        else:
+            path = Path(value).expanduser()
+
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"FLUX identity reference image {index + 1} does not exist: {value}"
+            )
+        resolved.append(str(path.resolve()))
+
+    if not resolved:
+        return [], None
+
+    persona_name = str(
+        adapter.get("persona_name") or adapter.get("preset_name") or ""
+    ).strip() or None
+
+    # Normalize the generic identity contract to the provider actually used by
+    # this backend. Old SDXL FaceID presets remain reusable as persona image sets.
+    adapter["type"] = "flux2_native"
+    adapter["provider"] = "flux2_native"
+    adapter["resolved_reference_images"] = list(resolved)
+    settings["identity_adapter_debug"] = {
+        "provider": "flux2_native",
+        "persona_name": persona_name,
+        "reference_images_requested": len(raw_refs),
+        "reference_images_resolved": len(resolved),
+    }
+    return resolved, persona_name
+
+
+def _augment_flux_identity_prompt(prompt: str, persona_name: str | None = None) -> str:
+    """Ask FLUX.2 to preserve the referenced person's identity in a new scene."""
+    instruction = (
+        "Create a new image of the same person shown in the reference images. "
+        "Preserve their identity, facial structure, apparent age, skin tone, hair, "
+        "and overall appearance while following the requested scene, pose, clothing, "
+        "lighting, and composition."
+    )
+    if persona_name:
+        instruction += f" The saved persona is {persona_name}."
+    return f"{instruction}\n\n{str(prompt or '').strip()}".strip()
 
 
 def _component_access_error(
@@ -215,7 +291,10 @@ class FluxDiffusersBackend(GenerationBackend):
     backend_id = "flux_diffusers"
 
     def can_handle(self, descriptor: ModelDescriptor) -> bool:
-        return descriptor.backend == self.backend_id and descriptor.architecture == "flux"
+        return (
+            descriptor.backend == self.backend_id
+            and descriptor.architecture in {"flux", "flux2"}
+        )
 
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
@@ -263,6 +342,11 @@ class FluxDiffusersBackend(GenerationBackend):
         if not prompt:
             raise ValueError("Prompt is required.")
 
+        identity_refs, persona_name = _resolve_flux_identity(settings)
+        if identity_refs:
+            prompt = _augment_flux_identity_prompt(prompt, persona_name)
+            settings["prompt"] = prompt
+
         resolved_loras = resolve_flux_loras(settings.get("loras", []))
         trigger_phrase = lora_trigger_phrase(resolved_loras)
         prompt = inject_lora_trigger(prompt, trigger_phrase)
@@ -291,6 +375,9 @@ class FluxDiffusersBackend(GenerationBackend):
             "prompt": prompt,
             "loras": resolved_loras,
             "input_image": str(settings.get("image") or "").strip() or None,
+            "reference_images": identity_refs,
+            "identity_provider": "flux2_native" if identity_refs else None,
+            "identity_name": persona_name,
             "width": int(settings.get("width") or defaults.get("width") or 1024),
             "height": int(settings.get("height") or defaults.get("height") or 1024),
             "steps": int(settings.get("steps") or defaults.get("steps") or 4),
