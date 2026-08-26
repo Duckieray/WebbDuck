@@ -139,6 +139,45 @@ def _preflight_component_access(component_model: str) -> None:
         ) from exc
 
 
+def _report_progress(
+    callback: Any,
+    stage: str,
+    progress: float,
+    step: int = 0,
+    total_steps: int = 0,
+) -> None:
+    if not callable(callback):
+        return
+    try:
+        callback(stage, progress, step, total_steps)
+    except Exception:
+        pass
+
+
+def _forward_worker_progress(
+    progress_path: Path,
+    callback: Any,
+    previous: str | None,
+) -> str | None:
+    if not callable(callback) or not progress_path.exists():
+        return previous
+    try:
+        raw = progress_path.read_text(encoding="utf-8").strip()
+        if not raw or raw == previous:
+            return previous
+        event = json.loads(raw)
+        _report_progress(
+            callback,
+            str(event.get("stage") or "Generating with FLUX.2"),
+            float(event.get("progress") or 0.0),
+            int(event.get("step") or 0),
+            int(event.get("total_steps") or 0),
+        )
+        return raw
+    except Exception:
+        return previous
+
+
 class FluxDiffusersBackend(GenerationBackend):
     """Run FLUX-family Diffusers pipelines outside WebbDuck's core environment."""
 
@@ -182,6 +221,7 @@ class FluxDiffusersBackend(GenerationBackend):
         **kwargs: Any,
     ) -> tuple[list[Image.Image], int]:
         cancel_event = kwargs.get("cancel_event")
+        progress_callback = kwargs.get("progress_callback")
         if cancel_event is not None and cancel_event.is_set():
             raise GenerationCancelledError("Generation cancelled before FLUX runtime start")
 
@@ -198,6 +238,7 @@ class FluxDiffusersBackend(GenerationBackend):
             or _DEFAULT_FLUX2_9B_COMPONENT_MODEL
         )
         if descriptor.format == "gguf":
+            _report_progress(progress_callback, "Checking FLUX.2 access", 0.03)
             _preflight_component_access(component_model)
 
         payload = {
@@ -227,9 +268,11 @@ class FluxDiffusersBackend(GenerationBackend):
             tmp = Path(tmp_raw)
             request_path = tmp / "request.json"
             result_path = tmp / "result.json"
+            progress_path = tmp / "progress.json"
             log_path = tmp / "worker.log"
             request_path.write_text(json.dumps(payload), encoding="utf-8")
 
+            _report_progress(progress_callback, "Starting FLUX.2 runtime", 0.05)
             with log_path.open("w", encoding="utf-8") as log_file:
                 proc = subprocess.Popen(
                     [
@@ -241,6 +284,8 @@ class FluxDiffusersBackend(GenerationBackend):
                         str(result_path),
                         "--output-dir",
                         str(tmp),
+                        "--progress",
+                        str(progress_path),
                     ],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
@@ -248,7 +293,13 @@ class FluxDiffusersBackend(GenerationBackend):
                     env=_worker_environment(),
                 )
                 started = time.monotonic()
+                last_progress: str | None = None
                 while proc.poll() is None:
+                    last_progress = _forward_worker_progress(
+                        progress_path,
+                        progress_callback,
+                        last_progress,
+                    )
                     if cancel_event is not None and cancel_event.is_set():
                         proc.terminate()
                         try:
@@ -262,8 +313,9 @@ class FluxDiffusersBackend(GenerationBackend):
                             f"FLUX runtime timed out after {int(timeout_seconds)} seconds"
                         )
                     time.sleep(0.2)
+                _forward_worker_progress(progress_path, progress_callback, last_progress)
 
-            log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+            log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
             if not result_path.exists():
                 detail = "\n".join(log_lines[-20:])
                 raise RuntimeError(
@@ -273,8 +325,10 @@ class FluxDiffusersBackend(GenerationBackend):
             result = json.loads(result_path.read_text(encoding="utf-8"))
             if not result.get("ok"):
                 detail = str(result.get("error") or "FLUX runtime failed")
+                worker_trace = str(result.get("traceback") or "").strip()
                 logs = "\n".join(log_lines[-20:])
-                raise RuntimeError(f"{detail}\n{logs}".strip())
+                combined = "\n".join(part for part in (detail, worker_trace, logs) if part)
+                raise RuntimeError(combined.strip())
 
             runtime = result.get("runtime")
             if isinstance(runtime, dict):
@@ -286,6 +340,7 @@ class FluxDiffusersBackend(GenerationBackend):
                     images.append(image.convert("RGB").copy())
             if not images:
                 raise RuntimeError("FLUX runtime returned no images")
+            _report_progress(progress_callback, "FLUX.2 complete", 1.0)
             return images, int(result.get("seed", seed))
 
 
