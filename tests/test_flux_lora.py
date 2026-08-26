@@ -43,8 +43,8 @@ def test_resolve_flux_loras_preserves_studio_name_weight_contract(tmp_path, monk
         }
     ]
     phrase = lora_trigger_phrase(resolved)
-    assert phrase == "(redcraft_style:0.85)"
-    assert inject_lora_trigger("portrait", phrase) == "portrait, (redcraft_style:0.85)"
+    assert phrase == "redcraft_style"
+    assert inject_lora_trigger("portrait", phrase) == "portrait, redcraft_style"
 
 
 def test_resolve_flux_loras_rejects_incompatible_architecture(tmp_path, monkeypatch):
@@ -93,6 +93,9 @@ def test_apply_flux_loras_uses_named_weighted_adapters_without_fusing(tmp_path):
     )
 
     assert len(pipe.loads) == 2
+    assert pipe.loads[0][0] == str(tmp_path)
+    assert pipe.loads[0][2]["weight_name"] == "first.safetensors"
+    assert pipe.loads[0][2]["low_cpu_mem_usage"] is True
     assert pipe.adapters is not None
     assert pipe.adapters[1] == [0.7, 1.2]
     assert pipe.fused is False
