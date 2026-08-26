@@ -111,8 +111,25 @@ def detect_arch(path: Path) -> str | None:
     return None
 
 
+def _lora_namespace_arch(lora_path: Path) -> str | None:
+    """Reserve explicit LoRA subdirectories for non-image model families."""
+    try:
+        relative = lora_path.resolve().relative_to(LORA_ROOT.resolve())
+    except (OSError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    return {
+        "ltx": "ltx25",
+    }.get(relative.parts[0].lower())
+
+
 def detect_lora_arch(lora_path: Path) -> str | None:
-    """Detect LoRA architecture from safetensors keys."""
+    """Detect LoRA architecture from namespace first, then safetensors keys."""
+    namespace_arch = _lora_namespace_arch(lora_path)
+    if namespace_arch:
+        return namespace_arch
+
     try:
         with safe_open(lora_path, framework="pt", device="cpu") as f:
             keys = list(f.keys())
@@ -407,7 +424,7 @@ def load_lora_registry():
 
         registry[name] = {
             "path": file_path,
-            "arch": detect_lora_arch(file_path) or "sdxl",
+            "arch": cfg.get("arch") or detect_lora_arch(file_path) or "sdxl",
             "trigger": cfg.get("trigger"),
             "weight": float(cfg.get("weight", 1.0)),
             "description": cfg.get("description", ""),
