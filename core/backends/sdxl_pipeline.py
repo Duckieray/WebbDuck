@@ -969,26 +969,7 @@ class PipelineManager:
             debug["lora_weight"] = str(lora_weight)
         debug["lora_scale"] = lora_scale
 
-        if adapter_type == "official_faceid_sdxl":
-            debug["identity_adapter_applied"] = True
-            debug["implementation"] = "official_h94"
-            debug["repo"] = repo
-            debug["preset_name"] = adapter_cfg.get("preset_name", "") or "custom"
-            self._identity_debug = debug
-            return {}
-
         # --- Load the IP-Adapter weight ------------------------------------
-        # diffusers 0.36.0 has no FaceID PlusV2 branch in
-        # _convert_ip_adapter_image_proj_to_diffusers, so the Perceiver
-        # Resampler state dict from ip-adapter-faceid-plusv2_sdxl.bin causes
-        # a hard crash.  Short-circuit early to avoid it entirely.
-        if adapter_type == "faceid_plusv2_sdxl":
-            log.warning("PlusV2: full Perceiver Resampler not supported in diffusers 0.36.0; "
-                        "using FaceID SDXL identity-only signal")
-            adapter_weight = "ip-adapter-faceid_sdxl.bin"
-            adapter_type = "faceid_sdxl"
-            debug["adapter_weight"] = adapter_weight
-            debug["identity_adapter_type"] = adapter_type
         repo = str(adapter_cfg.get("repo", "h94/IP-Adapter-FaceID"))
         try:
             self.pipe.load_ip_adapter(
@@ -1028,14 +1009,6 @@ class PipelineManager:
         if adapter_type == "faceid_sdxl":
             kwargs = self._build_faceid_sdxl_kwargs(
                 avg_embed, lora_weight, lora_scale, repo, debug
-            )
-        elif adapter_type == "faceid_plusv2_sdxl":
-            kwargs = self._build_faceid_plusv2_kwargs(
-                avg_embed, primary_crop, lora_weight, lora_scale, repo,
-                adapter_weight,
-                adapter_cfg.get("image_encoder",
-                                "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"),
-                adapter_scale, debug,
             )
         else:
             raise RuntimeError(f"Unknown identity adapter type: {adapter_type}")
@@ -1159,104 +1132,6 @@ class PipelineManager:
             [torch.zeros_like(face_embed), face_embed], dim=0
         ).unsqueeze(1)
         return {"ip_adapter_image_embeds": [combined]}
-
-    def _build_faceid_plusv2_kwargs(
-        self, face_embed, face_crop, lora_weight, lora_scale,
-        repo, adapter_weight, image_encoder_id, adapter_scale, debug,
-    ):
-        """Build kwargs for FaceID PlusV2 (identity + face-structure signal).
-
-        PlusV2 needs **both** the InsightFace identity embedding **and** the
-        aligned face crop processed through a CLIP vision encoder to produce
-        the facial-structure (pose/expression) conditioning.
-        """
-        import cv2
-        import torch
-
-        # ---------- CLIP vision encoder ---------------------------------
-        try:
-            from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
-        except ImportError as exc:
-            raise RuntimeError(
-                "transformers is required for FaceID PlusV2 mode.\n"
-                f"Install: pip install transformers\n{exc}"
-            ) from exc
-
-        if (
-            not hasattr(self, "_clip_vision")
-            or self._clip_vision is None
-        ):
-            log.info("Loading CLIP vision encoder '%s' for FaceID PlusV2 …", image_encoder_id)
-            self._clip_vision = CLIPVisionModelWithProjection.from_pretrained(
-                image_encoder_id,
-                torch_dtype=DTYPE,
-            ).to(DEVICE)
-            self._clip_vision.eval()
-            self._clip_processor = CLIPImageProcessor.from_pretrained(image_encoder_id)
-
-        self.pipe.image_encoder = self._clip_vision
-        self.pipe.feature_extractor = self._clip_processor
-
-        # ---------- Load FaceID LoRA ------------------------------------
-        if lora_weight:
-            self._load_faceid_lora(lora_weight, lora_scale, repo)
-            debug["lora_weight"] = str(lora_weight)
-            debug["lora_scale"] = lora_scale
-
-        # ---------- Patch clip_embeds onto the projection layer --------
-        # diffusers 0.36.0 has no FaceID PlusV2 branch in
-        # _convert_ip_adapter_image_proj_to_diffusers — it creates
-        # IPAdapterFaceIDImageProjection (simple FFN) instead of the
-        # correct IPAdapterFaceIDPlusImageProjection (Perceiver Resampler).
-        # The full Perceiver Resampler architecture from the Hub weights
-        # (fused to_kv, different block structure) is incompatible with
-        # diffusers' IPAdapterFaceIDPlusImageProjection, so we fall back
-        # to the identity-only signal (same as FaceID SDXL).
-
-        # ---------- Build identity embedding (CFG-paired) ---------------
-        combined_embed = torch.cat(
-            [torch.zeros_like(face_embed), face_embed], dim=0
-        ).unsqueeze(1)
-
-        # ---------- Build face-structure signal -------------------------
-        if face_crop is not None:
-            # Convert BGR->RGB and encode through CLIP vision encoder
-            rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(rgb)
-            inputs = self._clip_processor(
-                images=pil_img, return_tensors="pt"
-            ).pixel_values.to(device=DEVICE, dtype=DTYPE)
-
-            with torch.no_grad():
-                clip_out = self._clip_vision(
-                    inputs, output_hidden_states=True
-                )
-            # Use the last hidden state as the CLIP image embedding
-            # shape: [1, 257, 1280] for ViT-H-14
-            clip_image_embeds = clip_out.last_hidden_state.to(
-                device=DEVICE, dtype=DTYPE
-            )
-
-            # Replicate for CFG (uncond + cond, batch=2)
-            clip_image_embeds = torch.cat(
-                [torch.zeros_like(clip_image_embeds), clip_image_embeds], dim=0
-            )
-
-            # Set clip_embeds on the projection layers — this is how the
-            # PlusV2 Perceiver Resampler receives the face-structure signal.
-            proj_layers = (
-                self.pipe.unet.encoder_hid_proj.image_projection_layers
-            )
-            for layer in proj_layers:
-                if hasattr(layer, "clip_embeds"):
-                    layer.clip_embeds = clip_image_embeds.unsqueeze(1)
-
-            kwargs = {"ip_adapter_image_embeds": [combined_embed]}
-        else:
-            # Fall back to identity-only (no face crop available)
-            kwargs = {"ip_adapter_image_embeds": [combined_embed]}
-
-        return kwargs
 
     def set_active_unet(self, which: str):
         """Swap between base and second pass UNet on GPU."""

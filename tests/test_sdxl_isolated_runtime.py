@@ -58,7 +58,6 @@ def test_mature_runtime_preserves_explicit_seed_zero_and_backend_ownership():
     assert "if seed_raw is not None" in text
     assert "from core.backends.sdxl_pipeline import pipeline_manager" in text
     assert "from core.pipeline import pipeline_manager" not in text
-    assert "from core.backends.sdxl_faceid import run_official_faceid_sdxl" in text
 
 
 def test_scheduler_module_has_no_top_level_diffusers_import():

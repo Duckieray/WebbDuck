@@ -8,6 +8,7 @@ correctly and reported as non-runnable until their adapter is wired.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -78,6 +79,48 @@ def _architecture_hint_from_path(path: Path, root: Path) -> str:
     return UNKNOWN_ARCHITECTURE
 
 
+def _flux2_klein_gguf_detection(path: Path) -> dict[str, Any] | None:
+    """Recognize released FLUX.2 Klein GGUF transformer filenames conservatively.
+
+    GGUF is a component checkpoint, not a whole Diffusers pipeline. The filename
+    therefore needs to identify a known FLUX.2 Klein family strongly enough for
+    WebbDuck to select the matching support-component repository without parsing
+    multi-gigabyte tensor data during catalog discovery.
+    """
+    filename = path.name.lower()
+    normalized = filename.replace("_", "-").replace(".", "-")
+    if "flux-2-klein" not in normalized:
+        return None
+
+    size_match = re.search(r"(?:^|[-_])(4b|9b)(?:[-_.]|$)", filename, re.IGNORECASE)
+    if not size_match:
+        return None
+    parameter_size = size_match.group(1).upper()
+    component_model = f"black-forest-labs/FLUX.2-klein-{parameter_size}"
+
+    quantization = "unknown"
+    quant_match = re.search(
+        r"(?:^|[-_])(Q\d+(?:_[A-Z0-9]+)*|BF16|F16)$",
+        path.stem.upper(),
+    )
+    if quant_match:
+        quantization = quant_match.group(1)
+
+    is_base = "klein-base" in normalized
+    if is_base:
+        component_model = f"black-forest-labs/FLUX.2-klein-base-{parameter_size}"
+
+    return {
+        "method": "gguf_filename",
+        "confidence": "high",
+        "family": "flux2_klein",
+        "variant": "base" if is_base else "distilled",
+        "parameter_size": parameter_size,
+        "quantization": quantization,
+        "component_model": component_model,
+    }
+
+
 def _registry_entry(
     *,
     path: Path,
@@ -127,6 +170,38 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
         except OSError:
             return
         for item in children:
+            if item.is_file() and item.suffix.lower() == ".gguf":
+                detection = _flux2_klein_gguf_detection(item)
+                if detection is None:
+                    hint = _architecture_hint_from_path(item, root)
+                    if hint not in IMAGE_ARCHITECTURES:
+                        continue
+                    size_match = re.search(
+                        r"(?:^|[-_])(4b|9b)(?:[-_.]|$)", item.name, re.IGNORECASE
+                    )
+                    parameter_size = size_match.group(1).upper() if size_match else None
+                    detection = {
+                        "method": "gguf_path_hint",
+                        "confidence": "medium",
+                        "family": hint,
+                        "parameter_size": parameter_size,
+                    }
+                arch = detection.get("family", "flux")
+                if arch not in IMAGE_ARCHITECTURES:
+                    arch = "flux"
+                _register_unique(
+                    models,
+                    item.stem,
+                    _registry_entry(
+                        path=item,
+                        architecture=arch,
+                        source="local",
+                        format_name="gguf",
+                        detection=detection,
+                    ),
+                )
+                continue
+
             if item.is_file() and item.suffix.lower() == ".safetensors":
                 architecture, detection = inspect_single_image_checkpoint(item)
                 if architecture not in IMAGE_ARCHITECTURES:
@@ -190,8 +265,35 @@ def _repo_display_name(repo: Path) -> str:
     return repo.name.removeprefix("models--").replace("--", "/")
 
 
+def _hf_snapshot_has_primary_weights(snapshot: Path, architecture: str) -> bool:
+    """Return whether a cached Diffusers snapshot contains its runnable core weights.
+
+    Hugging Face snapshots may be intentionally partial. WebbDuck's GGUF FLUX
+    path, for example, downloads tokenizer/text-encoder/VAE/scheduler assets and
+    only ``transformer/config.json`` because a local GGUF supplies transformer
+    weights. Such a support-component snapshot still has ``model_index.json``
+    and looks structurally like a full model, but ``from_pretrained(snapshot)``
+    cannot run it. Never surface those partial caches as selectable checkpoints.
+    """
+    component_name = "unet" if architecture == "sdxl" else "transformer"
+    component = Path(snapshot) / component_name
+    if not component.is_dir():
+        return False
+
+    try:
+        for candidate in component.iterdir():
+            if not candidate.is_file():
+                continue
+            name = candidate.name.lower()
+            if name.endswith(".safetensors") or name.endswith(".bin"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def discover_hf_image_models(hf_cache: Path) -> dict[str, dict[str, Any]]:
-    """Discover recognized image Diffusers snapshots in a Hugging Face hub cache."""
+    """Discover complete, recognized image Diffusers snapshots in an HF cache."""
     cache = Path(hf_cache)
     models: dict[str, dict[str, Any]] = {}
     if not cache.exists():
@@ -209,6 +311,11 @@ def discover_hf_image_models(hf_cache: Path) -> dict[str, dict[str, Any]]:
                 continue
             architecture, detection = detect_diffusers_architecture(snapshot)
             if architecture not in IMAGE_ARCHITECTURES:
+                continue
+            if not _hf_snapshot_has_primary_weights(snapshot, architecture):
+                # Partial support-component caches are dependencies, not models.
+                # Keep scanning older snapshots in case a complete revision is
+                # also cached for the same repository.
                 continue
             models[name] = _registry_entry(
                 path=snapshot,

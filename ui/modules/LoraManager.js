@@ -33,7 +33,7 @@ export class LoraManager {
 
     /**
      * Load available LoRAs for a specific base model
-     * @param {string} modelName 
+     * @param {string} modelName
      */
     async loadForModel(modelName) {
         if (!this.select) return;
@@ -41,13 +41,12 @@ export class LoraManager {
         try {
             const loras = await api.getLoras(modelName);
 
-            // Clear cache
+            // Clear compatibility cache for the previous checkpoint.
             this.availableLorasMap.clear();
 
             loras.forEach(lora => {
                 const name = typeof lora === 'string' ? lora : lora.name;
 
-                // Store metadata
                 if (typeof lora === 'string') {
                     this.availableLorasMap.set(name, { name, strength_default: 1.0 });
                 } else {
@@ -55,18 +54,24 @@ export class LoraManager {
                 }
             });
 
+            // A selected LoRA belongs to the checkpoint family it was offered
+            // for. When the base checkpoint changes, remove adapters that the new
+            // model does not advertise instead of submitting an incompatible
+            // stale selection to the backend.
+            let selectionChanged = false;
+            for (const name of Array.from(this.selectedLoras.keys())) {
+                if (this.availableLorasMap.has(name)) continue;
+                this.selectedLoras.delete(name);
+                const card = this.container?.querySelector(`.lora-card[data-lora="${CSS.escape(name)}"]`);
+                if (card) card.remove();
+                selectionChanged = true;
+            }
+
             this.restoreFromState();
             this.refreshSelectOptions();
-
-            // Re-validate selected LoRAs? 
-            // If model changed, maybe clear selected LoRAs?
-            // Usually yes, different base model = incompatible LoRAs.
-            // But for now, we leave them or let user decide?
-            // WebbDuck usually clears on model change?
-            // The existing code didn't seem to clear explicitly in loadLoras, 
-            // but loadLoras is called when base model changes?
-            // Let's safe-guard by just keeping the current logic of loading available ones.
-
+            if (selectionChanged) {
+                this.persistSelection();
+            }
         } catch (error) {
             console.error('Failed to load LoRAs:', error);
             toast('Failed to load LoRAs', 'error');
@@ -94,8 +99,8 @@ export class LoraManager {
 
     /**
      * Add a LoRA to the active set
-     * @param {string} name 
-     * @param {number|null} weight 
+     * @param {string} name
+     * @param {number|null} weight
      */
     addLora(name, weight = null, options = {}) {
         const { persist = true, silent = false } = options;
@@ -123,7 +128,7 @@ export class LoraManager {
 
     /**
      * Remove a LoRA
-     * @param {string} name 
+     * @param {string} name
      */
     removeLora(name) {
         this.selectedLoras.delete(name);

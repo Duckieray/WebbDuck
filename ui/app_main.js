@@ -1249,14 +1249,13 @@ function collectFormData() {
         try { refs = JSON.parse(refsJson); } catch { refs = []; }
         if (Array.isArray(refs) && refs.length > 0) {
             const adapterType = byId('ip-adapter-type')?.value || 'faceid_sdxl';
-            const isPlusV2 = adapterType === 'faceid_plusv2_sdxl';
             const presetSelect = byId('ip-adapter-preset-select');
             const presetName = presetSelect?.value || '';
             const payload = {
                 enabled: true,
                 type: adapterType,
                 repo: 'h94/IP-Adapter-FaceID',
-                adapter_weight: isPlusV2 ? 'ip-adapter-faceid-plusv2_sdxl.bin' : 'ip-adapter-faceid_sdxl.bin',
+                adapter_weight: 'ip-adapter-faceid_sdxl.bin',
                 embedder: 'buffalo_l',
                 adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
                 lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
@@ -1264,10 +1263,6 @@ function collectFormData() {
                 reference_mode: 'primary_only',
                 preset_name: presetName,
             };
-            if (isPlusV2) {
-                payload.lora_weight = 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors';
-                payload.image_encoder = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K';
-            }
             formData.append('identity_adapter', JSON.stringify(payload));
         }
     }

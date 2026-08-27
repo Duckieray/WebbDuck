@@ -127,7 +127,7 @@ export async function getModelProfile(modelName) {
 export async function getLoras(modelName) {
     const profile = cachedProfile(modelName);
     if (profile?.capabilities?.lora === false) return [];
-    return get(`/models/${encodeURIComponent(modelName)}/loras`);
+    return get(`/model-catalog/${encodeURIComponent(modelName)}/loras`);
 }
 
 export async function getEmbeddings(modelName) {

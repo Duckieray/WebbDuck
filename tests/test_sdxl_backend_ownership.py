@@ -19,21 +19,18 @@ def test_host_pipeline_module_is_lightweight_worker_gate():
     root = Path(__file__).resolve().parents[1]
     generation = (root / "core" / "generation.py").read_text(encoding="utf-8")
     pipeline = (root / "core" / "pipeline.py").read_text(encoding="utf-8")
-    faceid = (root / "core" / "run_official.py").read_text(encoding="utf-8")
 
     assert "from core.backends.sdxl_runtime import *" in generation
     assert "WEBBDUCK_SDXL_WORKER" in pipeline
     assert "if str(os.getenv" in pipeline
     assert "from core.backends.sdxl_pipeline import *" in pipeline
     assert "class _IsolatedPipelineManager" in pipeline
-    assert "from core.backends.sdxl_faceid import *" in faceid
 
 
 def test_backend_owned_sdxl_implementations_are_present():
     root = Path(__file__).resolve().parents[1] / "core" / "backends"
     assert (root / "sdxl_runtime.py").stat().st_size > 10_000
     assert (root / "sdxl_pipeline.py").stat().st_size > 30_000
-    assert (root / "sdxl_faceid.py").stat().st_size > 2_000
     worker = (root / "sdxl_worker.py").read_text(encoding="utf-8")
     assert "WEBBDUCK_SDXL_WORKER" in worker
     assert "metadata_updates" in worker

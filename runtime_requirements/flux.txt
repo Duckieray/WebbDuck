@@ -2,13 +2,14 @@
 #
 # Install PyTorch separately for the host CUDA stack, then install this file in
 # a backend-specific environment and set WEBBDUCK_FLUX_PYTHON to that Python.
-# Diffusers 0.39.0 contains Flux2KleinPipeline, so this runtime no longer needs
-# a floating install from Diffusers main.
+# Diffusers 0.39.0 contains Flux2KleinPipeline and FLUX.2 transformer loading.
 diffusers==0.39.0
 transformers>=4.57.0,<6
 accelerate>=1.12.0,<2
+peft>=0.17.0,<1
 safetensors>=0.5.0
 huggingface_hub>=0.36.0
+gguf>=0.18.0,<1
 sentencepiece>=0.2.0
 pillow>=11.0.0
 numpy>=2.0.0
