@@ -111,12 +111,25 @@ def detect_arch(path: Path) -> str | None:
     return None
 
 
-def _detect_flux_lora_version(keys: list[str]) -> str:
+def _lora_namespace_arch(lora_path: Path) -> str | None:
+    """Reserve explicit LoRA subdirectories for non-image model families."""
+    try:
+        relative = lora_path.resolve().relative_to(LORA_ROOT.resolve())
+    except (OSError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    return {
+        "ltx": "ltx25",
+    }.get(relative.parts[0].lower())
+
+
+def _detect_flux_lora_version(lora_path: Path, keys: list[str]) -> str:
     """Distinguish FLUX.1 from FLUX.2 LoRA by key patterns and tensor shapes.
 
     FLUX.1 LoRAs (Kohya/Comfy exports) use ``diffusion_model.*`` or
-    ``lora_unet_*`` key prefixes.  FLUX.2 LoRAs carry ``guidance_in`` or
-    ``to_qkv_mlp_proj`` keys unique to the Klein/Dev architecture.  When the
+    ``lora_unet_*`` key prefixes. FLUX.2 LoRAs carry ``guidance_in`` or
+    ``to_qkv_mlp_proj`` keys unique to the Klein/Dev architecture. When the
     keys use the generic ``transformer.*`` Diffusers/PEFT namespace the two
     versions are indistinguishable by name alone, so fall back to tensor shapes:
     FLUX.1 dev/schnell has hidden_size 3072 while FLUX.2 klein 9B uses 4096.
@@ -135,20 +148,13 @@ def _detect_flux_lora_version(keys: list[str]) -> str:
 
     # --- Generic transformer.* namespace — disambiguate by tensor shapes ---
     try:
-        with safe_open(None, framework="pt", device="cpu") as _noop:  # pragma: no cover
-            pass
-    except Exception:
-        pass
-
-    try:
-        from safetensors import safe_open as _safe_open
-
-        with _safe_open(str(lora_path), framework="pt", device="cpu") as sf:
+        with safe_open(str(lora_path), framework="pt", device="cpu") as sf:
             for key in keys:
-                if ".to_q." in key and "lora_A" in key:
+                lowered = key.lower()
+                if ".to_q." in lowered and "lora_a" in lowered:
                     tensor = sf.get_tensor(key)
                     if tensor.ndim == 2:
-                        hidden = tensor.shape[0]
+                        hidden = max(int(tensor.shape[0]), int(tensor.shape[1]))
                         if hidden <= 3072:
                             return "flux1"
                         return "flux2"
@@ -160,15 +166,21 @@ def _detect_flux_lora_version(keys: list[str]) -> str:
 
 
 def detect_lora_arch(lora_path: Path) -> str | None:
-    """Detect LoRA architecture from safetensors keys.
+    """Detect LoRA architecture from namespace first, then safetensors keys.
 
-    FLUX exporters use several naming conventions (Diffusers/PEFT, Kohya,
-    Comfy-style transformer paths, and model-difference exports). Recognize the
-    structural FLUX block names without depending on a literal ``flux`` token.
+    Explicit shared-root namespaces are authoritative for non-image adapters.
+    Otherwise FLUX exporters use several naming conventions (Diffusers/PEFT,
+    Kohya, Comfy-style transformer paths, and model-difference exports), so
+    recognize structural FLUX block names without depending on a literal
+    ``flux`` token.
 
     Returns ``"flux1"`` or ``"flux2"`` when the version can be determined, or
     plain ``"flux"`` for unclassifiable FLUX-family LoRAs.
     """
+    namespace_arch = _lora_namespace_arch(lora_path)
+    if namespace_arch:
+        return namespace_arch
+
     try:
         with safe_open(lora_path, framework="pt", device="cpu") as f:
             keys = list(f.keys())
@@ -188,7 +200,7 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         "transformer.single_transformer_blocks",
     )
     if any(marker in joined for marker in flux_markers):
-        return _detect_flux_lora_version(keys)
+        return _detect_flux_lora_version(lora_path, keys)
 
     # Some Diffusers/PEFT FLUX exports prefix adapter parameters with the module
     # path rather than the architecture name. Require the transformer namespace
@@ -196,7 +208,7 @@ def detect_lora_arch(lora_path: Path) -> str | None:
     if "transformer." in joined and (
         "transformer_blocks" in joined or "single_transformer_blocks" in joined
     ):
-        return _detect_flux_lora_version(keys)
+        return _detect_flux_lora_version(lora_path, keys)
 
     if "lora_te2_" in joined:
         return "sdxl"
