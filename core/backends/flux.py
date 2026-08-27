@@ -136,6 +136,7 @@ def _resolve_flux_identity(settings: dict[str, Any]) -> tuple[list[str], str | N
         "persona_name": persona_name,
         "reference_images_requested": len(raw_refs),
         "reference_images_resolved": len(resolved),
+        "text_identity_guidance": bool(adapter.get("text_identity_guidance", True)),
     }
     return resolved, persona_name
 
@@ -343,7 +344,13 @@ class FluxDiffusersBackend(GenerationBackend):
             raise ValueError("Prompt is required.")
 
         identity_refs, persona_name = _resolve_flux_identity(settings)
-        if identity_refs:
+        identity_adapter = settings.get("identity_adapter")
+        text_identity_guidance = bool(
+            identity_adapter.get("text_identity_guidance", True)
+            if isinstance(identity_adapter, dict)
+            else True
+        )
+        if identity_refs and text_identity_guidance:
             prompt = _augment_flux_identity_prompt(prompt, persona_name)
             settings["prompt"] = prompt
 

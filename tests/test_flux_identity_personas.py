@@ -58,6 +58,7 @@ def test_flux_identity_resolves_persona_reference_files(tmp_path):
         "persona_name": "Della",
         "reference_images_requested": 2,
         "reference_images_resolved": 2,
+        "text_identity_guidance": True,
     }
 
 
@@ -112,6 +113,7 @@ def test_flux_backend_serializes_native_persona_references(monkeypatch, tmp_path
         "identity_adapter": {
             "enabled": True,
             "preset_name": "Della",
+            "text_identity_guidance": False,
             # Deliberately keep an old SDXL preset type to prove the generic
             # saved-persona reference set is normalized by the FLUX backend.
             "type": "faceid_sdxl",
@@ -128,9 +130,7 @@ def test_flux_backend_serializes_native_persona_references(monkeypatch, tmp_path
     assert payload["identity_provider"] == "flux2_native"
     assert payload["identity_name"] == "Della"
     assert payload["input_image"] is None
-    assert payload["prompt"].startswith("Create a new image of the same person shown in the reference images.")
-    assert "The saved persona is Della." in payload["prompt"]
-    assert "Della debugging code at a workstation late at night" in payload["prompt"]
+    assert payload["prompt"] == "Della debugging code at a workstation late at night"
 
 
 def test_flux_worker_combines_input_and_identity_conditioning_without_replacing_img2img():
