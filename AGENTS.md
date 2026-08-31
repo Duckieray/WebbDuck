@@ -434,3 +434,16 @@ The official `third_party/IP-Adapter` wrapper (`core/backends/sdxl_faceid.py`, `
 - `_maybe_convert_diffusers_suffix_lora_to_peft()` detects the layout (native `transformer.` paths + `.lora_down.weight` suffix) and applies a suffix-only PEFT conversion (drop `dora_scale`, rename `lora_down`→`lora_A` scaled by `alpha/rank`, `lora_up`→`lora_B`), then loads the converted dict via `pipe.load_lora_weights(dict, ...)`.
 - Only that specific layout triggers the conversion; PEFT (`lora_A`) and flat OneTrainer (`lora_unet_*`) LoRAs keep the existing file-path load path unchanged.
 - Covered by `tests/test_flux_lora.py`; the real Areola LoRA yields 288 valid PEFT keys and passes `Flux2KleinPipeline.lora_state_dict` unchanged.
+
+### FLUX-dev LoRAs are NOT portable to FLUX.2 Klein (2026-08-30)
+- Investigated `flux_zendaya.safetensors` (PEFT `lora_A`/`lora_B`, `transformer.*` paths). Conclusion: a FLUX.1-dev-style LoRA cannot be meaningfully applied to a FLUX.2 transformer — the base-model geometry is incompatible, not just the file format:
+  - Block count: LoRA targets 38 single + 19 double blocks; FLUX.2 Klein has only 24 single + 8 double (over half the LoRA's keys point to nonexistent blocks).
+  - Feature dim: LoRA `inner_dim` 3072 vs Klein 4096 (zero-padding would not reproduce the intended style).
+  - Single-block structure: FLUX.1 uses separate `attn.to_q/to_k/to_v`; FLUX.2 replaces these with a fused `attn.to_qkv_mlp_proj`, so the single-block keys have no matching module.
+- No remap/conversion recovers this in effect. FLUX-dev LoRAs should be used on a real FLUX.1-dev/schnell checkpoint, or a FLUX.2-native retrain sourced. Do not attempt to loft/port FLUX.1 LoRAs into FLUX.2 Klein.
+
+### LoRA URL Backfill & Metastore Schema Update (2026-08-30)
+- Added `url: str | None = None` to the `_LoraMeta` and `_EmbeddingMeta` schemas in `models/metastore.py` (and updated related `_CheckpointMeta` formatting).
+- Backfilled 57 missing CivitAI URLs for on-disk LoRAs in the local metastore by parsing the raw CivitAI downloads-page HTML and using best-effort API searches.
+- Enforced a strict domain policy (`civitai.red` for NSFW, `civitai.com` for non-NSFW) during backfill.
+- Highly ambiguous models and API-hidden extreme NSFW items were left unset to avoid polluting the metadata with incorrect provenance. Local, in-house, and plugin entries remain deliberately unset.

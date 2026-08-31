@@ -66,6 +66,7 @@ class _LoraMeta:
     aliases: list[str] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
     weight_hint: float | None = None
+    url: str = ""
 
 
 @dataclass
@@ -215,6 +216,7 @@ class MetaStore:
                 aliases=list(meta.get("aliases", []) or []),
                 modes=list(meta.get("modes", []) or []),
                 weight_hint=meta.get("weight_hint"),
+                url=meta.get("url", ""),
             )
         return result
 
@@ -301,6 +303,7 @@ class MetaStore:
             aliases=list(ph.aliases) if ph else [],
             modes=list(ph.modes) if ph else [],
             weight_hint=ph.weight_hint if ph else None,
+            url=ph.url if ph else "",
             trigger=registry_info.get("trigger") if registry_info else None,
             description=registry_info.get("description", "") if registry_info else "",
         )
@@ -670,6 +673,7 @@ class MetaStore:
             or list(kwargs.get("aliases", existing.aliases if existing else [])) != existing.aliases
             or list(kwargs.get("modes", existing.modes if existing else [])) != existing.modes
             or kwargs.get("weight_hint", existing.weight_hint) != existing.weight_hint
+            or kwargs.get("url", existing.url) != existing.url
         )
         if changed:
             self._loras[name] = _LoraMeta(
@@ -677,6 +681,7 @@ class MetaStore:
                 aliases=list(kwargs.get("aliases", existing.aliases if existing else [])),
                 modes=list(kwargs.get("modes", existing.modes if existing else [])),
                 weight_hint=kwargs.get("weight_hint", existing.weight_hint if existing else None),
+                url=kwargs.get("url", existing.url if existing else ""),
             )
             self._save_loras()
         return changed
