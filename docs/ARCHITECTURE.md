@@ -68,6 +68,7 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `modes/base.py` | base class for generation modes |
 | `core/perf.py` | performance tracking |
 | `core/exceptions.py` | custom exceptions |
+| `core/backends/flux_identity.py` | FLUX.2 persona preprocessing: face cropping, anchor weighting, face-focus prompt |
 
 ### Frontend Map
 

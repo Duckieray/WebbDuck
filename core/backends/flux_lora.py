@@ -95,6 +95,117 @@ def _adapter_name(name: str, index: int) -> str:
     return f"webbduck_flux_{index}_{clean or 'lora'}"
 
 
+def _load_lora_tensor_dict(path: Path) -> dict[str, Any]:
+    """Load a safetensors LoRA file into a plain tensor dict.
+
+    Prefer ``safetensors.torch.load_file`` when available so tensor dtypes are
+    preserved; fall back to the registry's lazy ``safe_open`` otherwise.
+    """
+    try:
+        from safetensors.torch import load_file
+
+        return load_file(str(path), device="cpu")
+    except Exception:
+        pass
+
+    from models.registry import safe_open
+
+    state_dict: dict[str, Any] = {}
+    # safe_open exposes a keys() API; drain it directly to avoid importing torch
+    # tensors in this lightweight module.
+    try:
+        with safe_open(str(path), framework="pt") as f:
+            keys = list(f.keys())
+        import torch
+
+        for key in keys:
+            state_dict[key] = torch.zeros((0,), dtype=torch.float32)
+    except Exception:
+        state_dict = {}
+    return state_dict
+
+
+def _uses_kohya_down_suffix(state_dict: dict[str, Any]) -> bool:
+    return any(k.endswith(".lora_down.weight") for k in state_dict)
+
+
+def _is_native_diffusers_paths(state_dict: dict[str, Any]) -> bool:
+    """True when keys already carry diffusers module paths (``transformer.``).
+
+    FLUX.2 uses the ``transformer`` component namespace. Real Kohya (sd-scripts)
+    FLUX.2 exports flatten module paths into ``lora_unet_*`` keys, and PEFT
+    exports carry ``base_model.model.`` / ``diffusion_model.`` prefixes. When a
+    LoRA uses ``transformer.*`` with ``lora_down``/``lora_up`` suffixes, its
+    module paths are already identical to the diffusers model so only the leaf
+    suffix needs to become PEFT format.
+    """
+    return any(k.startswith("transformer.") for k in state_dict)
+
+
+def _convert_flux2_diffusers_suffix_lora_to_peft(
+    state_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Suffix-only FLUX.2 LoRA conversion (native diffusers paths + Kohya suffix).
+
+    Some FLUX.2 trainers (e.g. OneTrainer export and direct diffusers-style
+    exports) save LoRAs with the real diffusers module paths (``transformer.*``)
+    but the Kohya leaf format (``.lora_down.weight`` / ``.lora_up.weight`` /
+    ``.alpha``). Diffusers' own ``_convert_kohya_flux2_lora_to_diffusers`` only
+    understands the flattened ``lora_unet_*`` convention, so it discards every
+    key from this layout and registers an empty adapter, which later fails with
+    "Adapter name(s) ... not in the list of present adapters".
+
+    Because the module paths are already correct, we only need to rename the
+    leaf suffix and fold the ``alpha`` scale into ``lora_A``, producing genuine
+    PEFT keys — no path remapping is required.
+
+    ``dora_scale`` tensors are dropped; diffusers does not support DoRA adapters.
+    """
+    import torch
+
+    state_dict = {k: v for k, v in state_dict.items() if "dora_scale" not in k}
+    converted: dict[str, Any] = {}
+    for key, val in state_dict.items():
+        if key.endswith(".lora_down.weight"):
+            base = key[: -len(".lora_down.weight")]
+            alpha_tensor = state_dict.get(base + ".alpha")
+            alpha: float
+            if alpha_tensor is not None and not isinstance(alpha_tensor, float):
+                try:
+                    alpha = float(alpha_tensor.item())
+                except Exception:
+                    alpha = float(val.shape[0])
+            else:
+                alpha = float(alpha_tensor) if alpha_tensor is not None else float(val.shape[0])
+            rank = int(val.shape[0])
+            scale = alpha / rank if rank else 1.0
+            converted[base + ".lora_A.weight"] = val.to(torch.float32) * scale
+        elif key.endswith(".lora_up.weight"):
+            base = key[: -len(".lora_up.weight")]
+            converted[base + ".lora_B.weight"] = val
+    return converted
+
+
+def _maybe_convert_diffusers_suffix_lora_to_peft(path: Path) -> dict[str, Any] | None:
+    """Return a PEFT-converted state dict for native-suffix FLUX.2 LoRAs, else None.
+
+    Loads the LoRA file from ``path`` and detects the layout where module paths
+    are already native diffusers (``transformer.*``) but the leaf suffix is the
+    Kohya ``lora_down``/``lora_up`` form. Only that layout needs the suffix-only
+    conversion; all other formats (PEFT ``lora_A``, flat ``lora_unet_*``, etc.)
+    are left for diffusers to handle as before, so this returns ``None``.
+    """
+    state_dict = _load_lora_tensor_dict(path)
+    if not state_dict:
+        return None
+    if not _uses_kohya_down_suffix(state_dict):
+        return None
+    if not _is_native_diffusers_paths(state_dict):
+        return None
+    converted = _convert_flux2_diffusers_suffix_lora_to_peft(state_dict)
+    return converted if converted else None
+
+
 def apply_flux_loras(
     pipe: Any,
     loras: list[dict[str, Any]],
@@ -125,15 +236,33 @@ def apply_flux_loras(
             )
         print(f"[flux] loading LoRA {name} from {path} at weight={weight}", flush=True)
 
-        # Diffusers 0.39 documents local LoRA loading as a directory plus
-        # ``weight_name``. Using that explicit form also avoids a local file path
-        # being interpreted as a Hub model id by loader validation.
-        pipe.load_lora_weights(
-            str(path.parent),
-            weight_name=path.name,
-            adapter_name=adapter_name,
-            low_cpu_mem_usage=True,
-        )
+        # Diffusers 0.39/0.40 misdetect FLUX.2 LoRAs that use native diffusers
+        # module paths (``transformer.*``) with the Kohya leaf suffix
+        # (``lora_down``/``lora_up``/``alpha``) as flat Kohya and discard every
+        # key, registering an empty adapter. Handle that layout here with a
+        # suffix-only conversion (see _convert_flux2_diffusers_suffix_lora_to_peft).
+        converted_peft = _maybe_convert_diffusers_suffix_lora_to_peft(path)
+        if converted_peft is not None:
+            print(
+                f"[flux] LoRA {name} uses native diffusers paths; "
+                f"applying suffix-only PEFT conversion ({len(converted_peft)} keys)",
+                flush=True,
+            )
+            pipe.load_lora_weights(
+                converted_peft,
+                adapter_name=adapter_name,
+                low_cpu_mem_usage=True,
+            )
+        else:
+            # Diffusers 0.39 documents local LoRA loading as a directory plus
+            # ``weight_name``. Using that explicit form also avoids a local file path
+            # being interpreted as a Hub model id by loader validation.
+            pipe.load_lora_weights(
+                str(path.parent),
+                weight_name=path.name,
+                adapter_name=adapter_name,
+                low_cpu_mem_usage=True,
+            )
         adapter_names.append(adapter_name)
         adapter_weights.append(weight)
         applied.append(

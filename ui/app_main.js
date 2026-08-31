@@ -1263,6 +1263,11 @@ function collectFormData() {
                 reference_mode: 'primary_only',
                 preset_name: presetName,
             };
+            if (adapterType === 'flux2_native') {
+                payload.face_crop = byId('ip-adapter-face-crop')?.value || 'auto';
+                payload.flux2_anchor_dup = Boolean(byId('ip-adapter-anchor-dup')?.checked);
+                payload.face_focus = Boolean(byId('ip-adapter-face-focus')?.checked);
+            }
             formData.append('identity_adapter', JSON.stringify(payload));
         }
     }
@@ -2956,6 +2961,11 @@ function setupIpAdapterManager() {
         if (preset.type) {
             byId('ip-adapter-type').value = preset.type;
         }
+        if (preset.face_crop) {
+            byId('ip-adapter-face-crop').value = preset.face_crop;
+        }
+        byId('ip-adapter-anchor-dup').checked = Boolean(preset.flux2_anchor_dup);
+        byId('ip-adapter-face-focus').checked = Boolean(preset.face_focus);
     });
 
     saveBtn.addEventListener('click', () => {
@@ -2973,6 +2983,9 @@ function setupIpAdapterManager() {
             refs: _ipAdapterRefs,
             adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
             lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
+            face_crop: byId('ip-adapter-face-crop')?.value || 'auto',
+            flux2_anchor_dup: Boolean(byId('ip-adapter-anchor-dup')?.checked),
+            face_focus: Boolean(byId('ip-adapter-face-focus')?.checked),
         };
         try {
             const res = await fetch('/ip-adapter/presets', {

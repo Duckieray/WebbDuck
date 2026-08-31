@@ -59,6 +59,10 @@ def test_flux_identity_resolves_persona_reference_files(tmp_path):
         "reference_images_requested": 2,
         "reference_images_resolved": 2,
         "text_identity_guidance": True,
+        "face_crop_mode": "auto",
+        "reference_face_crops": 0,
+        "reference_anchor_dup": False,
+        "reference_prepared": 2,
     }
 
 

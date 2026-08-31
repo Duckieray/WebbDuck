@@ -2040,6 +2040,11 @@ def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
     adapter_cfg.setdefault("reference_images", list(preset.get("refs", [])))
     adapter_cfg.setdefault("adapter_scale", preset.get("adapter_scale", 1.0))
     adapter_cfg.setdefault("lora_scale", preset.get("lora_scale", 0.60))
+    # FLUX.2 persona tuning keys preserved across preset save/load so Della-style
+    # personas can bake in face cropping and anchor weighting via one call.
+    adapter_cfg.setdefault("face_crop", preset.get("face_crop", "auto"))
+    adapter_cfg.setdefault("flux2_anchor_dup", bool(preset.get("flux2_anchor_dup", False)))
+    adapter_cfg.setdefault("face_focus", bool(preset.get("face_focus", False)))
     return adapter_cfg
 
 @app.get("/ip-adapter/refs")
@@ -2089,6 +2094,9 @@ class PresetData(BaseModel):
     refs: list[str] = []
     adapter_scale: float = 1.0
     lora_scale: float = 0.60
+    face_crop: str = "auto"
+    flux2_anchor_dup: bool = False
+    face_focus: bool = False
 
 @app.post("/ip-adapter/presets")
 async def save_preset(data: PresetData):
@@ -2103,6 +2111,9 @@ async def save_preset(data: PresetData):
         "refs": data.refs,
         "adapter_scale": data.adapter_scale,
         "lora_scale": data.lora_scale,
+        "face_crop": data.face_crop,
+        "flux2_anchor_dup": data.flux2_anchor_dup,
+        "face_focus": data.face_focus,
     }
     PRESETS_FILE.write_text(json.dumps(presets, indent=2))
     return {"ok": True}

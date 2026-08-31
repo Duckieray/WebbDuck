@@ -412,3 +412,25 @@ The official `third_party/IP-Adapter` wrapper (`core/backends/sdxl_faceid.py`, `
 - `pipeline_manager.unload_all()` is a soft unload by default: active pipelines are offloaded and dropped, CUDA cache is cleared, but CPU-side component caches stay warm.
 - Use `pipeline_manager.unload_all(clear_caches=True)` or `POST /models/unload_all?clear_caches=true` only when a hard unload is needed.
 - Normal idle unload and model switching should preserve `_UNET_CACHE`, `_TEXT_COMPONENT_CACHE`, `_VAE_CACHE`, `_SCHEDULER_CACHE`, and `_TOKENIZER_CACHE` so reloads stay fast.
+
+### FLUX.2 worker VRAM resilience (2026-08-27)
+- `core/backends/flux_worker.py` no longer dies on the first `torch.cuda.OutOfMemoryError`. It retries within the same process through `_flux_demotion_tiers`: pixel area first (0.9x/0.8x snaps), then identity/conditioning image count (4->3->2->1), then LoRA adapter count, then a 0.75x last-resort config. Every tier is non-increasing in all resource dimensions and re-seeds the generator so demoted output stays reproducible from the requested seed.
+- Worker records `oom_retry_count`, `demotion_tier`, `effective_width/height`, `effective_conditioning_image_count`, and `effective_lora_count` in the runtime dict (`flux.py` surfaces it as `settings["flux_runtime"]`).
+- Pure `_flux_demotion_tiers` helper is importable without a GPU and covered in `tests/test_flux_memory_metadata.py`.
+- On exhaustion (no tier fits) the original OOM propagates with the worker log detail; the UI keeps surfacing an actionable error card.
+
+### Generic FLUX.2 persona tuning baked into the identity adapter (2026-08-28)
+- `core/backends/flux_identity.py` (new) applies three A/B-validated persona upgrades inside `_resolve_flux_identity` (`core/backends/flux.py`) before the worker starts:
+  - `face_crop` ("auto" default / "off"): re-frames every reference around the strongest detected face (tight square, ~80% face fill, `BORDER_REPLICATE` padding — never squished, resized to 1024px, disk-cached). InsightFace "buffalo_l" used when installed; OpenCV Haar cascade fallback. Refs with no detectable face pass through unchanged, so `face_crop` is safe by default.
+  - `flux2_anchor_dup` (bool): duplicates the first reference into slot 1 because FLUX.2 conditions strongest on the earliest reference slot. Capped at the worker's 5-reference limit (trailing refs dropped).
+  - `face_focus` (bool): appends close-up portrait framing guidance to the identity-augmented prompt.
+- All three keys flow through persona presets (`BASE/.faceid_presets.json` via `server/app.py` `_resolve_identity_adapter_preset`/`save_preset`), so a Della-style caller can POST `/generate` with `preset_name` plus optional field overrides and get the tuned behavior in one request.
+- UI exposes the three toggles in the Identity / Persona section, visible only when a FLUX.2 model is selected (`ui/app_main.js`, `ui/modules/PersonaIdentityUI.js`, `ui/core/state.js`).
+- Identity A/B numbers that justify the defaults: anchor×2 close-up config scores ~0.784 mean face-cosine (max 0.820, 3/4 in high band) vs 0.729 for the loose baseline; LoRA reduction hurts (0.740/0.682); guidance is a no-op on distilled klein; one-ref is worst (0.694).
+- Covered by `tests/test_flux_identity_prep.py`; updated `tests/test_flux_identity_personas.py` for the richer `identity_adapter_debug` dict.
+
+### Native diffusers-path FLUX.2 LoRA support (2026-08-30)
+- `core/backends/flux_lora.py` now handles FLUX.2 LoRAs saved with native diffusers module paths (`transformer.*`) but the Kohya leaf suffix (`lora_down`/`lora_up`/`alpha`). Diffusers 0.39/0.40 misdetect this layout as flat Kohya and run `_convert_kohya_flux2_lora_to_diffusers`, which only understands `lora_unet_*` — zero adapters register, surfacing as "Adapter name(s) ... not in the list of present adapters".
+- `_maybe_convert_diffusers_suffix_lora_to_peft()` detects the layout (native `transformer.` paths + `.lora_down.weight` suffix) and applies a suffix-only PEFT conversion (drop `dora_scale`, rename `lora_down`→`lora_A` scaled by `alpha/rank`, `lora_up`→`lora_B`), then loads the converted dict via `pipe.load_lora_weights(dict, ...)`.
+- Only that specific layout triggers the conversion; PEFT (`lora_A`) and flat OneTrainer (`lora_unet_*`) LoRAs keep the existing file-path load path unchanged.
+- Covered by `tests/test_flux_lora.py`; the real Areola LoRA yields 288 valid PEFT keys and passes `Flux2KleinPipeline.lora_state_dict` unchanged.

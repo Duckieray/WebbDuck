@@ -15,7 +15,21 @@ import time
 import traceback
 from pathlib import Path
 
-from flux_lora import apply_flux_loras
+try:
+    from flux_lora import apply_flux_loras
+except ModuleNotFoundError:
+    # Allow importing this module from a test host where the worker's backends
+    # directory is not on sys.path. The launcher runs this file as a script, so
+    # its parent directory is already searchable in the real runtime.
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from flux_lora import apply_flux_loras
+
+# FLUX.2 image/identity conditioning allocates transient attention buffers that
+# can fragment VRAM and OOM at tight headroom. Use the expandable-segments
+# allocator by default while preserving an explicit operator/user override.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
@@ -24,6 +38,88 @@ _MAX_FLUX_IDENTITY_REFERENCES = 5
 
 def _snap(value: int, multiple: int = 8) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
+
+
+def _flux_demotion_tiers(
+    width: int,
+    height: int,
+    condition_count: int,
+    lora_count: int,
+) -> list[dict]:
+    """Ordered fallback configs for OOM-aware retries.
+
+    Each tier records how many conditioning images and LoRA adapters to keep
+    plus a pixel budget. Tiers are non-increasing in every resource dimension
+    (conditioning images, LoRAs, and pixel area), so a worker can retry a failed
+    image at the next tier without ever requesting more memory than the tier
+    that just failed.
+
+    Priority intends to protect identity conditioning: fewer pixels and fewer
+    adapters are preferred over dropping reference images outright.
+    """
+    tiers: list[dict] = []
+    seen: set[tuple[int, int, int, int]] = set()
+
+    def _add(cond_keep: int, w: int, h: int, lora_keep: int) -> None:
+        entry = {
+            "condition_count": int(max(0, cond_keep)),
+            "width": int(w),
+            "height": int(h),
+            "lora_count": int(max(0, lora_keep)),
+        }
+        key = (entry["condition_count"], entry["width"], entry["height"], entry["lora_count"])
+        if key not in seen:
+            seen.add(key)
+            tiers.append(entry)
+
+    full_refs = int(condition_count)
+    full_width = int(width)
+    full_height = int(height)
+    full_loras = int(lora_count)
+
+    # Carried budget. Only ever decreases for the whole ladder.
+    cond_kept = full_refs
+    w_used = full_width
+    h_used = full_height
+    lora_kept = full_loras
+
+    # Tier 0: the requested configuration, complete pipeline.
+    _add(cond_kept, w_used, h_used, lora_kept)
+
+    # Reduce pixel area first: one step cuts attention activations for every
+    # conditioning image at once, unlike dropping a single reference.
+    for scale in (0.9, 0.8):
+        w = _snap(int(full_width * scale))
+        h = _snap(int(full_height * scale))
+        if min(w, h) >= 512:
+            w_used = w
+            h_used = h
+            _add(cond_kept, w_used, h_used, lora_kept)
+
+    # Then reduce the conditioning image count at the carried resolution, which
+    # keeps remaining identity references intact for the rest of the ladder.
+    for cond_target in (3, 2, 1):
+        if cond_target >= cond_kept:
+            continue
+        cond_kept = cond_target
+        _add(cond_kept, w_used, h_used, lora_kept)
+
+    # Deactivate adapters one at a time as a controlled style trade-off, still
+    # at the carried conditioning/resolution budget.
+    for lora_target in range(max(0, full_loras - 1), -1, -1):
+        if lora_target >= lora_kept:
+            continue
+        lora_kept = lora_target
+        _add(cond_kept, w_used, h_used, lora_kept)
+
+    # Last resort: combine the smallest conditioning set with a shrunken image.
+    w = _snap(int(full_width * 0.75))
+    h = _snap(int(full_height * 0.75))
+    if min(w, h) >= 512:
+        for cond_target in (max(0, cond_kept), 0):
+            for lora_target in range(lora_kept, -1, -1):
+                _add(cond_target, w, h, lora_target)
+    return tiers
 
 
 def _write_progress(
@@ -412,6 +508,39 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
+    demotion_tiers = _flux_demotion_tiers(
+        width,
+        height,
+        len(conditioning_images),
+        len(applied_loras),
+    )
+    working_tier_index = 0
+    oom_retry_count = 0
+
+    def _apply_tier(pipe_for_tier, kwargs_target: dict, tier: dict) -> dict:
+        keep = max(0, int(tier["condition_count"]))
+        images_for_tier = conditioning_images[:keep] if keep > 0 else []
+        kwargs_target["width"] = int(tier["width"])
+        kwargs_target["height"] = int(tier["height"])
+        if conditioning_images:
+            if images_for_tier:
+                kwargs_target["image"] = (
+                    images_for_tier if len(images_for_tier) > 1 else images_for_tier[0]
+                )
+            else:
+                kwargs_target.pop("image", None)
+        lora_target = max(0, int(tier["lora_count"]))
+        active_names = [entry["adapter_name"] for entry in applied_loras[:lora_target]]
+        active_weights = [entry["weight"] for entry in applied_loras[:lora_target]]
+        if active_names:
+            pipe_for_tier.set_adapters(active_names, adapter_weights=active_weights)
+        else:
+            try:
+                pipe_for_tier.unload_lora_weights()
+            except Exception:
+                pass
+        return kwargs_target
+
     inference_started = time.monotonic()
     for index in range(num_images):
         kwargs = {
@@ -439,8 +568,6 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
                 if len(conditioning_images) > 1
                 else conditioning_images[0]
             )
-        generator_device = device if device == "cuda" else "cpu"
-        kwargs["generator"] = torch.Generator(device=generator_device).manual_seed(seed + index)
 
         if not call_params or "callback_on_step_end" in call_params:
             def _on_step_end(_pipe, step_index, _timestep, callback_kwargs):
@@ -466,10 +593,66 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         print(
             f"[flux] inference {index + 1}/{num_images}: "
             f"{width}x{height}, steps={steps}, guidance={guidance}, "
-            f"identity_refs={len(reference_images)}",
+            f"identity_refs={len(reference_images)}, "
+            f"loras={len(applied_loras)}",
             flush=True,
         )
-        result = pipe(**kwargs)
+        result = None
+        tier_used = demotion_tiers[working_tier_index]
+        for tier_index in range(working_tier_index, len(demotion_tiers)):
+            tier = demotion_tiers[tier_index]
+            attempt_kwargs = dict(kwargs)
+            # Re-seed for every attempt so a demoted retry is still exactly
+            # reproducible from the requested seed despite earlier OOMs.
+            attempt_kwargs["generator"] = torch.Generator(device=device).manual_seed(seed + index)
+            _apply_tier(pipe, attempt_kwargs, tier)
+            try:
+                result = pipe(**attempt_kwargs)
+                tier_used = tier
+                working_tier_index = tier_index
+                break
+            except torch.cuda.OutOfMemoryError:
+                oom_retry_count += 1
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                if tier_index + 1 >= len(demotion_tiers):
+                    raise
+                demote_summary = {
+                    "condition_count": tier["condition_count"],
+                    "lora_count": tier["lora_count"],
+                    "width": tier["width"],
+                    "height": tier["height"],
+                }
+                print(
+                    f"[flux] CUDA out of memory at "
+                    f"{attempt_kwargs.get('width')}x{attempt_kwargs.get('height')} "
+                    f"refs={tier['condition_count']} loras={tier['lora_count']}; "
+                    f"retrying with reduced budget {demote_summary}",
+                    flush=True,
+                )
+                _write_progress(
+                    progress_path,
+                    "FLUX.2 memory pressure: reducing request budget",
+                    0.62,
+                    0,
+                    steps,
+                )
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if "out of memory" in message or "cuda error" in message:
+                    oom_retry_count += 1
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    if tier_index + 1 >= len(demotion_tiers):
+                        raise
+                    continue
+                raise
+        if result is None:
+            raise RuntimeError("FLUX.2 inference produced no result")
         _write_progress(progress_path, "Decoding and saving FLUX.2 image", 0.94, steps, steps)
         image = result.images[0]
         path = output_dir / f"flux_{index:03d}.png"
@@ -477,6 +660,10 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         saved.append(str(path))
     inference_seconds = time.monotonic() - inference_started
 
+    effective_width = int(tier_used.get("width", width))
+    effective_height = int(tier_used.get("height", height))
+    effective_condition_count = int(tier_used.get("condition_count", len(conditioning_images)))
+    effective_lora_count = int(tier_used.get("lora_count", len(applied_loras)))
     runtime.update(
         {
             "device": device,
@@ -491,16 +678,23 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             "prompt_encode_seconds": round(prompt_encode_seconds, 3),
             "pipeline_load_seconds": round(pipeline_load_seconds, 3),
             "inference_seconds": round(inference_seconds, 3),
-            "effective_width": width,
-            "effective_height": height,
+            "requested_width": width,
+            "requested_height": height,
+            "effective_width": effective_width,
+            "effective_height": effective_height,
             "steps": steps,
             "guidance": guidance,
             "lora_count": len(applied_loras),
+            "effective_lora_count": effective_lora_count,
             "loras": applied_loras,
             "identity_provider": request.get("identity_provider"),
             "identity_name": request.get("identity_name"),
             "identity_reference_count": len(reference_images),
             "conditioning_image_count": len(conditioning_images),
+            "effective_conditioning_image_count": effective_condition_count,
+            "oom_retry_count": oom_retry_count,
+            "demotion_tier": tier_used,
+            "demotion_enabled": True,
         }
     )
     _write_progress(progress_path, "FLUX.2 complete", 1.0, steps, steps)

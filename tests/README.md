@@ -36,6 +36,12 @@ conda run -n webbduck pytest -v -m "not slow"
 | `tests/test_outpaint_pyramid_regression.py` | smart-extend/outpaint regression coverage |
 | `tests/test_metastore.py` | metastore tests |
 | `tests/test_identity_adapter.py` | identity adapter tests |
+| `tests/test_flux_backend.py` | FLUX backend payloads and worker environment |
+| `tests/test_flux_lora.py` | FLUX LoRA resolution and adapter loading |
+| `tests/test_flux_memory_metadata.py` | FLUX.2 9B detection and OOM demotion tiers |
+| `tests/test_flux_identity_personas.py` | FLUX.2 native identity/reference resolution |
+| `tests/test_flux_identity_prep.py` | FLUX.2 persona preprocessing: face crop, anchor weighting, prompt |
+| `tests/test_flux2_identity_architecture.py` | FLUX.2 identity capability contract |
 
 Shared fixtures and helpers live in `tests/conftest.py`.
 
