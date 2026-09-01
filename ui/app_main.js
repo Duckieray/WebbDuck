@@ -2131,10 +2131,17 @@ function renderSmartExtendCanvas(resetPlacement = false) {
     ctx.strokeRect(frameX, frameY, frameW, frameH);
 
     const imgEl = byId('preview-img');
-    const imgX = frameX + placeX * scale;
-    const imgY = frameY + placeY * scale;
-    const imgW = srcW * scale;
-    const imgH = srcH * scale;
+    let imgX = frameX + placeX * scale;
+    let imgY = frameY + placeY * scale;
+    let imgW = srcW * scale;
+    let imgH = srcH * scale;
+    if (imgW > frameW || imgH > frameH) {
+        const fitScale = Math.min(frameW / srcW, frameH / srcH);
+        imgW = srcW * fitScale;
+        imgH = srcH * fitScale;
+        imgX = frameX + (frameW - imgW) / 2;
+        imgY = frameY + (frameH - imgH) / 2;
+    }
     const riskyOutpaint = Boolean(byId('smart-extend-enabled')?.checked && isAboveOutpaintSafetyResolution(targetW, targetH));
 
     ctx.save();
