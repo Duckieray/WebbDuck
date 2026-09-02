@@ -41,6 +41,21 @@ Request fields take priority over presets; saved personas persist these keys in
 `BASE/.faceid_presets.json`. The 5-reference cap is enforced in
 `core/backends/flux_worker.py` (`_MAX_FLUX_IDENTITY_REFERENCES`).
 
+## FLUX.2 Latent-Init Img2Img
+
+`core/backends/flux_worker.py` treats a source body + `strength < 1.0` as a
+latent-init img2img pass: `_build_img2img_init` VAE-encodes the body to the
+BN-normalized `(B,128,h//2,w//2)` init space, noises it to the selected start
+sigma (`_img2img_sigma_schedule` truncating the real dynamic-shifted Klein
+schedule), and the worker passes `latents=`/`sigmas=` into
+`Flux2KleinPipeline.__call__`. Identity references remain image conditioning. The
+init is built inside the per-tier OOM `try`, so an OOM while re-building a retry
+tier demotes cleanly (832x1216 → 752x1096 → 664x976) instead of aborting; the VAE
+is offloaded back to CPU after the body encode to give the transformer max
+headroom. `core/backends/flux.py` forwards `strength` in the worker payload.
+Note: `enable_sequential_cpu_offload` is incompatible with GGUF-quantized
+transformers and is auto-guarded to the diffusers path.
+
 ## Captioning And Plugins
 
 - `core/captioning_config.py`: plugin search roots and captioner discovery.

@@ -79,6 +79,38 @@ def _metadata_quant_configs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(value) for value in layers.values() if isinstance(value, dict)][:32]
 
 
+def _detect_flux2_klein(normalized_keys: set[str], stem: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    """Recognize a FLUX.2 (Klein) transformer single-file checkpoint.
+
+    FLUX.2 Klein transformers expose fused single-stream blocks
+    (``single_blocks.N.linear1/linear2`` -> in diffusers ``to_qkv_mlp_proj``) and
+    dual text/image stream modulation that FLUX.1 lacks. The presence of BOTH
+    ``double_stream_modulation_img`` and ``double_stream_modulation_txt`` is a
+    strong, family-exclusive fingerprint. We additionally require the shared
+    transformer skeleton (``img_in``/``txt_in``/``time_in``/``final_layer`` and
+    ``double_blocks``/``single_blocks``) so arbitrary modulation tensors don't
+    false-positive.
+
+    The bare top-level ``double_blocks.*`` naming (no ``transformer.`` prefix) is
+    the canonical FLUX.2 export layout; the ``transformer.``-prefixed variant is
+    accepted through the same normalization.
+    """
+    has_skeleton = (
+        "img_in.weight" in normalized_keys
+        and "txt_in.weight" in normalized_keys
+        and "double_blocks.0.img_attn.qkv.weight" in normalized_keys
+        and "single_blocks.0.linear1.weight" in normalized_keys
+    )
+    is_klein = (
+        "double_stream_modulation_img.lin.weight" in normalized_keys
+        and "double_stream_modulation_txt.lin.weight" in normalized_keys
+        and has_skeleton
+    )
+    if not is_klein:
+        return None
+    return {"method": "tensor_keys", "confidence": "high", "family": "flux2"}
+
+
 def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     """Return architecture + internal detection metadata for one safetensors file."""
     path = Path(path)
@@ -93,14 +125,13 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     }
     normalized_keys = {_strip_prefix(key) for key in tensor_entries}
     metadata = header.get("__metadata__") if isinstance(header.get("__metadata__"), dict) else {}
+    stem = path.stem.lower()
 
     is_krea2 = (
         "txtfusion.projector.weight" in normalized_keys
         and any(key.startswith("blocks.0.attn.wq.") for key in normalized_keys)
         and "first.weight" in normalized_keys
     )
-    if not is_krea2:
-        return UNKNOWN_ARCHITECTURE, {"method": "tensor_keys", "confidence": "none"}
 
     quantization = "none"
     quant_configs = [
@@ -108,7 +139,6 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
         *_metadata_quant_configs(metadata),
     ]
     quant_kinds = {classify_comfy_quant(config) for config in quant_configs}
-    stem = path.stem.lower()
     if "convrot" in quant_kinds or "convrot" in stem:
         quantization = "convrot"
     elif "fp8" in quant_kinds:
@@ -130,9 +160,33 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     variant_text = f"{stem} {metadata_text}"
     variant = "turbo" if ("turbo" in variant_text or "distill" in variant_text or "tdm" in variant_text) else "base"
 
-    return "krea2", {
-        "method": "tensor_keys",
-        "confidence": "high",
-        "variant": variant,
-        "quantization": quantization,
-    }
+    if is_krea2:
+        return "krea2", {
+            "method": "tensor_keys",
+            "confidence": "high",
+            "variant": variant,
+            "quantization": quantization,
+        }
+
+    flux2 = _detect_flux2_klein(normalized_keys, stem, metadata)
+    if flux2:
+        flux2["quantization"] = quantization
+        flux2["variant"] = variant
+        flux2["parameter_size"] = _flux_parameter_size(stem)
+        return "flux", flux2
+
+    return UNKNOWN_ARCHITECTURE, {"method": "tensor_keys", "confidence": "none"}
+
+
+def _flux_parameter_size(stem: str) -> str | None:
+    """Best-effort parameter size (4B/9B) from a FLUX checkpoint filename.
+
+    Sizes appear as ``9b``/``4b`` after a path separator (``-9b``, ``_9b``),
+    directly appended to a family token (``Klein9b``), or touching other non-digit
+    characters (``x4b``). A digit must not directly precede the size digit so
+    revision-style runs like ``v14`` are not misread as a size.
+    """
+    import re
+
+    match = re.search(r"(?<![0-9])[49]b(?![0-9])", stem, re.IGNORECASE)
+    return match.group(0).upper() if match else None

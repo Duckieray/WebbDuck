@@ -409,6 +409,8 @@ class FluxDiffusersBackend(GenerationBackend):
             "prompt": prompt,
             "loras": resolved_loras,
             "input_image": str(settings.get("image") or "").strip() or None,
+            "mask_image": str(settings.get("mask_image") or "").strip() or None,
+            "mask_reference": str(settings.get("mask_reference") or "").strip() or None,
             "reference_images": identity_refs,
             "identity_provider": "flux2_native" if identity_refs else None,
             "identity_name": persona_name,
@@ -419,6 +421,11 @@ class FluxDiffusersBackend(GenerationBackend):
                 settings.get("cfg")
                 if settings.get("cfg") is not None
                 else defaults.get("cfg", 1.0)
+            ),
+            "strength": float(
+                settings.get("strength")
+                if settings.get("strength") is not None
+                else 1.0
             ),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
