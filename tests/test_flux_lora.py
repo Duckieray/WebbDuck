@@ -5,12 +5,78 @@ from pathlib import Path
 import pytest
 
 from core.backends.flux_lora import (
+    _convert_flux2_diffusers_suffix_lora_to_peft,
+    _maybe_convert_diffusers_suffix_lora_to_peft,
     apply_flux_loras,
     inject_lora_trigger,
     lora_trigger_phrase,
     resolve_flux_loras,
 )
 from models.model_descriptor import backend_for_architecture
+
+
+def test_convert_diffusers_suffix_lora_to_peft_handles_native_transformer_paths():
+    import torch
+
+    state = {
+        "transformer.transformer_blocks.0.attn.to_q.lora_down.weight": torch.randn(64, 4096),
+        "transformer.transformer_blocks.0.attn.to_q.lora_up.weight": torch.randn(4096, 64),
+        "transformer.transformer_blocks.0.attn.to_q.alpha": torch.tensor(64.0),
+        "transformer.single_transformer_blocks.0.attn.to_out.lora_down.weight": torch.randn(64, 16384),
+        "transformer.single_transformer_blocks.0.attn.to_out.lora_up.weight": torch.randn(4096, 64),
+        "transformer.single_transformer_blocks.0.attn.to_out.alpha": torch.tensor(64.0),
+        "transformer.single_transformer_blocks.0.attn.to_out.dora_scale": torch.randn(64),
+    }
+
+    converted = _convert_flux2_diffusers_suffix_lora_to_peft(state)
+
+    # dora_scale dropped, alpha/leaf suffixes folded into lora_A/lora_B only
+    assert "transformer.single_transformer_blocks.0.attn.to_out.dora_scale" not in converted
+    assert not any(k.endswith((".alpha", ".dora_scale", ".lora_down.weight", ".lora_up.weight")) for k in converted)
+
+    key = "transformer.transformer_blocks.0.attn.to_q.lora_A.weight"
+    assert key in converted
+    assert converted[key].shape == (64, 4096)
+    # alpha(64)/rank(64) == 1.0
+    assert torch.allclose(converted[key], state["transformer.transformer_blocks.0.attn.to_q.lora_down.weight"])
+
+    up_key = "transformer.transformer_blocks.0.attn.to_q.lora_B.weight"
+    assert up_key in converted
+    assert torch.equal(
+        converted[up_key],
+        state["transformer.transformer_blocks.0.attn.to_q.lora_up.weight"],
+    )
+
+
+def test_maybe_convert_diffusers_suffix_lora_only_for_native_transformer_paths(tmp_path, monkeypatch):
+    import torch
+
+    fake_state = {
+        "transformer.transformer_blocks.0.attn.to_q.lora_down.weight": torch.randn(4, 4),
+        "transformer.transformer_blocks.0.attn.to_q.lora_up.weight": torch.randn(4, 4),
+    }
+    monkeypatch.setattr(
+        "core.backends.flux_lora._load_lora_tensor_dict",
+        lambda path: fake_state,
+    )
+
+    path = tmp_path / "native.safetensors"
+    path.write_bytes(b"x")
+    assert _maybe_convert_diffusers_suffix_lora_to_peft(path) is not None
+
+    # PEFT already (no lora_down suffix) -> no conversion
+    monkeypatch.setattr(
+        "core.backends.flux_lora._load_lora_tensor_dict",
+        lambda path: {"transformer.transformer_blocks.0.attn.to_q.lora_A.weight": torch.randn(4, 4)},
+    )
+    assert _maybe_convert_diffusers_suffix_lora_to_peft(path) is None
+
+    # Flat Kohya lora_unet_* (diffusers handles) -> no conversion
+    monkeypatch.setattr(
+        "core.backends.flux_lora._load_lora_tensor_dict",
+        lambda path: {"lora_unet_double_blocks_0_img_attn_q.lora_down.weight": torch.randn(4, 4)},
+    )
+    assert _maybe_convert_diffusers_suffix_lora_to_peft(path) is None
 
 
 def test_resolve_flux_loras_preserves_studio_name_weight_contract(tmp_path, monkeypatch):

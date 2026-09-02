@@ -49,6 +49,7 @@ ui/
 - `ui/modules/EmbeddingManager.js`: embedding selection and token editing.
 - `ui/modules/MaskEditor.js`: inpaint mask interactions.
 - `ui/modules/ProgressManager.js`: progress card and cancel handling.
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation over the shared reference + preset manager, including the FLUX.2-only persona tuning controls (reference face crop, anchor boost, face-focus framing).
 
 ## Realtime Flow
 
@@ -64,7 +65,7 @@ This keeps queue and catalog state fresh without extra polling loops in the brow
 
 `ui/core/state.js` stores Studio settings in `localStorage` under `webbduck_state_v2`.
 
-Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings.
+Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings. Identity persona state adds reference selection plus the FLUX.2 persona tuning keys (`face_crop`, `flux2_anchor_dup`, `face_focus`).
 
 Provider credentials are deliberately excluded from this state. They are stored by the WebbDuck host under `~/.webbduck/provider_credentials.json`; the browser receives configuration status only and never reads a saved token back.
 

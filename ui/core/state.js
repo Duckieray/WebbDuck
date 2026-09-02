@@ -52,6 +52,9 @@ const DEFAULT_STATE = {
     identityAdapterRefs: [],
     identityAdapterScale: 1.0,
     identityAdapterLoraScale: 0.60,
+    identityAdapterFaceCrop: 'auto',
+    identityAdapterAnchorDup: false,
+    identityAdapterFaceFocus: false,
 };
 
 // Current state
@@ -322,6 +325,9 @@ export function syncFromDOM() {
         identityAdapterRefs: parseRefsJson(getValue('ip-adapter-refs-json')),
         identityAdapterScale: parseFloat(getValue('ip-adapter-scale')) || 1.0,
         identityAdapterLoraScale: parseFloat(getValue('ip-adapter-lora-scale')) || 0.60,
+        identityAdapterFaceCrop: getValue('ip-adapter-face-crop') || 'auto',
+        identityAdapterAnchorDup: getChecked('ip-adapter-anchor-dup'),
+        identityAdapterFaceFocus: getChecked('ip-adapter-face-focus'),
     });
 }
 
@@ -386,6 +392,9 @@ export function syncToDOM() {
     setValue('ip-adapter-refs-json', JSON.stringify(state.identityAdapterRefs ?? []));
     setValue('ip-adapter-scale', state.identityAdapterScale ?? 1.0);
     setValue('ip-adapter-lora-scale', state.identityAdapterLoraScale ?? 0.60);
+    setValue('ip-adapter-face-crop', state.identityAdapterFaceCrop ?? 'auto');
+    setChecked('ip-adapter-anchor-dup', Boolean(state.identityAdapterAnchorDup));
+    setChecked('ip-adapter-face-focus', Boolean(state.identityAdapterFaceFocus));
     const ipControls = document.getElementById('ip-adapter-controls');
     if (ipControls) {
         ipControls.classList.toggle('hidden', !Boolean(state.identityAdapterEnabled));

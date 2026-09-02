@@ -103,6 +103,7 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     "flux": ModelCapabilities(
         text2img=True,
         img2img=True,
+        inpaint=True,
         lora=True,
         identity_adapter=True,
     ),
@@ -110,6 +111,7 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     "flux2": ModelCapabilities(
         text2img=True,
         img2img=True,
+        inpaint=True,
         lora=True,
         identity_adapter=True,
     ),

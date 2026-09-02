@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.flux_identity import augment_identity_prompt, prepare_flux_references
 from core.backends.flux_lora import inject_lora_trigger, lora_trigger_phrase, resolve_flux_loras
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
@@ -45,6 +46,10 @@ def _worker_environment() -> dict[str, str]:
     if token:
         env["HF_TOKEN"] = token
         env["HUGGING_FACE_HUB_TOKEN"] = token
+    # The FLUX runtime allocates large attention buffers during identity
+    # conditioning; keep the allocator fragmentation-friendly. The worker also
+    # sets this itself, so this only matters if a future runtime ignores it.
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     return env
 
 
@@ -122,6 +127,17 @@ def _resolve_flux_identity(settings: dict[str, Any]) -> tuple[list[str], str | N
     if not resolved:
         return [], None
 
+    # Behind-the-scenes persona tuning: face-crop refs around the strongest face
+    # (auto by default, original kept when no face is found), then optionally
+    # duplicate the first (anchor) reference into slot 1 so the strongest photo
+    # dominates conditioning (FLUX.2 weights earliest slots strongest).
+    prepared, prep_stats = prepare_flux_references(
+        resolved,
+        face_crop=str(adapter.get("face_crop", "auto") or "auto"),
+        anchor_dup=bool(adapter.get("flux2_anchor_dup", False)),
+        max_refs=_MAX_FLUX_IDENTITY_REFERENCES,
+    )
+
     persona_name = str(
         adapter.get("persona_name") or adapter.get("preset_name") or ""
     ).strip() or None
@@ -130,28 +146,30 @@ def _resolve_flux_identity(settings: dict[str, Any]) -> tuple[list[str], str | N
     # this backend. Old SDXL FaceID presets remain reusable as persona image sets.
     adapter["type"] = "flux2_native"
     adapter["provider"] = "flux2_native"
-    adapter["resolved_reference_images"] = list(resolved)
+    adapter["resolved_reference_images"] = list(prepared)
     settings["identity_adapter_debug"] = {
         "provider": "flux2_native",
         "persona_name": persona_name,
         "reference_images_requested": len(raw_refs),
-        "reference_images_resolved": len(resolved),
+        "reference_images_resolved": len(prepared),
         "text_identity_guidance": bool(adapter.get("text_identity_guidance", True)),
+        **prep_stats,
     }
-    return resolved, persona_name
+    return prepared, persona_name
 
 
-def _augment_flux_identity_prompt(prompt: str, persona_name: str | None = None) -> str:
+def _augment_flux_identity_prompt(
+    prompt: str,
+    persona_name: str | None = None,
+    *,
+    face_focus: bool = False,
+) -> str:
     """Ask FLUX.2 to preserve the referenced person's identity in a new scene."""
-    instruction = (
-        "Create a new image of the same person shown in the reference images. "
-        "Preserve their identity, facial structure, apparent age, skin tone, hair, "
-        "and overall appearance while following the requested scene, pose, clothing, "
-        "lighting, and composition."
+    return augment_identity_prompt(
+        prompt,
+        persona_name=persona_name,
+        face_focus=face_focus,
     )
-    if persona_name:
-        instruction += f" The saved persona is {persona_name}."
-    return f"{instruction}\n\n{str(prompt or '').strip()}".strip()
 
 
 def _component_access_error(
@@ -350,8 +368,17 @@ class FluxDiffusersBackend(GenerationBackend):
             if isinstance(identity_adapter, dict)
             else True
         )
+        face_focus = bool(
+            identity_adapter.get("face_focus", False)
+            if isinstance(identity_adapter, dict)
+            else False
+        )
         if identity_refs and text_identity_guidance:
-            prompt = _augment_flux_identity_prompt(prompt, persona_name)
+            prompt = _augment_flux_identity_prompt(
+                prompt,
+                persona_name,
+                face_focus=face_focus,
+            )
             settings["prompt"] = prompt
 
         resolved_loras = resolve_flux_loras(settings.get("loras", []))
@@ -382,6 +409,8 @@ class FluxDiffusersBackend(GenerationBackend):
             "prompt": prompt,
             "loras": resolved_loras,
             "input_image": str(settings.get("image") or "").strip() or None,
+            "mask_image": str(settings.get("mask_image") or "").strip() or None,
+            "mask_reference": str(settings.get("mask_reference") or "").strip() or None,
             "reference_images": identity_refs,
             "identity_provider": "flux2_native" if identity_refs else None,
             "identity_name": persona_name,
@@ -392,6 +421,11 @@ class FluxDiffusersBackend(GenerationBackend):
                 settings.get("cfg")
                 if settings.get("cfg") is not None
                 else defaults.get("cfg", 1.0)
+            ),
+            "strength": float(
+                settings.get("strength")
+                if settings.get("strength") is not None
+                else 1.0
             ),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,

@@ -77,6 +77,16 @@ Click an image to inspect it full size.
 - Local embedding files are discovered and synced into the embedding catalog.
 - Each selected embedding lets you review or edit the token used in prompts.
 
+## Identity and Personas
+
+- Upload reference photos once, save them as a named persona, and reuse that identity in later generations.
+- SDXL uses the saved persona through IP-Adapter FaceID; FLUX.2 uses the same photo set as native multi-reference identity conditioning (up to 5 references, ordered by importance — the first reference is conditioned strongest).
+- FLUX.2 personas get three behind-the-scenes likeness upgrades, all validated by identity A/B sweeps:
+  - **Ref Face Crop (Auto):** references are re-framed around the strongest detected face as a tight square portrait. Photos with no detectable face are used unchanged.
+  - **Anchor boost:** duplicates your strongest (first) reference so it dominates identity conditioning.
+  - **Close-up face-focus framing:** adds a portrait-framing instruction so generated scenes keep the face large, centered, and sharp.
+- Load a saved persona from the dropdown; its reference order and tuning options restore automatically and can be overridden per request.
+
 ## Image Editing Workflows
 
 ### Img2img

@@ -246,6 +246,21 @@
                         <option value="faceid_sdxl" selected>FaceID SDXL</option>
                       </select>
                     </div>
+                    <div class="param-row flux2-only hidden" style="margin-bottom:8px;">
+                      <label class="form-label" for="ip-adapter-face-crop" style="margin:0;">Ref Face Crop</label>
+                      <select class="select" id="ip-adapter-face-crop" style="max-width:140px;">
+                        <option value="auto" selected>Auto (face)</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </div>
+                    <label class="toggle-row flux2-only hidden" for="ip-adapter-anchor-dup">
+                      <input type="checkbox" id="ip-adapter-anchor-dup" />
+                      <span>Anchor boost (strongest ref x2)</span>
+                    </label>
+                    <label class="toggle-row flux2-only hidden" for="ip-adapter-face-focus">
+                      <input type="checkbox" id="ip-adapter-face-focus" />
+                      <span>Close-up face-focus framing</span>
+                    </label>
                     <label class="form-label">Reference Images</label>
                     <input type="hidden" id="ip-adapter-refs-json" value="" />
                     <div class="ip-adapter-refs-grid" id="ip-adapter-refs-grid"></div>

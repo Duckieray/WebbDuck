@@ -50,7 +50,8 @@ def test_flux_descriptor_exposes_current_workflows_and_defaults():
     assert descriptor.supported is True
     assert descriptor.capabilities.text2img is True
     assert descriptor.capabilities.img2img is True
-    assert descriptor.capabilities.inpaint is False
+    assert descriptor.capabilities.inpaint is True
+    assert descriptor.capabilities.identity_adapter is True
     assert descriptor.capabilities.lora is True
     assert descriptor.defaults["steps"] == 4
     assert descriptor.defaults["cfg"] == 1.0

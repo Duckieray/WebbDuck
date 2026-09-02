@@ -52,6 +52,12 @@ function setScaleControlsVisible(visible) {
     }
 }
 
+function setFluxOnlyControlsVisible(visible) {
+    for (const el of document.querySelectorAll('.flux2-only')) {
+        el.classList.toggle('hidden', !visible);
+    }
+}
+
 function syncProviderForSelectedModel() {
     const select = byId('ip-adapter-type');
     if (!select) return;
@@ -61,13 +67,15 @@ function syncProviderForSelectedModel() {
     if (isFlux2) {
         select.value = 'flux2_native';
         setScaleControlsVisible(false);
+        setFluxOnlyControlsVisible(true);
         const hint = byId('identity-persona-hint');
         if (hint) {
-            hint.textContent = 'FLUX.2 uses these persona photos directly as native multi-reference identity conditioning. Up to 5 references are supported.';
+            hint.textContent = 'FLUX.2 uses these persona photos directly as native multi-reference identity conditioning. Up to 5 references are supported. Auto face-crop, anchor boost, and face-focus framing tighten identity likeness.';
         }
     } else {
         if (select.value === 'flux2_native') select.value = 'faceid_sdxl';
         setScaleControlsVisible(true);
+        setFluxOnlyControlsVisible(false);
         const hint = byId('identity-persona-hint');
         if (hint) {
             hint.textContent = 'Upload reference photos once, save them as a named persona, and reuse that identity in future generations.';

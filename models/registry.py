@@ -4,6 +4,7 @@ from safetensors.torch import safe_open
 from pathlib import Path
 import json
 import os
+import re
 import threading
 
 # Paths
@@ -219,6 +220,72 @@ def detect_lora_arch(lora_path: Path) -> str | None:
     return None
 
 
+def detect_lora_trigger(lora_path: Path) -> str | None:
+    """Best-effort extraction of a trained trigger word from safetensors metadata.
+
+    LoRAs trained with Kohya/ai-toolkit commonly store the trigger in the
+    ``__metadata__`` header. This helper reads only the small header (never the
+    tensors) and reports a trigger when a reliable signal is present.
+
+    Sources, in priority order:
+
+    * explicit ``trigger_word``/``ss_trigger_word`` metadata
+    * ``ss_tag_frequency`` — a JSON mapping like
+      ``{"1_CLASS": {"<token>": <count>, ...}}``; the highest-count non-empty
+      inner token is returned
+    * ``notes``/``ss_notes`` mentioning ``Trigger word: <token>``
+
+    Returns ``None`` when nothing reliable is found.
+    """
+    try:
+        with safe_open(str(lora_path), framework="pt", device="cpu") as sf:
+            meta = sf.metadata() or {}
+    except Exception:
+        return None
+
+    for key in ("ss_trigger_word", "trigger_word", "trigger"):
+        value = meta.get(key)
+        if value and str(value).strip():
+            return str(value).strip()
+
+    raw = meta.get("ss_tag_frequency")
+    if raw:
+        try:
+            tag_freq = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            tag_freq = None
+        if isinstance(tag_freq, dict):
+            best_token: str | None = None
+            best_count = -1.0
+            for inner in tag_freq.values():
+                if not isinstance(inner, dict):
+                    continue
+                for token, count in inner.items():
+                    token = str(token).strip()
+                    if not token:
+                        continue
+                    if isinstance(count, (int, float)):
+                        if count > best_count:
+                            best_token, best_count = token, float(count)
+                    else:
+                        return token if best_token is None else best_token
+            if best_token:
+                return best_token
+
+    for key in ("notes", "ss_notes", "ss_training_comment"):
+        notes = meta.get(key)
+        if not notes or not str(notes).strip():
+            continue
+        match = re.search(
+            r"[Tt]rigger\s*[Ww]ord[s]?[:\-]?\s*`?([a-zA-Z0-9_][a-zA-Z0-9_.,+-]*)`?",
+            str(notes),
+        )
+        if match:
+            return match.group(1).strip(".,-")
+
+    return None
+
+
 def detect_embedding_arch(embedding_path: Path) -> str | None:
     """Detect embedding architecture from tensor names.
 
@@ -376,7 +443,7 @@ def ensure_lora_registry():
             continue
         registry[key] = {
             "file": f.relative_to(LORA_ROOT).as_posix(),
-            "trigger": None,
+            "trigger": detect_lora_trigger(f),
             "weight": 1.0,
             "description": "",
         }
@@ -410,7 +477,13 @@ def ensure_embedding_registry():
 
 
 def sync_lora_registry_file():
-    """Ensure new local .safetensors files are reflected in loras.json."""
+    """Ensure new local .safetensors files are reflected in loras.json.
+
+    Newly discovered LoRAs (and any existing entries with an unset trigger) get
+    a best-effort trigger auto-assigned from their trained metadata via
+    :func:`detect_lora_trigger`. Only previously-unset triggers are filled in;
+    manually-defined triggers are never overwritten.
+    """
     LORA_ROOT.mkdir(exist_ok=True, parents=True)
     if LORA_FILE.exists():
         try:
@@ -425,15 +498,23 @@ def sync_lora_registry_file():
         if not _is_lora_file(f):
             continue
         key = f.stem
-        if key in data:
+        if key not in data:
+            data[key] = {
+                "file": f.relative_to(LORA_ROOT).as_posix(),
+                "trigger": detect_lora_trigger(f),
+                "weight": 1.0,
+                "description": "",
+            }
+            changed = True
             continue
-        data[key] = {
-            "file": f.relative_to(LORA_ROOT).as_posix(),
-            "trigger": None,
-            "weight": 1.0,
-            "description": "",
-        }
-        changed = True
+
+        # Backfill an unset trigger from trained metadata (never overwrite a set one).
+        entry = data[key]
+        if not entry.get("trigger"):
+            detected = detect_lora_trigger(f)
+            if detected:
+                entry["trigger"] = detected
+                changed = True
 
     if changed:
         LORA_FILE.write_text(json.dumps(data, indent=2))
@@ -585,6 +666,7 @@ def refresh_registries() -> bool:
         ensure_lora_registry()
         ensure_embedding_registry()
         sync_lora_registry_file()
+        sync_lora_meta_triggers()
         sync_embedding_registry_file()
         local_models = discover_local_models()
         new_models = merge_model_registry(local_models, _HF_MODELS, persist=True)
@@ -613,10 +695,49 @@ def _registry_signature(data: dict):
         sorted((k, repr(v)) for k, v in data.items())
     )
 
+
+def sync_lora_meta_triggers():
+    """Mirror registry trigger words into the rich metastore for LoRAs.
+
+    Keeps ``webbduck_meta/loras.json`` in sync with the runtime registry's
+    trigger words (whether manually set there or auto-detected). Only fills a
+    metastore trigger when the metastore entry currently has none, so richer
+    hand-edited metadata triggers are preserved.
+    """
+    try:
+        from models.metastore import meta_store, reload_meta
+    except Exception:
+        return
+
+    updated = False
+    for name, entry in load_lora_registry().items():
+        trigger = entry.get("trigger")
+        if not trigger:
+            continue
+        try:
+            meta = meta_store._loras.get(name)
+        except Exception:
+            meta = None
+        if meta is not None and meta.trigger:
+            continue
+        try:
+            if meta_store.update_lora_meta(name, trigger=trigger):
+                updated = True
+        except Exception:
+            continue
+
+    if updated:
+        try:
+            reload_meta()
+        except Exception:
+            pass
+
+
 _HF_MODELS, _HF_LORAS = scan_hf_cache()
 _HF_EMBEDDINGS = {}
 MODEL_REGISTRY = merge_model_registry(discover_local_models(), _HF_MODELS, persist=True)
 sync_lora_registry_file()
+sync_lora_meta_triggers()
 sync_embedding_registry_file()
 LORA_REGISTRY = {**load_lora_registry(), **_HF_LORAS}
 EMBEDDING_REGISTRY = {**load_embedding_registry(), **_HF_EMBEDDINGS}
