@@ -14,6 +14,11 @@ function selectedModelLooksFlux2() {
     return value.includes('klein') || /flux[._\s-]*2(?:\b|[._\s-])/.test(value);
 }
 
+function selectedModelLooksKrea() {
+    const value = String(byId('base_model')?.value || '').toLowerCase();
+    return value.includes('krea');
+}
+
 function ensureNativeFluxOption() {
     const select = byId('ip-adapter-type');
     if (!select) return;
@@ -22,6 +27,16 @@ function ensureNativeFluxOption() {
     option.value = 'flux2_native';
     option.textContent = 'FLUX.2 Native References';
     select.insertBefore(option, select.firstChild);
+}
+
+function ensureKreaOption() {
+    const select = byId('ip-adapter-type');
+    if (!select) return;
+    if (Array.from(select.options).some(option => option.value === 'krea2_identity_edit')) return;
+    const option = document.createElement('option');
+    option.value = 'krea2_identity_edit';
+    option.textContent = 'Krea Identity';
+    select.appendChild(option);
 }
 
 function setText(selector, text) {
@@ -58,25 +73,74 @@ function setFluxOnlyControlsVisible(visible) {
     }
 }
 
+function setKreaOnlyControlsVisible(visible) {
+    for (const el of document.querySelectorAll('.krea2-only')) {
+        el.classList.toggle('hidden', !visible);
+    }
+}
+
+function setScaleSliderDefaults(provider) {
+    const applyDefaults = (slider, span, min, max, step, fallback) => {
+        if (!slider) return;
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        let value = parseFloat(slider.value);
+        if (!Number.isFinite(value) || value < parseFloat(min) || value > parseFloat(max)) {
+            value = fallback;
+            slider.value = String(fallback);
+        }
+        if (span) span.textContent = Number(value).toFixed(2);
+    };
+    const scale = byId('ip-adapter-scale');
+    const lora = byId('ip-adapter-lora-scale');
+    if (provider === 'krea2_identity_edit') {
+        applyDefaults(scale, byId('ip-adapter-scale-value'), '0', '10', '0.5', 4.0);
+        applyDefaults(lora, byId('ip-adapter-lora-scale-value'), '0', '1.5', '0.05', 1.0);
+        setText('label[for="ip-adapter-scale"]', 'Identity Strength (ref_boost)');
+        setText('label[for="ip-adapter-lora-scale"]', 'Identity LoRA Scale');
+    } else {
+        applyDefaults(scale, byId('ip-adapter-scale-value'), '0', '1.5', '0.05', 1.0);
+        applyDefaults(lora, byId('ip-adapter-lora-scale-value'), '0', '1.0', '0.05', 0.60);
+        setText('label[for="ip-adapter-scale"]', 'Adapter Scale');
+        setText('label[for="ip-adapter-lora-scale"]', 'LoRA Scale');
+    }
+}
+
 function syncProviderForSelectedModel() {
     const select = byId('ip-adapter-type');
     if (!select) return;
     ensureNativeFluxOption();
+    ensureKreaOption();
 
     const isFlux2 = selectedModelLooksFlux2();
+    const isKrea = selectedModelLooksKrea();
+    const hint = byId('identity-persona-hint');
+
     if (isFlux2) {
         select.value = 'flux2_native';
         setScaleControlsVisible(false);
         setFluxOnlyControlsVisible(true);
-        const hint = byId('identity-persona-hint');
+        setKreaOnlyControlsVisible(false);
+        setScaleSliderDefaults('faceid_sdxl');
         if (hint) {
             hint.textContent = 'FLUX.2 uses these persona photos directly as native multi-reference identity conditioning. Up to 5 references are supported. Auto face-crop, anchor boost, and face-focus framing tighten identity likeness.';
         }
-    } else {
-        if (select.value === 'flux2_native') select.value = 'faceid_sdxl';
+    } else if (isKrea) {
+        select.value = 'krea2_identity_edit';
         setScaleControlsVisible(true);
         setFluxOnlyControlsVisible(false);
-        const hint = byId('identity-persona-hint');
+        setKreaOnlyControlsVisible(true);
+        setScaleSliderDefaults('krea2_identity_edit');
+        if (hint) {
+            hint.textContent = 'Krea Identity Edit uses a single anchor reference and the krea2-identity-edit LoRA for identity. Ref count is limited to 1, so the last image you select becomes the anchor.';
+        }
+    } else {
+        if (select.value === 'flux2_native' || select.value === 'krea2_identity_edit') select.value = 'faceid_sdxl';
+        setScaleControlsVisible(true);
+        setFluxOnlyControlsVisible(false);
+        setKreaOnlyControlsVisible(false);
+        setScaleSliderDefaults('faceid_sdxl');
         if (hint) {
             hint.textContent = 'Upload reference photos once, save them as a named persona, and reuse that identity in future generations.';
         }

@@ -536,3 +536,32 @@ def test_mask_processor_has_mask_none_fast_path_with_real_attn():
     assert out is hidden
     # super().__call__ ran on the processor instance with the unmodified args.
     assert processor.received is None
+
+
+def test_persona_ui_is_krea_aware():
+    """Phase 3 UI contract: a Krea model must NOT silently fall back to faceid_sdxl."""
+    source = Path("ui/modules/PersonaIdentityUI.js").read_text(encoding="utf-8")
+    app_source = Path("ui/app_main.js").read_text(encoding="utf-8")
+    html_source = Path("ui/index.html").read_text(encoding="utf-8")
+
+    assert "selectedModelLooksKrea" in source
+    assert "ensureKreaOption" in source
+    assert "krea2_identity_edit" in source
+    assert "setKreaOnlyControlsVisible" in source
+    assert "krea2_identity_edit" in html_source
+    assert "ip-adapter-grounding-px" in html_source
+    assert "ip-adapter-lora-rank" in html_source
+
+
+def test_persona_ui_emits_krea_payload_keys_and_single_anchor_ref():
+    """The UI must emit krea2 identity fields and cap refs to one anchor."""
+    app_source = Path("ui/app_main.js").read_text(encoding="utf-8")
+
+    assert "adapterType === 'krea2_identity_edit'" in app_source
+    for key in ("ref_boost", "grounding_px", "fit_mode", "lora_scale", "lora_rank"):
+        assert f"payload.{key}" in app_source
+    assert "function kreaIdentityActive" in app_source
+    assert "function addRefUrl" in app_source
+    assert "_ipAdapterRefs = [url];" in app_source
+    # FaceID-only fields must not leak into the Krea payload.
+    assert "payload.repo = 'h94/IP-Adapter-FaceID'" in app_source

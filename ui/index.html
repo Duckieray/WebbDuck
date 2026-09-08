@@ -244,6 +244,7 @@
                       <label class="form-label" for="ip-adapter-type" style="margin:0;">Adapter Type</label>
                       <select class="select" id="ip-adapter-type" style="max-width:140px;">
                         <option value="faceid_sdxl" selected>FaceID SDXL</option>
+                        <option value="krea2_identity_edit">Krea Identity</option>
                       </select>
                     </div>
                     <div class="param-row flux2-only hidden" style="margin-bottom:8px;">
@@ -261,6 +262,20 @@
                       <input type="checkbox" id="ip-adapter-face-focus" />
                       <span>Close-up face-focus framing</span>
                     </label>
+                    <div class="param-row krea2-only hidden" style="margin-bottom:8px;">
+                      <label class="form-label" for="ip-adapter-grounding-px" style="margin:0;">Grounding Res</label>
+                      <span class="param-value" id="ip-adapter-grounding-px-value">768</span>
+                    </div>
+                    <input class="slider krea2-only hidden" type="range" id="ip-adapter-grounding-px" min="512" max="1536" step="64" value="768" />
+                    <div class="param-row krea2-only hidden" style="margin-bottom:8px;">
+                      <label class="form-label" for="ip-adapter-lora-rank" style="margin:0;">Identity LoRA Rank</label>
+                      <select class="select" id="ip-adapter-lora-rank" style="max-width:140px;">
+                        <option value="auto" selected>Auto (GPU)</option>
+                        <option value="r64">r64 (fast)</option>
+                        <option value="r128">r128</option>
+                        <option value="full">full</option>
+                      </select>
+                    </div>
                     <label class="form-label">Reference Images</label>
                     <input type="hidden" id="ip-adapter-refs-json" value="" />
                     <div class="ip-adapter-refs-grid" id="ip-adapter-refs-grid"></div>
