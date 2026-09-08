@@ -210,14 +210,21 @@ def _adaptive_request(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     tuned = dict(request)
     variant = str(tuned.get("variant") or "base").lower()
+    identity_enabled = bool(tuned.get("identity"))
     requested_width = _snap(int(tuned.get("width") or 1024))
     requested_height = _snap(int(tuned.get("height") or 1024))
     requested_steps = max(
         1,
-        int(tuned.get("steps") or (8 if variant == "turbo" else 28)),
+        int(
+            tuned.get("steps")
+            or (10 if identity_enabled else (8 if variant == "turbo" else 28))
+        ),
     )
 
-    budget = _token_budget(hardware, variant)
+    # Identity edits derive their output size from the reference image AR
+    # (edit_target_size) and use the LoRA card's own step recipe, so the
+    # text2img token-budget and default-step tuning must not fight them.
+    budget = None if identity_enabled else _token_budget(hardware, variant)
     tuned_width, tuned_height = requested_width, requested_height
     if budget:
         tuned_width, tuned_height = _fit_token_budget(
@@ -227,11 +234,15 @@ def _adaptive_request(
         )
 
     resized = tuned_width != requested_width or tuned_height != requested_height
-    tuned_steps = _tuned_default_steps(
-        requested_steps,
-        hardware,
-        variant,
-        resized=resized,
+    tuned_steps = (
+        requested_steps
+        if identity_enabled
+        else _tuned_default_steps(
+            requested_steps,
+            hardware,
+            variant,
+            resized=resized,
+        )
     )
 
     tuned["width"] = tuned_width
@@ -250,6 +261,7 @@ def _adaptive_request(
         "token_budget": budget,
         "resolution_scaled": resized,
         "steps_tuned": tuned_steps != requested_steps,
+        "identity_enabled": identity_enabled,
         "variant": variant,
         "accelerator": str(hardware.get("accelerator") or "cpu"),
         "hardware_total_vram_gb": round(
@@ -289,38 +301,11 @@ def _post_cleanup_hardware() -> dict[str, Any]:
         return {}
 
 
-def _guard_identity_staged(request: dict[str, Any]) -> None:
-    """Fail fast (never silently) until the GPU identity path lands.
-
-    The backend already resolves and threads an ``identity`` block for
-    ``krea2_identity_edit`` persona requests. The phased worker execution that
-    consumes it (grounded encode, VAE-packed source latent, edit forward,
-    ref_boost bias, identity LoRA) is still staged, so an identity-enabled
-    request must raise here instead of silently rendering ordinary text-to-image
-    output.
-    """
-    identity = request.get("identity")
-    if identity is None:
-        return
-    if not isinstance(identity, dict) or not identity.get("weight_path"):
-        raise ValueError(
-            "Malformed Krea identity payload: identity block is missing a "
-            "resolved weight_path."
-        )
-    raise NotImplementedError(
-        "Krea identity/persona generation is wired end-to-end at the request "
-        "layer but the phased GPU identity runtime is not installed yet in this "
-        "build. Run the follow-up worker milestone (krea2 identity encode/denoise) "
-        "and retry."
-    )
-
-
 def _run(
     request: dict[str, Any],
     output_dir: Path,
     progress_path: Path | None = None,
 ) -> dict[str, Any]:
-    _guard_identity_staged(request)
     hardware = detect_torch_hardware(torch)
     native_fp8.enable_for_hardware(hardware, safe.base)
     tuned_request, plan = _adaptive_request(request, hardware)

@@ -1,10 +1,10 @@
 """Request-layer wiring tests for the Krea identity adapter.
 
-Covers Phase 2 integration: the backend threads the normalized Krea identity
-payload to the worker (fail-fast before the runtime spawns), the isolated
-worker guards identity requests until the GPU identity path lands (no silent
-rendering of non-identity output), and server-side persona presets round-trip
-the Krea tuning keys.
+Covers Phase 2 + Phase 4 integration: the backend threads the normalized Krea
+identity payload to the worker (fail-fast before the runtime spawns), the
+isolated worker dispatches identity requests to the phased GPU identity run
+(grounded encode, reference latent, edit forward; never silent non-identity
+output), and server-side persona presets round-trip the Krea tuning keys.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import pytest
 
 from core.backends import krea2 as krea2_backend
 from core.backends.krea2_identity import KreaIdentityError
-from core.backends.krea2_worker_adaptive import _guard_identity_staged
 
 
 # --------------------------------------------------------------------------------------
@@ -133,26 +132,127 @@ def test_generate_fails_before_spawning_worker(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------------------
-# Worker staged guard
+# Worker identity dispatch (Phase 4: GPU identity path is installed)
 # --------------------------------------------------------------------------------------
 
-def test_worker_guard_passes_when_identity_absent():
-    _guard_identity_staged({})
-    _guard_identity_staged({"width": 832, "height": 1216})
+def test_base_run_dispatches_identity(tmp_path, monkeypatch):
+    from core.backends import krea2_worker as base_worker
+
+    calls: dict = {}
+
+    def fake_identity(request, output_dir, progress_path=None):
+        calls["request"] = request
+        return {"ok": True, "images": [], "runtime": {}}
+
+    monkeypatch.setattr(base_worker, "_run_identity", fake_identity)
+    result = base_worker._run(
+        {"identity": {"weight_path": "/cache/id.safetensors"}, "prompt": "p"},
+        tmp_path,
+    )
+    assert calls["request"]["identity"]["weight_path"] == "/cache/id.safetensors"
+    assert result["ok"] is True
 
 
-def test_worker_guard_rejects_malformed_identity():
-    with pytest.raises(ValueError, match="weight_path"):
-        _guard_identity_staged({"identity": {}})
-    with pytest.raises(ValueError, match="weight_path"):
-        _guard_identity_staged({"identity": "not-a-dict"})
+def test_base_run_keeps_text2img_path_when_no_identity(tmp_path, monkeypatch):
+    from core.backends import krea2_worker as base_worker
+
+    def boom(*args, **kwargs):
+        raise AssertionError("identity run should not be dispatched")
+
+    monkeypatch.setattr(base_worker, "_run_identity", boom)
+
+    class ReachedLoad(Exception):
+        pass
+
+    def bad_load(*args, **kwargs):
+        raise ReachedLoad("normal load path reached")
+
+    monkeypatch.setattr(base_worker, "_load_pipeline", bad_load)
+    with pytest.raises(ReachedLoad):
+        base_worker._run({"prompt": "x", "width": 512, "height": 512}, tmp_path)
 
 
-def test_worker_guard_fails_fast_not_silent():
-    with pytest.raises(NotImplementedError, match="phased GPU identity runtime"):
-        _guard_identity_staged(
-            {"identity": {"weight_path": "/cache/identity.safetensors"}}
+def test_safe_run_dispatches_identity(tmp_path, monkeypatch):
+    from core.backends import krea2_worker as base_worker
+    from core.backends import krea2_worker_safe as safe_worker
+
+    calls = {"n": 0}
+
+    def fake_identity(request, output_dir, progress_path=None):
+        calls["n"] += 1
+        return {"ok": True, "runtime": {}}
+
+    monkeypatch.setattr(base_worker, "_run_identity", fake_identity)
+    result = safe_worker._run(
+        {"identity": {"weight_path": "/cache/id.safetensors"}, "prompt": "p"},
+        tmp_path,
+    )
+    assert calls["n"] == 1
+    assert result["ok"] is True
+
+
+def test_run_identity_rejects_malformed_payload(tmp_path):
+    from core.backends import krea2_worker as base_worker
+
+    with pytest.raises(RuntimeError, match="malformed identity payload"):
+        base_worker._run_identity({"identity": {"ref_boost": 4.0}}, tmp_path)
+    with pytest.raises(RuntimeError, match="malformed identity payload"):
+        base_worker._run_identity({"prompt": "p", "identity": None}, tmp_path)
+
+
+def test_run_identity_fails_fast_on_missing_reference(tmp_path, monkeypatch):
+    from core.backends import krea2_worker as base_worker
+
+    def bad_load(*args, **kwargs):
+        raise AssertionError("pipeline should not load when the reference is missing")
+
+    monkeypatch.setattr(base_worker, "_load_pipeline", bad_load)
+    with pytest.raises(KreaIdentityError, match="reference image does not exist"):
+        base_worker._run_identity(
+            {
+                "prompt": "p",
+                "identity": {
+                    "weight_path": "/cache/id.safetensors",
+                    "reference_image": str(tmp_path / "missing.png"),
+                },
+            },
+            tmp_path,
         )
+
+
+def test_adaptive_request_preserves_identity_geometry():
+    from core.backends.krea2_worker_adaptive import _adaptive_request
+
+    hardware = {"accelerator": "cuda", "total_vram_gb": 12.0, "free_vram_gb": 8.0}
+    request = {
+        "width": 1024,
+        "height": 1024,
+        "steps": 28,
+        "variant": "base",
+        "prompt": "p",
+        "identity": {"weight_path": "/cache/id.safetensors"},
+    }
+    tuned, plan = _adaptive_request(request, hardware)
+    assert tuned["width"] == 1024
+    assert tuned["height"] == 1024
+    assert tuned["steps"] == 28
+    assert plan["identity_enabled"] is True
+    assert plan["resolution_scaled"] is False
+    assert plan["steps_tuned"] is False
+
+
+def test_adaptive_request_still_tunes_text2img():
+    from core.backends.krea2_worker_adaptive import _adaptive_request
+
+    hardware = {"accelerator": "cuda", "total_vram_gb": 12.0, "free_vram_gb": 8.0}
+    tuned, plan = _adaptive_request(
+        {"width": 1024, "height": 1024, "steps": 28, "variant": "base", "prompt": "p"},
+        hardware,
+    )
+    assert plan["identity_enabled"] is False
+    assert plan["resolution_scaled"] is True
+    assert plan["steps_tuned"] is True
+    assert tuned["steps"] < 28
 
 
 # --------------------------------------------------------------------------------------

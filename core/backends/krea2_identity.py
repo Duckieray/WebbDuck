@@ -444,6 +444,24 @@ def analyze_lora_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
     return {"mapped": mapped, "ignored": ignored, "unresolved": unresolved}
 
 
+def split_identity_lora_key(key: str) -> tuple[str | None, str | None]:
+    """Return ``(module_path, kind)`` for the suffix of a converted LoRA key.
+
+    ``kind`` is ``"a"`` / ``"b"`` for the low-rank factors and ``"alpha"`` for
+    the module alpha scalar; trailing metadata that is not a weight (or an
+    unrecognized key) returns ``(None, None)`` so runtime installers can skip
+    it without failing loudly.
+    """
+    for suffix, kind in (
+        (".lora_A.weight", "a"),
+        (".lora_B.weight", "b"),
+        (".lora_alpha", "alpha"),
+    ):
+        if str(key).endswith(suffix):
+            return str(key)[: -len(suffix)], kind
+    return None, None
+
+
 def convert_lora_keys(
     state_dict: dict[str, Any],
     *,

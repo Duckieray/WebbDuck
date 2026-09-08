@@ -26,11 +26,22 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.backends.krea2_identity import (
+    KreaIdentityError,
+    combined_token_count,
+    edit_position_ids,
+    edit_target_size,
+    grid_dims,
+    grounded_template,
+    mask_compat_processor,
+    source_token_count,
+)
 from core.backends.krea2_weights import map_krea2_source_key, strip_krea2_prefix
 from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 from runtime_hardware import detect_torch_hardware
@@ -83,6 +94,12 @@ class ScaledFP8Linear(nn.Module):
     storage-oriented rather than a claim of native FP8 tensor-core execution;
     it removes the full-model BF16 residency cost while preserving Diffusers'
     existing Krea transformer graph.
+
+    ``Qwen3-VL``-grounded identity edits stack a community LoRA on top without
+    giving up that storage: instead of punishing the FP8 qweight with a full
+    BF16 base, the adapter is installed as a low-rank residual whose factors
+    stay BF16/FP16 while the base projection keeps using the stored FP8
+    qweight (``y = BaseFP8(x) + coef * B(A(x))``).
     """
 
     def __init__(
@@ -100,6 +117,36 @@ class ScaledFP8Linear(nn.Module):
         self.register_buffer("qweight", qweight)
         self.register_buffer("scale", scale)
         self.register_buffer("bias", bias)
+        # Optional low-rank identity residual (see install_lora). None buffers
+        # keep the storage-only path byte-identical to the pre-Phase-4 worker.
+        self.register_buffer("lora_a", None)
+        self.register_buffer("lora_b", None)
+        self.register_buffer("lora_alpha", None)
+        self.lora_rank = 0
+        self.lora_scale = 1.0
+
+    def install_lora(
+        self,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor,
+        alpha: torch.Tensor | None = None,
+        lora_scale: float = 1.0,
+    ) -> None:
+        """Store a low-rank residual on this FP8 linear (base stays FP8)."""
+        a = torch.as_tensor(lora_a).detach().to(device="cpu").clone()
+        b = torch.as_tensor(lora_b).detach().to(device="cpu").clone()
+        rank = int(a.shape[0])
+        if a.shape[1] != self.in_features or b.shape[0] != self.out_features or b.shape[1] != rank:
+            raise RuntimeError(
+                f"Krea identity LoRA shape mismatch for {self.in_features}x{self.out_features}: "
+                f"A={tuple(a.shape)} B={tuple(b.shape)}."
+            )
+        alpha_value = torch.as_tensor(alpha if alpha is not None else float(rank), dtype=a.dtype)
+        self.register_buffer("lora_a", a)
+        self.register_buffer("lora_b", b)
+        self.register_buffer("lora_alpha", alpha_value)
+        self.lora_rank = rank
+        self.lora_scale = float(lora_scale if lora_scale is not None else 1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.qweight is None:
@@ -111,7 +158,27 @@ class ScaledFP8Linear(nn.Module):
                 scale = scale.reshape(self.out_features, 1)
             weight = weight * scale
         bias = self.bias.to(dtype=x.dtype) if self.bias is not None else None
-        return F.linear(x, weight, bias)
+        out = F.linear(x, weight, bias)
+        if self.lora_rank > 0 and self.lora_a is not None:
+            coef = _linear_lora_coefficient(self.lora_rank, self.lora_alpha, self.lora_scale)
+            if coef != 0.0:
+                down = F.linear(x, self.lora_a.to(dtype=x.dtype))
+                up = F.linear(down, self.lora_b.to(dtype=x.dtype))
+                out = out + coef * up
+        return out
+
+
+def _linear_lora_coefficient(rank: int, alpha: Any, lora_scale: float) -> float:
+    """LoRA scaling factor ``(alpha / rank) * lora_scale`` for a module."""
+    rank = max(1, int(rank or 0))
+    if alpha is None:
+        alpha_value = float(rank)
+    elif isinstance(alpha, torch.Tensor):
+        alpha_value = float(alpha.reshape(()).item())
+    else:
+        alpha_value = float(alpha)
+    lora_scale = lora_scale if lora_scale is not None else 1.0
+    return (alpha_value / rank) * float(lora_scale)
 
 
 def _source_layer_prefix(weight_key: str) -> str | None:
@@ -418,6 +485,131 @@ def overlay_single_file_transformer(
     }
 
 
+def _fuse_linear_lora(
+    module: nn.Linear,
+    lora_a: torch.Tensor,
+    lora_b: torch.Tensor,
+    alpha: Any,
+    lora_scale: float,
+) -> None:
+    """Bake a low-rank delta into a dense ``nn.Linear`` weight (upstream math).
+
+    Mirrors the upstream identity app's ``fuse_lora`` behavior: the adapter is
+    folded into the base projection so the hot path stays a plain ``F.linear``.
+    """
+    weight = module.weight
+    a = torch.as_tensor(lora_a).to(device=weight.device, dtype=weight.dtype)
+    b = torch.as_tensor(lora_b).to(device=weight.device, dtype=weight.dtype)
+    rank = int(a.shape[0])
+    if a.shape[1] != module.in_features or b.shape[0] != module.out_features or b.shape[1] != rank:
+        raise KreaIdentityError(
+            f"Krea identity LoRA shape mismatch for {module.in_features}x{module.out_features}: "
+            f"A={tuple(a.shape)} B={tuple(b.shape)}."
+        )
+    coef = _linear_lora_coefficient(rank, alpha, lora_scale)
+    if coef == 0.0:
+        return
+    with torch.no_grad():
+        weight.data.add_(coef * torch.mm(b, a))
+
+
+def apply_identity_lora_residuals(
+    transformer: nn.Module,
+    *,
+    converted_state: dict[str, Any],
+    lora_scale: float = 1.0,
+) -> dict[str, Any]:
+    """Apply a converted Krea identity LoRA onto the transformer projections.
+
+    Dense ``nn.Linear`` modules get their delta fused into the weight. ``ScaledFP8Linear``
+    modules keep the FP8 storage and carry the delta as a low-rank residual so
+    both the ``torch._scaled_mm`` native path and the dequantize+linear storage
+    path can compute ``y = BaseFP8(x) + coef * B(A(x))`` without a BF16 base.
+    Fails loudly on any module the adapter cannot be applied to.
+    """
+    from core.backends.krea2_identity import split_identity_lora_key
+
+    lora_scale = float(lora_scale if lora_scale is not None else 1.0)
+    groups: dict[str, dict[str, Any]] = {}
+    for key, tensor in converted_state.items():
+        module_path, kind = split_identity_lora_key(str(key))
+        if kind is None:
+            continue
+        groups.setdefault(module_path, {})[kind] = tensor
+
+    if not groups:
+        raise KreaIdentityError(
+            "Krea identity LoRA has no apply-able weight tensors after key conversion."
+        )
+
+    applied = 0
+    for module_path, parts in groups.items():
+        lora_a = parts.get("a")
+        lora_b = parts.get("b")
+        if lora_a is None or lora_b is None:
+            raise KreaIdentityError(
+                f"Krea identity LoRA is missing half of a low-rank residual at {module_path}."
+            )
+        try:
+            module = transformer.get_submodule(module_path)
+        except Exception as exc:
+            raise KreaIdentityError(
+                f"Krea identity LoRA targets unknown module {module_path}: {exc}"
+            ) from exc
+        if isinstance(module, ScaledFP8Linear):
+            module.install_lora(lora_a, lora_b, parts.get("alpha"), lora_scale)
+        elif isinstance(module, nn.Linear):
+            _fuse_linear_lora(module, lora_a, lora_b, parts.get("alpha"), lora_scale)
+        else:
+            raise KreaIdentityError(
+                f"Krea identity LoRA targets non-linear module {module_path} "
+                f"({type(module).__name__})."
+            )
+        applied += 1
+    return {"applied_modules": int(applied), "lora_scale": lora_scale}
+
+
+def install_identity_lora(
+    transformer: nn.Module,
+    *,
+    weight_path: str | os.PathLike,
+    lora_scale: float = 1.0,
+) -> dict[str, Any]:
+    """Load, convert, and install the identity-edit LoRA onto the transformer."""
+    from safetensors.torch import load_file
+    from core.backends.krea2_identity import convert_lora_keys
+
+    converted = convert_lora_keys(load_file(weight_path), strict=True)
+    return apply_identity_lora_residuals(
+        transformer,
+        converted_state=converted,
+        lora_scale=lora_scale,
+    )
+
+
+def install_identity_processors(transformer: Any) -> int:
+    """Replace each attention block's processor with the ref_boost mask variant.
+
+    ``mask=None`` delegates back to the stock processor (byte-identical GQA fast
+    path); a dense ``ref_boost`` bias uses the repeat-interleave GQA path.
+    """
+    from diffusers.models.transformers.transformer_krea2 import Krea2AttnProcessor
+
+    processor_cls = mask_compat_processor(Krea2AttnProcessor)
+    installed = 0
+    for block in transformer.transformer_blocks:
+        attn = getattr(block, "attn")
+        current = getattr(attn, "processor", None)
+        processor = processor_cls()
+        if current is not None:
+            for attr in ("_attention_backend", "_parallel_config"):
+                if not hasattr(processor, attr) and hasattr(current, attr):
+                    setattr(processor, attr, getattr(current, attr))
+        attn.set_processor(processor)
+        installed += 1
+    return installed
+
+
 def _build_empty_transformer(component_source: str) -> Any:
     from accelerate import init_empty_weights
     from diffusers import Krea2Transformer2DModel
@@ -673,15 +865,16 @@ def _load_pipeline(
     }
 
 
-def _encode_prompt_phase(
+def _place_text_encoder(
     pipe: Any,
-    *,
-    prompt: str,
-    guidance: float,
     hardware: dict[str, Any],
     report: Any | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, str]:
-    """Encode once using the fastest text-encoder strategy that fits live VRAM."""
+) -> tuple[Any, str, torch.device]:
+    """Place the Qwen3 text encoder onto GPU/CPU for one encode pass.
+
+    Returns ``(encoder, encode_mode, encode_device)``. The encoder is left on
+    ``encode_device`` for the caller; the caller is responsible for releasing it.
+    """
     device = _torch_device(hardware)
     encoder = pipe.text_encoder
     encoder_storage_gb = _module_storage_gb(encoder)
@@ -719,6 +912,20 @@ def _encode_prompt_phase(
         except Exception:
             encode_mode = "cpu-fallback"
             encode_device = torch.device("cpu")
+    return encoder, encode_mode, encode_device
+
+
+def _encode_prompt_phase(
+    pipe: Any,
+    *,
+    prompt: str,
+    guidance: float,
+    hardware: dict[str, Any],
+    report: Any | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, str]:
+    """Encode once using the fastest text-encoder strategy that fits live VRAM."""
+    device = _torch_device(hardware)
+    encoder, encode_mode, encode_device = _place_text_encoder(pipe, hardware, report=report)
 
     if callable(report):
         report("Encoding Krea prompt", 0.40)
@@ -759,6 +966,196 @@ def _encode_prompt_phase(
         torch.cuda.empty_cache()
 
     return prompt_embeds, prompt_mask, negative_embeds, negative_mask, encode_mode
+
+
+_DEFAULT_VLM_PROCESSOR = "Qwen/Qwen3-VL-4B-Instruct"
+
+
+def _vlm_processor_source(text_encoder: Any) -> str:
+    """Pick the Qwen3-VL processor repo for the grounded (image + text) encode.
+
+    Krea 2 ships only a text tokenizer, so the image preprocessing (mean/std,
+    patch, spatial-merge) has to come from the Qwen3-VL processor. Resolution
+    order: an explicit processor on the text encoder, then the ``WEBBDUCK_KREA2_IDENTITY_PROCESSOR``
+    override, then the upstream default repo.
+    """
+    enc_processor = getattr(text_encoder, "processor_spec", None) or getattr(
+        text_encoder, "processor", None
+    )
+    if isinstance(enc_processor, str) and enc_processor.strip():
+        return enc_processor.strip()
+    override = os.getenv("WEBBDUCK_KREA2_IDENTITY_PROCESSOR", "").strip()
+    if override:
+        return override
+    return _DEFAULT_VLM_PROCESSOR
+
+
+def _grounded_encode_krea(
+    *,
+    pipe: Any,
+    text_encoder: Any,
+    processor: Any,
+    instruction: str,
+    source: Image.Image,
+    grounding_px: int,
+    encode_device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Encode the instruction grounded on the source image through Qwen3-VL.
+
+    Returns ``(prompt_embeds, prompt_embeds_mask)`` shaped like the diffusers
+    Krea text conditioning: ``(1, seq, num_text_layers, text_hidden_dim)`` and
+    ``(1, seq)``, with the system-prefix tokens dropped (``prefix_idx`` mirror of
+    the text-only path). Replicates the upstream Space's ``_grounded_encode``.
+    """
+    select_layers = getattr(pipe, "text_encoder_select_layers", None)
+    if select_layers is None:
+        select_layers = (2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35)
+    prefix_idx = int(getattr(pipe, "prompt_template_encode_start_idx", 34))
+
+    img = source.convert("RGB")
+    if grounding_px and max(img.size) > grounding_px:
+        s = grounding_px / max(img.size)
+        img = img.resize(
+            (max(16, round(img.size[0] * s)), max(16, round(img.size[1] * s))),
+            Image.LANCZOS,
+        )
+
+    text = grounded_template(instruction)
+    inputs = processor(
+        text=[text],
+        images=[img],
+        padding=True,
+        return_tensors="pt",
+    ).to(encode_device)
+
+    te_kwargs = dict(
+        input_ids=inputs["input_ids"],
+        attention_mask=inputs.get("attention_mask"),
+        pixel_values=inputs.get("pixel_values"),
+        image_grid_thw=inputs.get("image_grid_thw"),
+        output_hidden_states=True,
+    )
+    if inputs.get("mm_token_type_ids") is not None:
+        te_kwargs["mm_token_type_ids"] = inputs["mm_token_type_ids"]
+    outputs = text_encoder(**te_kwargs)
+    hidden_states = torch.stack(
+        [outputs.hidden_states[i] for i in select_layers], dim=2
+    )  # (1, seq, num_layers, dim)
+
+    attention_mask = inputs.get("attention_mask")
+    if attention_mask is None:
+        attention_mask = torch.ones(
+            hidden_states.shape[:2], device=encode_device, dtype=torch.bool
+        )
+    else:
+        attention_mask = attention_mask.bool()
+
+    hidden_states = hidden_states[:, prefix_idx:]
+    attention_mask = attention_mask[:, prefix_idx:]
+    return hidden_states.to(dtype), attention_mask.to(device="cpu")
+
+
+def _encode_identity_prompt_phase(
+    pipe: Any,
+    *,
+    instruction: str,
+    reference: Image.Image,
+    grounding_px: int,
+    guidance: float,
+    hardware: dict[str, Any],
+    report: Any | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, str, str]:
+    """Grounded (Qwen3-VL image + text) identity instruction encode phase."""
+    device = _torch_device(hardware)
+    processor = None
+    processor_source: str | None = None
+    try:
+        from transformers import AutoProcessor
+
+        processor_source = _vlm_processor_source(pipe.text_encoder)
+        try:
+            if callable(report):
+                report("Loading Qwen3-VL identity processor", 0.36)
+            processor = AutoProcessor.from_pretrained(processor_source)
+        except Exception as exc:
+            if callable(report):
+                report(f"Qwen3-VL processor unavailable ({exc}); text-only encode", 0.36)
+            processor = None
+            processor_source = None
+    except Exception:
+        processor = None
+        processor_source = None
+
+    if processor is None:
+        # Text-only fallback: identical to the text-to-image path but drop the
+        # prefix via pipe.encode_prompt's own template handling.
+        prompt_embeds, prompt_mask, negative_embeds, negative_mask, encode_mode = (
+            _encode_prompt_phase(
+                pipe,
+                prompt=instruction,
+                guidance=guidance,
+                hardware=hardware,
+                report=report,
+            )
+        )
+        return (
+            prompt_embeds,
+            prompt_mask,
+            negative_embeds,
+            negative_mask,
+            encode_mode,
+            "text-only",
+        )
+
+    encoder, encode_mode, encode_device = _place_text_encoder(pipe, hardware, report=report)
+    try:
+        if callable(report):
+            report("Encoding Krea identity prompt", 0.40)
+        with torch.inference_mode():
+            prompt_embeds, prompt_mask = _grounded_encode_krea(
+                pipe=pipe,
+                text_encoder=encoder,
+                processor=processor,
+                instruction=instruction,
+                source=reference,
+                grounding_px=int(grounding_px),
+                encode_device=encode_device,
+                dtype=encoder.dtype,
+            )
+        negative_embeds: torch.Tensor | None = None
+        negative_mask: torch.Tensor | None = None
+        if guidance > 0:
+            if callable(report):
+                report("Encoding Krea negative identity prompt", 0.44)
+            with torch.inference_mode():
+                negative_embeds, negative_mask = _grounded_encode_krea(
+                    pipe=pipe,
+                    text_encoder=encoder,
+                    processor=processor,
+                    instruction="",
+                    source=reference,
+                    grounding_px=int(grounding_px),
+                    encode_device=encode_device,
+                    dtype=encoder.dtype,
+                )
+    finally:
+        if callable(report):
+            report("Releasing Krea text encoder", 0.48)
+        pipe.text_encoder = None
+        del encoder
+        gc.collect()
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+    return (
+        prompt_embeds.to("cpu"),
+        prompt_mask.to("cpu"),
+        negative_embeds,
+        negative_mask,
+        encode_mode,
+        processor_source,
+    )
 
 
 def _release_transformer(pipe: Any, device: str) -> None:
@@ -859,13 +1256,474 @@ def _denoise_one(
     return latents
 
 
+def _encode_identity_reference(
+    pipe: Any,
+    vae: Any,
+    source: Image.Image,
+    *,
+    width: int,
+    height: int,
+    device: str,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """VAE-encode the source reference to a packed, normalized latent block.
+
+    The appearance-path conditioning is a *clean* latent (``(z - mean) / std``,
+    matching the pipeline's normalized latent space) packed exactly like the
+    target grid so it can be prepended to the transformer sequence.
+    """
+    px = pipe.image_processor.preprocess(source.convert("RGB"), height=height, width=width)
+    px = px.unsqueeze(2).to(device=device, dtype=vae.dtype)  # (B, C, 1, H, W)
+
+    with torch.inference_mode():
+        latent = vae.encode(px).latent_dist.mode()  # (B, z, 1, lh, lw), unnormalized
+        latents_mean = (
+            torch.tensor(vae.config.latents_mean)
+            .view(1, vae.config.z_dim, 1, 1, 1)
+            .to(latent.device, latent.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(
+            1, vae.config.z_dim, 1, 1, 1
+        ).to(latent.device, latent.dtype)
+        latent = (latent - latents_mean) / latents_std
+        latent = latent[:, :, 0]  # (B, z, lh, lw)
+
+    b, c, lh, lw = latent.shape
+    packed = pipe._pack_latents(latent, b, c, lh, lw)  # (B, grid_h*grid_w, c*p*p)
+    return packed.to(device="cpu", dtype=dtype)
+
+
+def _denoise_one_identity(
+    pipe: Any,
+    *,
+    prompt_embeds: torch.Tensor,
+    prompt_mask: torch.Tensor,
+    negative_embeds: torch.Tensor | None,
+    negative_mask: torch.Tensor | None,
+    src_packed: torch.Tensor,
+    width: int,
+    height: int,
+    steps: int,
+    guidance: float,
+    seed: int,
+    device: str,
+    ref_boost: float,
+    index: int,
+    total_denoise_steps: int,
+    report: Any,
+) -> torch.Tensor:
+    """Denoise one identity edit with ``[text | source(frame=1) | target(frame=0)]``.
+
+    Target tokens are the only velocity prediction kept. Replicates the upstream
+    Space's step loop against the diffusers ``Krea2Transformer2DModel`` while
+    keeping the phased structure (prompt-embeds move to GPU for the forward and
+    back to CPU afterward).
+    """
+    from diffusers.pipelines.krea2.pipeline_krea2 import retrieve_timesteps
+
+    device_obj = torch.device(device)
+    num_channels_latents = pipe.transformer.config.in_channels // (pipe.patch_size**2)
+    generator = torch.Generator(device=device_obj).manual_seed(seed)
+    latents = pipe.prepare_latents(
+        1,
+        num_channels_latents,
+        height,
+        width,
+        prompt_embeds.dtype,
+        device_obj,
+        generator,
+        None,
+    )
+
+    grid_h, grid_w = grid_dims(width, height)
+    position_ids = edit_position_ids(
+        prompt_embeds.shape[1], grid_h, grid_w, 1, device_obj
+    )
+    neg_position_ids = None
+    if negative_embeds is not None:
+        neg_position_ids = edit_position_ids(
+            negative_embeds.shape[1], grid_h, grid_w, 1, device_obj
+        )
+
+    sigmas = np.linspace(1.0, 1 / int(steps), int(steps))
+    timesteps, num_steps = retrieve_timesteps(
+        pipe.scheduler, int(steps), device_obj, sigmas=sigmas, mu=1.15
+    )
+    pipe.scheduler.set_begin_index(0)
+
+    prompt_gpu = prompt_embeds.to(device_obj)
+    mask_gpu = prompt_mask.to(device_obj)
+    neg_gpu = negative_embeds.to(device_obj) if negative_embeds is not None else None
+    neg_mask_gpu = negative_mask.to(device_obj) if negative_mask is not None else None
+    src_gpu = src_packed.to(device_obj)
+
+    def on_step_end(
+        _pipe: Any,
+        step_index: int,
+        _timestep: Any,
+        callback_kwargs: dict,
+    ) -> dict:
+        completed = index * steps + step_index + 1
+        progress = 0.55 + (0.34 * completed / total_denoise_steps)
+        report("Editing with Krea 2 identity", progress, completed, total_denoise_steps)
+        return callback_kwargs
+
+    try:
+        with torch.inference_mode():
+            for step_index, t in enumerate(timesteps):
+                timestep = (t / pipe.scheduler.config.num_train_timesteps).expand(
+                    latents.shape[0]
+                ).to(latents.dtype)
+
+                noise_pred = edit_transformer_forward(
+                    pipe.transformer,
+                    latents,
+                    src_gpu,
+                    prompt_gpu,
+                    mask_gpu,
+                    timestep,
+                    position_ids,
+                    ref_boost=ref_boost,
+                )
+                if neg_gpu is not None:
+                    neg_pred = edit_transformer_forward(
+                        pipe.transformer,
+                        latents,
+                        src_gpu,
+                        neg_gpu,
+                        neg_mask_gpu,
+                        timestep,
+                        neg_position_ids,
+                        ref_boost=ref_boost,
+                    )
+                    noise_pred = noise_pred + float(guidance) * (noise_pred - neg_pred)
+
+                latents = pipe.scheduler.step(
+                    noise_pred, t, latents, return_dict=False
+                )[0]
+                on_step_end(pipe, step_index, t, {})
+    finally:
+        del prompt_gpu, mask_gpu, neg_gpu, neg_mask_gpu, src_gpu, generator
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+    return latents.detach().to("cpu")
+
+
 def _is_cuda_oom(exc: BaseException) -> bool:
     oom_type = getattr(torch.cuda, "OutOfMemoryError", RuntimeError)
     return isinstance(exc, oom_type) or "out of memory" in str(exc).lower()
 
 
+def _run_identity(
+    request: dict,
+    output_dir: Path,
+    progress_path: Path | None = None,
+) -> dict:
+    """Phased identity/persona edit run (grounded encode, source latent, edit forward).
+
+    Consumes the ``identity`` payload resolved by ``krea2._identity_worker_payload``:
+    community identity-edit LoRA, single reference image, ref_boost / grounding /
+    fit / LoRA-scale dials. Fails loudly on any unresolvable identity config
+    instead of silently rendering ordinary text-to-image output.
+    """
+    from core.backends.krea2_identity import (
+        edit_target_size,
+        resolve_reference_path,
+    )
+
+    worker_started = time.perf_counter()
+    identity = request.get("identity")
+    if not isinstance(identity, dict) or not str(identity.get("weight_path") or "").strip():
+        raise RuntimeError(
+            "Krea identity run received a malformed identity payload "
+            "(missing resolved identity LoRA weight_path)."
+        )
+
+    prompt = str(request["prompt"])
+    steps = max(1, int(request.get("steps") or 10))
+    guidance = float(request.get("guidance") if request.get("guidance") is not None else 0.0)
+    num_images = max(1, int(request.get("num_images") or 1))
+    seed = int(request.get("seed") or 0)
+    ref_boost = float(identity.get("ref_boost") if identity.get("ref_boost") is not None else 1.0)
+    grounding_px = int(identity.get("grounding_px") if identity.get("grounding_px") is not None else 768)
+    fit_mode = str(identity.get("fit_mode") or "fit")
+    max_megapixels = float(identity.get("max_megapixels") if identity.get("max_megapixels") is not None else 1.0)
+    lora_scale = float(identity.get("lora_scale") if identity.get("lora_scale") is not None else 1.0)
+    weight_path = str(identity["weight_path"])
+    reference_path = resolve_reference_path(identity.get("reference_image") or "")
+    try:
+        source = Image.open(reference_path)
+        source.load()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Krea identity reference image could not be read: {reference_path} ({exc})"
+        ) from exc
+    source = source.convert("RGB")
+    timing: dict[str, float] = {}
+
+    def report(stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
+        _write_progress(progress_path, stage, progress, step, total_steps)
+
+    report("Profiling Krea hardware", 0.04)
+    hardware = detect_torch_hardware(torch)
+    device = _torch_device(hardware)
+    if device == "cuda":
+        dtype = torch.bfloat16 if bool(hardware.get("bf16")) else torch.float16
+    elif device == "mps":
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+
+    report("Initializing Krea runtime", 0.06)
+    load_started = time.perf_counter()
+    pipe, load_info = _load_pipeline(request, dtype, hardware, report=report)
+    timing["pipeline_load_seconds"] = time.perf_counter() - load_started
+
+    multiple = int(getattr(pipe, "vae_scale_factor", 8)) * int(getattr(pipe, "patch_size", 2))
+    height, width = edit_target_size(
+        source.size,
+        (int(request.get("width") or 1024), int(request.get("height") or 1024)),
+        fit_mode=fit_mode,
+        max_megapixels=max_megapixels,
+        multiple=multiple,
+    )
+
+    encode_started = time.perf_counter()
+    (
+        prompt_embeds,
+        prompt_mask,
+        negative_embeds,
+        negative_mask,
+        encode_mode,
+        processor_source,
+    ) = _encode_identity_prompt_phase(
+        pipe,
+        instruction=prompt,
+        reference=source,
+        grounding_px=grounding_px,
+        guidance=guidance,
+        hardware=hardware,
+        report=report,
+    )
+    timing["prompt_encode_seconds"] = time.perf_counter() - encode_started
+
+    vae = pipe.vae
+    pipe.vae = None
+
+    report("Encoding Krea identity reference", 0.50)
+    src_started = time.perf_counter()
+    try:
+        src_packed = _encode_identity_reference(
+            pipe,
+            vae,
+            source,
+            width=width,
+            height=height,
+            device=device,
+            dtype=dtype,
+        )
+    finally:
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    timing["reference_encode_seconds"] = time.perf_counter() - src_started
+
+    if device == "cuda":
+        hardware = detect_torch_hardware(torch)
+    transformer_storage_gb = _module_storage_gb(pipe.transformer)
+    reserve_gb = _activation_reserve_gb(
+        float(hardware.get("total_vram_gb") or 0.0),
+        width,
+        height,
+    )
+
+    report("Selecting Krea GPU profile", 0.52)
+    setup_started = time.perf_counter()
+    execution_mode = _configure_execution(
+        pipe,
+        hardware=hardware,
+        load_info=load_info,
+        transformer_storage_gb=transformer_storage_gb,
+        reserve_gb=reserve_gb,
+    )
+    initial_execution_mode = execution_mode
+    fallback_reason: str | None = None
+    timing["execution_setup_seconds"] = time.perf_counter() - setup_started
+
+    report("Installing Krea identity LoRA", 0.54)
+    lora_install_started = time.perf_counter()
+    try:
+        lora_info = install_identity_lora(
+            pipe.transformer,
+            weight_path=weight_path,
+            lora_scale=lora_scale,
+        )
+        processor_count = install_identity_processors(pipe.transformer)
+    except Exception as exc:
+        raise KreaIdentityError(f"Krea identity LoRA install failed: {exc}") from exc
+    timing["lora_install_seconds"] = time.perf_counter() - lora_install_started
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    latent_batches: list[torch.Tensor] = []
+    total_denoise_steps = max(1, steps * num_images)
+    denoise_started = time.perf_counter()
+
+    for index in range(num_images):
+        report(
+            "Starting Krea identity editing",
+            0.58 + (0.34 * (index * steps) / total_denoise_steps),
+            index * steps,
+            total_denoise_steps,
+        )
+        try:
+            latent = _denoise_one_identity(
+                pipe,
+                prompt_embeds=prompt_embeds,
+                prompt_mask=prompt_mask,
+                negative_embeds=negative_embeds,
+                negative_mask=negative_mask,
+                src_packed=src_packed,
+                width=width,
+                height=height,
+                steps=steps,
+                guidance=guidance,
+                seed=seed + index,
+                device=device,
+                ref_boost=ref_boost,
+                index=index,
+                total_denoise_steps=total_denoise_steps,
+                report=report,
+            )
+        except Exception as exc:
+            if device == "cuda" and execution_mode.startswith("resident") and _is_cuda_oom(exc):
+                fallback_reason = "resident_oom"
+                report("VRAM changed; retrying Krea identity with safe offload", 0.57)
+                try:
+                    pipe.transformer.to("cpu")
+                except Exception:
+                    pass
+                gc.collect()
+                torch.cuda.empty_cache()
+                hardware = detect_torch_hardware(torch)
+                execution_mode = _configure_execution(
+                    pipe,
+                    hardware=hardware,
+                    load_info=load_info,
+                    transformer_storage_gb=transformer_storage_gb,
+                    reserve_gb=reserve_gb,
+                    mode_override="transformer-block",
+                )
+                latent = _denoise_one_identity(
+                    pipe,
+                    prompt_embeds=prompt_embeds,
+                    prompt_mask=prompt_mask,
+                    negative_embeds=negative_embeds,
+                    negative_mask=negative_mask,
+                    src_packed=src_packed,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    guidance=guidance,
+                    seed=seed + index,
+                    device=device,
+                    ref_boost=ref_boost,
+                    index=index,
+                    total_denoise_steps=total_denoise_steps,
+                    report=report,
+                )
+            else:
+                raise
+        latent_batches.append(latent)
+
+    timing["denoise_seconds"] = time.perf_counter() - denoise_started
+
+    del prompt_embeds, prompt_mask, negative_embeds, negative_mask, src_packed
+    report("Releasing Krea denoiser", 0.93, total_denoise_steps, total_denoise_steps)
+    _release_transformer(pipe, device)
+
+    report("Decoding Krea image", 0.95, total_denoise_steps, total_denoise_steps)
+    decode_started = time.perf_counter()
+    pipe.vae = vae
+    if max(width, height) > 1536:
+        try:
+            vae.enable_tiling()
+        except Exception:
+            pass
+
+    for index, latents in enumerate(latent_batches):
+        images = _decode_latents(
+            pipe,
+            vae,
+            latents,
+            width=width,
+            height=height,
+            device=device,
+        )
+        image = images[0]
+        report("Writing Krea image", 0.97, (index + 1) * steps, total_denoise_steps)
+        write_started = time.perf_counter()
+        path = output_dir / f"krea2_{index:03d}.png"
+        image.save(path)
+        timing["image_write_seconds"] = timing.get("image_write_seconds", 0.0) + (
+            time.perf_counter() - write_started
+        )
+        saved.append(str(path))
+
+    timing["decode_seconds"] = time.perf_counter() - decode_started
+    timing["denoise_decode_seconds"] = timing["denoise_seconds"] + timing["decode_seconds"]
+    timing["inference_seconds"] = timing["prompt_encode_seconds"] + timing["denoise_decode_seconds"]
+    timing["worker_total_seconds"] = time.perf_counter() - worker_started
+    report("Returning Krea image", 0.975, total_denoise_steps, total_denoise_steps)
+
+    transformer_passes_per_step = 2 if guidance > 0 else 1
+    runtime_hardware = dict(hardware)
+    runtime_hardware["free_vram_gb"] = round(float(runtime_hardware.get("free_vram_gb") or 0.0), 2)
+    runtime_hardware["total_vram_gb"] = round(float(runtime_hardware.get("total_vram_gb") or 0.0), 2)
+
+    return {
+        "ok": True,
+        "images": saved,
+        "seed": seed,
+        "width": width,
+        "height": height,
+        "timing": {key: round(value, 6) for key, value in timing.items()},
+        "runtime": {
+            **load_info,
+            "provider": "krea2_identity_edit",
+            "offload": execution_mode,
+            "initial_offload": initial_execution_mode,
+            "fallback_reason": fallback_reason,
+            "text_encoder_mode": encode_mode,
+            "vlm_processor": processor_source,
+            "identity": {
+                "weight_path": weight_path,
+                "reference_count_used": int(identity.get("reference_count_used") or 1),
+                "ref_boost": ref_boost,
+                "grounding_px": grounding_px,
+                "fit_mode": fit_mode,
+                "lora_scale": float(lora_info.get("lora_scale") or lora_scale),
+                "lora_applied_modules": int(lora_info.get("applied_modules") or 0),
+                "attention_processors_installed": processor_count,
+                "effective_width": width,
+                "effective_height": height,
+            },
+            "device": device,
+            "dtype": str(dtype).replace("torch.", ""),
+            "hardware": runtime_hardware,
+            "transformer_storage_gb": round(transformer_storage_gb, 2),
+            "activation_reserve_gb": round(reserve_gb, 2),
+            "system_ram_gb": round(_system_ram_gb(), 2),
+            "transformer_forward_passes": steps * num_images * transformer_passes_per_step,
+        },
+    }
+
+
 def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     worker_started = time.perf_counter()
+
+    if request.get("identity"):
+        return _run_identity(request, output_dir, progress_path)
 
     prompt = str(request["prompt"])
     width = _snap(int(request.get("width") or 1024))

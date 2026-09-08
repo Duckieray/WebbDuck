@@ -80,6 +80,32 @@ decoded). The module owns:
   (`mask_compat_processor`) and the source-preserving transformer forward
   (`edit_transformer_forward`).
 
+The GPU runtime lives in `core/backends/krea2_worker.py`: a request carrying a
+top-level `identity` dict dispatches out of the shared phased `_run` into
+`_run_identity` before any text2img encode (same dispatch mirrored in
+`krea2_worker_safe._run`). Sequence is text encode -> reference encode -> LoRA
+install -> bordered denoise loop, with an OOM ladder that reconfigures
+resident->`transformer-block` mode. The Qwen3-VL grounded encode
+(`_grounded_encode_krea`) uses the processor from `_vlm_processor_source`
+(`WEBBDUCK_KREA2_IDENTITY_PROCESSOR`, default `Qwen/Qwen3-VL-4B-Instruct`),
+the pipeline's `text_encoder_select_layers` (12) and
+`prompt_template_encode_start_idx` (34), and only passes
+`mm_token_type_ids` when the installed transformers accepts it. The reference
+is VAE-encoded into normalized source latents (`latents_mean/std`) and packed
+with `pipe._pack_latents`; denoise uses the upstream identity schedule
+(`sigmas = linspace(1.0, 1/steps, steps)`, `mu=1.15`, `set_begin_index(0)`)
+and `edit_transformer_forward` with `ref_boost`.
+
+Identity LoRAs install as low-rank residuals: dense `nn.Linear` modules bake
+the delta into the weight (upstream `fuse_lora` math), while `ScaledFP8Linear`
+keeps its FP8 `qweight` storage and applies `y = BaseFP8(x) + (alpha/rank)*B(A(x))`
+at forward time — including the `torch._scaled_mm` native path in
+`core/backends/krea2_native_fp8.py`, so identity edits never force a BF16
+base. `krea2_worker_adaptive._adaptive_request` no longer gates identity jobs
+behind `_guard_identity_staged`; it preserves identity geometry when planning
+(skips resolution-scaling and default-step tuning) and records
+`identity_enabled` on the plan.
+
 Krea checkpoints advertise `identity_adapter=True` but deliberately NOT generic
 `img2img` in `models/model_descriptor.py`; the UI keys the persona section off
 the capability, not string detection.
