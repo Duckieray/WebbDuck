@@ -169,6 +169,124 @@ def _fit_token_budget(width: int, height: int, token_budget: int) -> tuple[int, 
     return best[1] * _EFFECTIVE_TOKEN_MULTIPLE, best[2] * _EFFECTIVE_TOKEN_MULTIPLE
 
 
+def _cfg_float(cfg: dict[str, Any], key: str, default: float) -> float:
+    """Read a bounded optional float, falling back to ``default`` on junk."""
+    value = (cfg or {}).get(key)
+    try:
+        return float(value) if value is not None else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _reference_source_size(identity_cfg: dict[str, Any]) -> tuple[int, int, bool]:
+    """Best-effort pixel size of the identity reference; ``(w, h, readable)``.
+
+    Reads only the image header (PIL lazy decode) so the planner can predict the
+    worker's ``edit_target_size`` containment without GPU work. Returns
+    ``(0, 0, False)`` when there is no reference or it cannot be opened — the
+    planner then takes no geometry action (the worker validates the real file).
+    """
+    path = str((identity_cfg or {}).get("reference_image") or "").strip()
+    if not path:
+        return 0, 0, False
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            width, height = im.size
+        return max(1, int(width)), max(1, int(height)), True
+    except Exception:
+        return 0, 0, False
+
+
+def _identity_token_budget(hardware: dict[str, Any], variant: str) -> int | None:
+    """Conservative target-token budget for identity edits on this accelerator.
+
+    An identity forward packs the reference and target grids into one combined
+    image sequence, so the *same* output grid costs roughly twice the
+    image-side tokens of a text2img step. The planner therefore halves the card's
+    text2img budget (which already reflects live free-VRAM pressure) before it
+    compares the requested output grid — a strictly safer envelope.
+    """
+    base = _token_budget(hardware, variant)
+    if base is None:
+        return None
+    multiple = _EFFECTIVE_TOKEN_MULTIPLE
+    return max(multiple, (int(base) // (2 * multiple)) * multiple)
+
+
+def _identity_token_plan(
+    identity_cfg: dict[str, Any],
+    source_size: tuple[int, int],
+    requested_box: tuple[int, int],
+    budget: int | None,
+) -> tuple[dict[str, Any], tuple[int, int]]:
+    """Estimate identity edit token cost and the box that keeps it in budget.
+
+    Mirrors ``krea2_worker._run_identity`` exactly: ``edit_target_size``
+    contains the source within the requested box (``fit_mode``/``max_megapixels``
+    honored, 16-px grid), then ``grid_dims`` -> token counts. ``reference_tokens``
+    is the packed source latent grid; ``combined_image_tokens`` counts the whole
+    image side ``[ref | target]`` (text sequence excluded).
+
+    Returns ``(accounting, tuned_box)``. When the reference is not readable the
+    planner returns the requested box unchanged (no geometry action without
+    ground truth); otherwise it shrinks the box (same-AR fit) only as far as
+    needed to bring the *target* grid under the conservative budget.
+    """
+    from core.backends.krea2_identity import (
+        combined_token_count,
+        edit_target_size,
+        grid_dims,
+        source_token_count,
+    )
+
+    src_w, src_h = source_size
+    req_w, req_h = requested_box
+    account: dict[str, Any] = {
+        "source_size": [src_w, src_h],
+        "requested_size": [req_w, req_h],
+        "effective_size": [req_w, req_h],
+        "reference_tokens": 0,
+        "target_tokens": 0,
+        "combined_image_tokens": 0,
+        "token_budget": budget,
+        "reference_readable": src_w > 0 and src_h > 0,
+        "resolution_scaled": False,
+    }
+    if not (src_w > 0 and src_h > 0):
+        return account, (req_w, req_h)
+
+    box = (req_w, req_h)
+    fit_mode = str((identity_cfg or {}).get("fit_mode") or "fit")
+    max_megapixels = _cfg_float(identity_cfg, "max_megapixels", 1.0)
+    for _ in range(8):
+        eff_h, eff_w = edit_target_size(
+            (src_w, src_h),
+            box,
+            fit_mode=fit_mode,
+            max_megapixels=max_megapixels,
+            multiple=_EFFECTIVE_TOKEN_MULTIPLE,
+        )
+        grid_h, grid_w = grid_dims(eff_w, eff_h)
+        target_tokens = source_token_count(grid_h, grid_w)
+        account.update(
+            {
+                "effective_size": [eff_w, eff_h],
+                "reference_tokens": source_token_count(grid_h, grid_w),
+                "target_tokens": target_tokens,
+                "combined_image_tokens": combined_token_count(0, grid_h, grid_w),
+            }
+        )
+        if budget is None or target_tokens <= budget:
+            break
+        box = _fit_token_budget(eff_w, eff_h, budget)
+
+    scaled = box != (req_w, req_h)
+    account["resolution_scaled"] = scaled
+    return account, box
+
+
 def _tuned_default_steps(
     steps: int,
     hardware: dict[str, Any],
@@ -221,17 +339,37 @@ def _adaptive_request(
         ),
     )
 
-    # Identity edits derive their output size from the reference image AR
-    # (edit_target_size) and use the LoRA card's own step recipe, so the
-    # text2img token-budget and default-step tuning must not fight them.
-    budget = None if identity_enabled else _token_budget(hardware, variant)
+    identity_accounting: dict[str, Any] | None = None
+    budget: int | None = None
     tuned_width, tuned_height = requested_width, requested_height
-    if budget:
-        tuned_width, tuned_height = _fit_token_budget(
-            requested_width,
-            requested_height,
-            budget,
+
+    if identity_enabled:
+        # Identity edits derive their output size from the reference AR
+        # (edit_target_size) and use the LoRA card's own step recipe, so the
+        # default-step tuning never applies. Geometry is still planned against a
+        # conservative token budget: an identity forward packs the reference and
+        # target grids into one sequence, so the same output grid costs ~2x the
+        # image-side tokens of a text2img step on this card.
+        identity_cfg = tuned.get("identity")
+        identity_cfg = identity_cfg if isinstance(identity_cfg, dict) else {}
+        src_w, src_h, readable = _reference_source_size(identity_cfg)
+        identity_budget = _identity_token_budget(hardware, variant)
+        identity_accounting, identity_box = _identity_token_plan(
+            identity_cfg,
+            (src_w, src_h),
+            (requested_width, requested_height),
+            identity_budget,
         )
+        if readable:
+            tuned_width, tuned_height = identity_box
+    else:
+        budget = _token_budget(hardware, variant)
+        if budget:
+            tuned_width, tuned_height = _fit_token_budget(
+                requested_width,
+                requested_height,
+                budget,
+            )
 
     resized = tuned_width != requested_width or tuned_height != requested_height
     tuned_steps = (
@@ -262,6 +400,7 @@ def _adaptive_request(
         "resolution_scaled": resized,
         "steps_tuned": tuned_steps != requested_steps,
         "identity_enabled": identity_enabled,
+        "identity": identity_accounting,
         "variant": variant,
         "accelerator": str(hardware.get("accelerator") or "cpu"),
         "hardware_total_vram_gb": round(

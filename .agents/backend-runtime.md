@@ -106,6 +106,28 @@ behind `_guard_identity_staged`; it preserves identity geometry when planning
 (skips resolution-scaling and default-step tuning) and records
 `identity_enabled` on the plan.
 
+### Identity-aware adaptive planning + OOM retry reconfigure (Phase 5)
+
+`core/backends/krea2_worker.py::configure_krea_identity_transformer` is the
+single auditable reconfiguration path shared by the identity initial setup and
+the CUDA OOM retry ladder: CPU-offload the transformer, gc + `empty_cache`,
+re-probe live hardware, then select the profile (optionally forced to
+`mode_override`, e.g. `"transformer-block"` on a resident OOM). `_run_identity`
+uses it for both its setup and its fallback attempt, so the retry is no longer
+inlined offload/cleanup code.
+
+`krea2_worker_adaptive.py` gives identity jobs the same request-level guard the
+text2img path gets. `_identity_token_budget` halves the accelerator's text2img
+target-token budget because an identity forward packs reference + target grids
+into one combined image sequence (`combined_image_tokens` = 2 × grid area for a
+single reference). `_identity_token_plan` mirrors the worker's `edit_target_size`
+containment (source AR, `fit_mode`, `max_megapixels`, 16-px grid) to predict the
+effective output — with `reference_tokens`, `target_tokens`, and
+`combined_image_tokens` — and, only when the reference is readable, shrinks the
+requested box (same-AR fit) so the predicted target grid fits. The plan's
+`identity` dict carries this accounting; steps are never tuned for identity.
+Without a readable reference the planner takes no geometry action.
+
 Krea checkpoints advertise `identity_adapter=True` but deliberately NOT generic
 `img2img` in `models/model_descriptor.py`; the UI keys the persona section off
 the capability, not string detection.

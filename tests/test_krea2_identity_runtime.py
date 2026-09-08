@@ -255,6 +255,71 @@ def test_adaptive_request_still_tunes_text2img():
     assert tuned["steps"] < 28
 
 
+def test_configure_krea_identity_transformer_offloads_and_reconfigures(monkeypatch):
+    from core.backends import krea2_worker as base_worker
+
+    calls = {"to_cpu": 0, "configured": []}
+
+    class FakeTransformer:
+        def to(self, *args, **kwargs):
+            if args and str(args[0]) == "cpu":
+                calls["to_cpu"] += 1
+
+    class FakePipe:
+        def __init__(self) -> None:
+            self.transformer = FakeTransformer()
+
+    def fake_configure(pipe, **kwargs):
+        calls["configured"].append(kwargs)
+        return kwargs.get("mode_override") or "resident"
+
+    monkeypatch.setattr(
+        base_worker,
+        "detect_torch_hardware",
+        lambda torch_mod: {
+            "accelerator": "cuda",
+            "total_vram_gb": 15.51,
+            "free_vram_gb": 13.2,
+        },
+    )
+    monkeypatch.setattr(base_worker, "_configure_execution", fake_configure)
+
+    pipe = FakePipe()
+    mode = base_worker.configure_krea_identity_transformer(
+        pipe,
+        load_info={},
+        transformer_storage_gb=11.0,
+        reserve_gb=3.0,
+    )
+    assert mode == "resident"
+    assert calls["to_cpu"] == 1
+    assert calls["configured"][0]["mode_override"] is None
+    assert calls["configured"][0]["reserve_gb"] == 3.0
+
+    # Simulated OOM retry reconfiguration forces a safer profile.
+    retry_mode = base_worker.configure_krea_identity_transformer(
+        pipe,
+        load_info={},
+        transformer_storage_gb=11.0,
+        reserve_gb=3.0,
+        mode_override="transformer-block",
+    )
+    assert retry_mode == "transformer-block"
+    assert calls["configured"][1]["mode_override"] == "transformer-block"
+
+
+def test_run_identity_retry_ladder_uses_reusable_reconfigure():
+    import inspect
+
+    from core.backends import krea2_worker as base_worker
+
+    source = inspect.getsource(base_worker._run_identity)
+    ladder_tail = source.split("configure_krea_identity_transformer(", 1)[1]
+    assert 'mode_override="transformer-block"' in ladder_tail
+    assert "torch.cuda.empty_cache()" not in ladder_tail
+    assert "pipe.transformer.to(" not in ladder_tail
+
+
 # --------------------------------------------------------------------------------------
 # Server-side persona preset round-trip
 # --------------------------------------------------------------------------------------

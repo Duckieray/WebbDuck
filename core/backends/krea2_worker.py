@@ -778,6 +778,44 @@ def _configure_execution(
     raise RuntimeError(f"Unknown WEBBDUCK_KREA2_OFFLOAD mode: {mode}")
 
 
+def configure_krea_identity_transformer(
+    pipe: Any,
+    *,
+    load_info: dict[str, Any],
+    transformer_storage_gb: float,
+    reserve_gb: float,
+    mode_override: str | None = None,
+) -> str:
+    """Reconfigure the Krea identity denoiser after a VRAM drain / OOM retry.
+
+    Shared by the initial identity setup and the CUDA OOM retry ladder so both
+    reconfigurations route through one auditable function: offload the
+    transformer to CPU, run GC + allocator cleanup, re-probe live hardware
+    (desktop VRAM jitter differs between attempts), then select the execution
+    profile — optionally forced to ``mode_override`` (e.g. ``"transformer-block"``)
+    for a strictly safer retry.
+    """
+    try:
+        pipe.transformer.to("cpu")
+    except Exception:
+        pass
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+    fresh_hardware = detect_torch_hardware(torch)
+    return _configure_execution(
+        pipe,
+        hardware=fresh_hardware,
+        load_info=load_info,
+        transformer_storage_gb=transformer_storage_gb,
+        reserve_gb=reserve_gb,
+        mode_override=mode_override,
+    )
+
+
 def _load_pipeline(
     request: dict,
     dtype: Any,
@@ -1539,9 +1577,8 @@ def _run_identity(
 
     report("Selecting Krea GPU profile", 0.52)
     setup_started = time.perf_counter()
-    execution_mode = _configure_execution(
+    execution_mode = configure_krea_identity_transformer(
         pipe,
-        hardware=hardware,
         load_info=load_info,
         transformer_storage_gb=transformer_storage_gb,
         reserve_gb=reserve_gb,
@@ -1599,16 +1636,8 @@ def _run_identity(
             if device == "cuda" and execution_mode.startswith("resident") and _is_cuda_oom(exc):
                 fallback_reason = "resident_oom"
                 report("VRAM changed; retrying Krea identity with safe offload", 0.57)
-                try:
-                    pipe.transformer.to("cpu")
-                except Exception:
-                    pass
-                gc.collect()
-                torch.cuda.empty_cache()
-                hardware = detect_torch_hardware(torch)
-                execution_mode = _configure_execution(
+                execution_mode = configure_krea_identity_transformer(
                     pipe,
-                    hardware=hardware,
                     load_info=load_info,
                     transformer_storage_gb=transformer_storage_gb,
                     reserve_gb=reserve_gb,

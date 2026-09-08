@@ -169,3 +169,126 @@ def test_backend_launches_adaptive_worker():
         / "krea2.py"
     ).read_text(encoding="utf-8")
     assert 'with_name("krea2_worker_adaptive.py")' in source
+
+
+# --------------------------------------------------------------------------------------
+# Phase 5: identity-aware adaptive planning
+# --------------------------------------------------------------------------------------
+
+def _make_reference(tmp_path: Path, width: int = 1024, height: int = 1024) -> Path:
+    from PIL import Image
+
+    ref = tmp_path / "refs.png"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, height), (120, 80, 200)).save(ref)
+    return ref
+
+
+def test_identity_token_budget_halves_text2img_budget():
+    hw = _cuda_hardware(15.51, 13.2)
+    text_budget = adaptive._token_budget(hw, "base")
+    identity_budget = adaptive._identity_token_budget(hw, "base")
+    assert text_budget == 3584
+    assert identity_budget == 1792
+
+    # Unconstrained cards stay unconstrained for identity too.
+    big = _cuda_hardware(40.0, 35.0)
+    assert adaptive._identity_token_budget(big, "base") is None
+
+
+def test_identity_token_plan_counts_combined_tokens(tmp_path):
+    ref = _make_reference(tmp_path, 768, 1024)
+    identity = {"reference_image": str(ref), "fit_mode": "fit"}
+    account, box = adaptive._identity_token_plan(
+        identity, (768, 1024), (1024, 1024), budget=None
+    )
+
+    # Contained within the 1024x1024 box, source AR preserved, snapped to 16px.
+    assert account["effective_size"] == [768, 1024]
+    assert account["reference_tokens"] == 48 * 64
+    assert account["target_tokens"] == 48 * 64
+    assert account["combined_image_tokens"] == 2 * 48 * 64
+    assert account["reference_readable"] is True
+    assert account["resolution_scaled"] is False
+    assert box == (1024, 1024)
+
+
+def test_identity_token_plan_shrinks_box_to_budget(tmp_path):
+    ref = _make_reference(tmp_path, 1024, 1024)
+    identity = {"reference_image": str(ref), "fit_mode": "fit"}
+    account, box = adaptive._identity_token_plan(
+        identity, (1024, 1024), (1024, 1024), budget=1792
+    )
+
+    assert account["target_tokens"] <= 1792
+    assert account["combined_image_tokens"] >= account["target_tokens"]
+    assert account["resolution_scaled"] is True
+    assert box[0] % 16 == 0 and box[1] % 16 == 0
+    w, h = box
+    assert (w // 16) * (h // 16) <= 1792
+
+
+def test_identity_token_plan_does_not_act_without_reference():
+    account, box = adaptive._identity_token_plan(
+        {"fit_mode": "fit"}, (0, 0), (1024, 1024), budget=1792
+    )
+    assert account["reference_readable"] is False
+    assert account["resolution_scaled"] is False
+    assert box == (1024, 1024)
+
+
+def test_adaptive_request_scales_identity_geometry_on_constrained_gpu(tmp_path):
+    ref = _make_reference(tmp_path, 1024, 1024)
+    request = {
+        "variant": "base",
+        "width": 1024,
+        "height": 1024,
+        "steps": 28,
+        "prompt": "p",
+        "identity": {
+            "weight_path": "/cache/id.safetensors",
+            "reference_image": str(ref),
+            "fit_mode": "fit",
+        },
+    }
+    tuned, plan = adaptive._adaptive_request(
+        request,
+        _cuda_hardware(15.51, 13.2),
+    )
+
+    assert plan["identity_enabled"] is True
+    assert plan["resolution_scaled"] is True
+    assert plan["steps_tuned"] is False
+    assert tuned["steps"] == 28
+
+    w, h = tuned["width"], tuned["height"]
+    assert w % 16 == 0 and h % 16 == 0
+    assert (w // 16) * (h // 16) <= 1792
+    assert plan["identity"]["reference_tokens"] == (w // 16) * (h // 16)
+    assert plan["identity"]["combined_image_tokens"] == 2 * plan["identity"]["target_tokens"]
+
+
+def test_adaptive_request_keeps_identity_geometry_on_large_gpu(tmp_path):
+    ref = _make_reference(tmp_path, 768, 1024)
+    request = {
+        "variant": "base",
+        "width": 1024,
+        "height": 1024,
+        "steps": 28,
+        "prompt": "p",
+        "identity": {
+            "weight_path": "/cache/id.safetensors",
+            "reference_image": str(ref),
+            "fit_mode": "fit",
+        },
+    }
+    tuned, plan = adaptive._adaptive_request(
+        request,
+        _cuda_hardware(40.0, 35.0),
+    )
+
+    assert tuned["width"] == 1024
+    assert tuned["height"] == 1024
+    assert plan["resolution_scaled"] is False
+    assert plan["identity"]["token_budget"] is None
+    assert plan["identity"]["combined_image_tokens"] == 2 * 48 * 64
