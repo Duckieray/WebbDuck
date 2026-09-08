@@ -185,8 +185,19 @@ def detect_lora_arch(lora_path: Path) -> str | None:
     try:
         with safe_open(lora_path, framework="pt", device="cpu") as f:
             keys = list(f.keys())
+            metadata = f.metadata() or {}
     except Exception:
         return None
+
+    # Check safetensors metadata first
+    base_version = metadata.get("ss_base_model_version", "").lower()
+    if "sdxl" in base_version:
+        return "sdxl"
+    if "sd_1_5" in base_version or "sd15" in base_version or "sd_1.5" in base_version:
+        return "sd15"
+    if "flux" in base_version:
+        # Pass to the shape detector to distinguish flux1 vs flux2 if possible
+        return _detect_flux_lora_version(lora_path, keys)
 
     joined = " ".join(keys).lower()
     flux_markers = (
@@ -216,6 +227,16 @@ def detect_lora_arch(lora_path: Path) -> str | None:
 
     if "lora_te_" in joined:
         return "sd15"
+
+    # If it only modifies the UNet, try to distinguish SDXL vs SD1.5 by block names
+    if "lora_unet_" in joined:
+        if "down_blocks_3" in joined or "up_blocks_3" in joined:
+            return "sd15"
+        # SDXL has down_blocks_0, 1, 2 but not 3
+        if "down_blocks_2" in joined or "up_blocks_2" in joined:
+            return "sdxl"
+        # If it's very shallow, we guess SDXL as it's the most common default
+        return "sdxl"
 
     return None
 
@@ -483,6 +504,12 @@ def sync_lora_registry_file():
     a best-effort trigger auto-assigned from their trained metadata via
     :func:`detect_lora_trigger`. Only previously-unset triggers are filled in;
     manually-defined triggers are never overwritten.
+
+    Entries whose stored ``file`` path no longer resolves are healed in place
+    when a unique file with the same stem exists elsewhere under ``LORA_ROOT``
+    (e.g. after lora files were reorganized into arch subdirectories). Dead
+    entries are left untouched so a temporarily-unmounted volume never wipes
+    curated metadata.
     """
     LORA_ROOT.mkdir(exist_ok=True, parents=True)
     if LORA_FILE.exists():
@@ -492,6 +519,8 @@ def sync_lora_registry_file():
             data = {}
     else:
         data = {}
+
+    by_stem = {f.stem: f for f in LORA_ROOT.rglob("*.safetensors")}
 
     changed = False
     for f in sorted(LORA_ROOT.rglob("*"), key=lambda p: p.name.lower()):
@@ -508,8 +537,17 @@ def sync_lora_registry_file():
             changed = True
             continue
 
-        # Backfill an unset trigger from trained metadata (never overwrite a set one).
         entry = data[key]
+        stored = entry.get("file")
+        if stored and not (LORA_ROOT / stored).exists():
+            # Stale path: the file moved (or the registry was written under a
+            # different root). Point the entry at the uniquely-matching file.
+            real = by_stem.get(key)
+            if real is not None:
+                entry["file"] = real.relative_to(LORA_ROOT).as_posix()
+                changed = True
+
+        # Backfill an unset trigger from trained metadata (never overwrite a set one).
         if not entry.get("trigger"):
             detected = detect_lora_trigger(f)
             if detected:
@@ -574,7 +612,7 @@ def load_lora_registry():
 
         registry[name] = {
             "path": file_path,
-            "arch": cfg.get("arch") or detect_lora_arch(file_path) or "sdxl",
+            "arch": cfg.get("arch") or detect_lora_arch(file_path) or "unknown",
             "trigger": cfg.get("trigger"),
             "weight": float(cfg.get("weight", 1.0)),
             "description": cfg.get("description", ""),

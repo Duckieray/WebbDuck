@@ -250,10 +250,12 @@ def apply_loras(pipe, loras: list[dict]) -> str:
         weight = float(entry.get("weight", 1.0))
         lora = LORA_REGISTRY[name]
 
-        pipe.load_lora_weights(lora["path"], adapter_name=name)
-
-        if lora.get("trigger"):
-            trigger_phrases.append(f"({lora['trigger']}:{weight})")
+        try:
+            pipe.load_lora_weights(lora["path"], adapter_name=name)
+            if lora.get("trigger"):
+                trigger_phrases.append(f"({lora['trigger']}:{weight})")
+        except Exception as e:
+            print(f"WARNING: Failed to apply LoRA '{name}': {e}. Skipping.", flush=True)
 
     pipe.fuse_lora()
     return ", ".join(trigger_phrases)
@@ -850,24 +852,32 @@ class PipelineManager:
 
             trigger_phrases = []
 
+            valid_desired = {}
             for name, weight in desired.items():
                 lora = LORA_REGISTRY[name]
                 adapter = sanitize_adapter_name(name)
-                self.pipe.load_lora_weights(
-                    lora["path"],
-                    adapter_name=adapter,
-                )
-                trigger = lora.get("trigger")
-                if trigger:
-                    trigger_phrases.append(f"({trigger}:{weight})")
+                try:
+                    self.pipe.load_lora_weights(
+                        lora["path"],
+                        adapter_name=adapter,
+                    )
+                    trigger = lora.get("trigger")
+                    if trigger:
+                        trigger_phrases.append(f"({trigger}:{weight})")
+                    valid_desired[name] = weight
+                except Exception as e:
+                    print(f"WARNING: Failed to load LoRA '{name}': {e}. Skipping.", flush=True)
 
-            if desired:
-                self.pipe.set_adapters(
-                    [sanitize_adapter_name(n) for n in desired.keys()],
-                    adapter_weights=list(desired.values())
-                )
+            if valid_desired:
+                try:
+                    self.pipe.set_adapters(
+                        [sanitize_adapter_name(n) for n in valid_desired.keys()],
+                        adapter_weights=list(valid_desired.values())
+                    )
+                except Exception as e:
+                    print(f"WARNING: Failed to set adapters for {list(valid_desired.keys())}: {e}. Skipping.", flush=True)
 
-            self.current_loras = desired
+            self.current_loras = valid_desired
             self.trigger_phrase = ", ".join(trigger_phrases)
 
     def apply_embeddings(self, embeddings):

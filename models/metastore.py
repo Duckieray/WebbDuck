@@ -55,6 +55,7 @@ def _resolve_meta_dir() -> Path:
 class _CheckpointMeta:
     tags: list[str] = field(default_factory=list)
     families: list[str] = field(default_factory=list)
+    modes: list[str] = field(default_factory=list)
     recommended_mode: str | None = None
     url: str = ""
     description: str = ""
@@ -201,6 +202,7 @@ class MetaStore:
             result[name] = _CheckpointMeta(
                 tags=list(meta.get("tags", []) or []),
                 families=list(meta.get("families", []) or []),
+                modes=list(meta.get("modes", []) or []),
                 recommended_mode=meta.get("recommended_mode"),
                 url=meta.get("url", ""),
                 description=meta.get("description", ""),
@@ -287,6 +289,7 @@ class MetaStore:
             path=str(registry_info["path"]) if registry_info and "path" in registry_info else None,
             tags=list(ph.tags) if ph else [],
             families=list(ph.families) if ph else [],
+            modes=list(ph.modes) if ph and ph.modes else ([ph.recommended_mode] if ph and ph.recommended_mode else []),
             description=ph.description if ph else "",
             url=ph.url if ph else "",
             recommended_mode=ph.recommended_mode if ph else None,

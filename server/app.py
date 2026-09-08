@@ -79,7 +79,7 @@ mount_web_plugin_assets(app, WEB_PLUGINS)
 include_web_plugin_routers(app, WEB_PLUGINS)
 
 # Queue for GPU jobs
-generation_queue = asyncio.Queue(maxsize=32)
+generation_queue = asyncio.Queue(maxsize=999)
 job_registry = {}
 active_job_id = None
 active_job = None
