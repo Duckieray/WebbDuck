@@ -56,6 +56,34 @@ headroom. `core/backends/flux.py` forwards `strength` in the worker payload.
 Note: `enable_sequential_cpu_offload` is incompatible with GGUF-quantized
 transformers and is auto-guarded to the diffusers path.
 
+## Krea 2 Identity Edit (krea2_identity_edit)
+
+`core/backends/krea2_identity.py` is the pure-Python contract layer for the
+instruction-based, identity-preserving persona adapter built on the community
+LoRA `conradlocke/krea2-identity-edit` run on a Krea 2 checkpoint. It mirrors
+the FLUX.2 persona concept but through the Krea dual-conditioning recipe
+(semantic path via the image-grounded Qwen3-VL text encoder + appearance path
+via the VAE-encoded normalized source latent prepended as clean tokens; the
+sequence is `[text | source(frame=1) | target(frame=0)]` and only the target is
+decoded). The module owns:
+
+- the identity request snapshot / validation contract
+  (`identity_settings_snapshot`, single-anchor ref in v1);
+- identity weight resolution (`WEIGHT_SPECS` full/r128/r64, env overrides
+  `WEBBDUCK_KREA2_IDENTITY_REPO` / `WEBBDUCK_KREA2_IDENTITY_WEIGHT`, GPU-ranked
+  `preferred_rank`) — weights are never vendored in-repo;
+- the ai-toolkit/ComfyUI -> Diffusers LoRA key conversion
+  (`convert_lora_keys`, strict failures on unresolved tensors);
+- dual-conditioning geometry (`edit_target_size`, `edit_position_ids`,
+  `ref_boost_bias`, grid/token accounting the adaptive planner feeds on);
+- the GQA-safe, mask-compatible attention processor factory
+  (`mask_compat_processor`) and the source-preserving transformer forward
+  (`edit_transformer_forward`).
+
+Krea checkpoints advertise `identity_adapter=True` but deliberately NOT generic
+`img2img` in `models/model_descriptor.py`; the UI keys the persona section off
+the capability, not string detection.
+
 ## Captioning And Plugins
 
 - `core/captioning_config.py`: plugin search roots and captioner discovery.
