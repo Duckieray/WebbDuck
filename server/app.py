@@ -2049,6 +2049,13 @@ def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
     adapter_cfg.setdefault("face_crop", preset.get("face_crop", "auto"))
     adapter_cfg.setdefault("flux2_anchor_dup", bool(preset.get("flux2_anchor_dup", False)))
     adapter_cfg.setdefault("face_focus", bool(preset.get("face_focus", False)))
+    # Krea identity-edit persona tuning: ref_boost likeness dial, grounding
+    # resolution, fit mode, and LoRA strength carry through saved personas.
+    adapter_cfg.setdefault("ref_boost", preset.get("ref_boost", 4.0))
+    adapter_cfg.setdefault("grounding_px", preset.get("grounding_px", 768))
+    adapter_cfg.setdefault("fit_mode", preset.get("fit_mode", "fit"))
+    adapter_cfg.setdefault("lora_scale", preset.get("lora_scale", 1.0))
+    adapter_cfg.setdefault("lora_rank", preset.get("lora_rank"))
     return adapter_cfg
 
 @app.get("/ip-adapter/refs")
@@ -2101,6 +2108,10 @@ class PresetData(BaseModel):
     face_crop: str = "auto"
     flux2_anchor_dup: bool = False
     face_focus: bool = False
+    ref_boost: float = 4.0
+    grounding_px: int = 768
+    fit_mode: str = "fit"
+    lora_rank: str | None = None
 
 @app.post("/ip-adapter/presets")
 async def save_preset(data: PresetData):
@@ -2118,6 +2129,10 @@ async def save_preset(data: PresetData):
         "face_crop": data.face_crop,
         "flux2_anchor_dup": data.flux2_anchor_dup,
         "face_focus": data.face_focus,
+        "ref_boost": data.ref_boost,
+        "grounding_px": data.grounding_px,
+        "fit_mode": data.fit_mode,
+        "lora_rank": data.lora_rank,
     }
     PRESETS_FILE.write_text(json.dumps(presets, indent=2))
     return {"ok": True}

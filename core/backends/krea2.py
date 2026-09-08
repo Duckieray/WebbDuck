@@ -13,6 +13,12 @@ from typing import Any
 from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.krea2_identity import (
+    KreaIdentityError,
+    identity_repo,
+    identity_settings_snapshot,
+    resolve_identity_weight,
+)
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
 from core.provider_credentials import resolve_provider_token
@@ -59,6 +65,53 @@ def _worker_environment() -> dict[str, str]:
     if token:
         env["HF_TOKEN"] = token
     return env
+
+
+def _identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize the request's Krea identity/persona config into the worker payload.
+
+    Resolves the identity LoRA safetensors to a local path *before* the runtime
+    is spawned so download/auth failures surface as actionable WebbDuck errors
+    instead of in a log file. Returns ``None`` when identity is disabled, and
+    raises :class:`KreaIdentityError` on malformed configs or un-resolvable
+    weights (no silent fallback to non-identity output).
+    """
+    adapter_cfg = settings.get("identity_adapter")
+    snapshot = identity_settings_snapshot(adapter_cfg)
+    if snapshot is None:
+        return None
+
+    token, _source = _huggingface_token()
+
+    def _download(repo_id: str, filename: str):
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(repo_id=repo_id, filename=filename, token=token or None)
+
+    try:
+        weight = resolve_identity_weight(
+            rank=snapshot.lora_rank,
+            hf_hub_download=_download,
+        )
+    except KreaIdentityError as exc:
+        raise KreaIdentityError(
+            f"Krea identity persona for the current request could not be resolved: {exc}"
+        ) from exc
+
+    return {
+        "provider": "krea2_identity_edit",
+        "weight_path": weight.path,
+        "weight_source": weight.source,
+        "reference_image": snapshot.reference_image,
+        "reference_count_used": snapshot.reference_count_used,
+        "ref_boost": snapshot.ref_boost,
+        "grounding_px": snapshot.grounding_px,
+        "fit_mode": snapshot.fit_mode,
+        "lora_scale": snapshot.lora_scale,
+        "lora_rank": snapshot.lora_rank,
+        "max_megapixels": snapshot.max_megapixels,
+        "face_crop": snapshot.face_crop,
+    }
 
 
 def _component_access_error(
@@ -289,6 +342,8 @@ class Krea2DiffusersBackend(GenerationBackend):
                 "format is not runnable by the installed Krea backend."
             )
 
+        identity_payload = _identity_worker_payload(settings)
+
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
         seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
@@ -316,6 +371,8 @@ class Krea2DiffusersBackend(GenerationBackend):
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }
+        if identity_payload is not None:
+            payload["identity"] = identity_payload
 
         python_exe = _runtime_python()
         worker = Path(__file__).with_name("krea2_worker_adaptive.py")

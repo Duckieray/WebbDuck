@@ -289,11 +289,38 @@ def _post_cleanup_hardware() -> dict[str, Any]:
         return {}
 
 
+def _guard_identity_staged(request: dict[str, Any]) -> None:
+    """Fail fast (never silently) until the GPU identity path lands.
+
+    The backend already resolves and threads an ``identity`` block for
+    ``krea2_identity_edit`` persona requests. The phased worker execution that
+    consumes it (grounded encode, VAE-packed source latent, edit forward,
+    ref_boost bias, identity LoRA) is still staged, so an identity-enabled
+    request must raise here instead of silently rendering ordinary text-to-image
+    output.
+    """
+    identity = request.get("identity")
+    if identity is None:
+        return
+    if not isinstance(identity, dict) or not identity.get("weight_path"):
+        raise ValueError(
+            "Malformed Krea identity payload: identity block is missing a "
+            "resolved weight_path."
+        )
+    raise NotImplementedError(
+        "Krea identity/persona generation is wired end-to-end at the request "
+        "layer but the phased GPU identity runtime is not installed yet in this "
+        "build. Run the follow-up worker milestone (krea2 identity encode/denoise) "
+        "and retry."
+    )
+
+
 def _run(
     request: dict[str, Any],
     output_dir: Path,
     progress_path: Path | None = None,
 ) -> dict[str, Any]:
+    _guard_identity_staged(request)
     hardware = detect_torch_hardware(torch)
     native_fp8.enable_for_hardware(hardware, safe.base)
     tuned_request, plan = _adaptive_request(request, hardware)
