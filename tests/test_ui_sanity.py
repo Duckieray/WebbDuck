@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -46,4 +47,36 @@ def test_ui_loads_components(page: Page):
     # 5. Verify Buttons are clickable (not disabled by default unless intended)
     btn_generate = page.locator("#btn-generate")
     expect(btn_generate).to_be_enabled()
+
+
+@pytest.mark.browser
+def test_krea_identity_provider_ui_adapts_to_selected_model(page: Page):
+    """
+    Selecting a Krea model must switch the identity provider to
+    krea2_identity_edit and reveal the Krea-only persona controls.
+    Skips when no krea-named model is present in the catalog.
+    """
+    base_url = os.getenv("WEBBDUCK_TEST_BASE_URL", "http://127.0.0.1:8010")
+    page.goto(base_url)
+    model_select = page.locator("#base_model")
+    expect(model_select).not_to_have_value("", timeout=15000)
+
+    krea_value = None
+    for i in range(model_select.locator("option").count()):
+        value = model_select.locator("option").nth(i).get_attribute("value") or ""
+        if "krea" in value.lower():
+            krea_value = value
+            break
+    if not krea_value:
+        pytest.skip("No krea-named model present in the catalog")
+
+    model_select.select_option(krea_value)
+
+    expect(page.locator("#ip-adapter-type")).to_have_value(
+        "krea2_identity_edit", timeout=15000
+    )
+    expect(page.locator("#ip-adapter-grounding-px")).not_to_have_class(re.compile("hidden"))
+    expect(page.locator("#ip-adapter-lora-rank")).not_to_have_class(re.compile("hidden"))
+    expect(page.locator("#ip-adapter-scale")).to_have_attribute("min", "0")
+    expect(page.locator("#ip-adapter-scale")).to_have_attribute("max", "10")
 
