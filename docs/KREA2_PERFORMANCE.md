@@ -120,6 +120,14 @@ Identity-specific (no effect on text2img):
   rows through it before offloading — identical math to two separate forwards,
   half the block-transfer/Python churn. `_configure_execution` reports the
   `paired-block` mode.
+- **Resident block prefix** (`WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS=0` to
+  disable; `auto` default): when paired mode is active the worker stages the
+  first N transformer blocks on the GPU once per job (weights are constant
+  across steps). N is budgeted from measured free VRAM minus this resolution's
+  activation reserve minus a 1.5 GB workspace margin (~0.42 GB fp8/block;
+  `paired-block-N` when partial, `paired-resident` when all blocks are resident).
+  An OOM while the prefix is active drops the prefix and retries pure paired
+  streaming before falling back to the hook-based block path.
 - `WEBBDUCK_KREA2_IDENTITY_STEPS=<int>` — override identity denoise steps.
 - `WEBBDUCK_KREA2_IDENTITY_GUIDANCE=<float>` — override the request cfg for
   identity only; `0` (or negative) skips the unconditional forward altogether
@@ -130,6 +138,10 @@ These knobs exist so the two dominant levers (drop CFG for identity; cut
 identity steps) can be A/B'd on live hardware without code changes. Steps and
 CFG affect output character, so validate before promoting any value to a
 default.
+
+The identity edit-path megapixel cap defaults to **2.0**, so the common portrait
+sizes pass untouched: 832x1216 ≈ 1.01 MP and 1152x1728 ≈ 1.99 MP. Explicitly
+lower per-request caps still downscale as requested.
 
 ## Measurements
 
@@ -148,6 +160,7 @@ Each Krea generation records backend timings in generation metadata:
 `krea_runtime` also records:
 
 - selected and initial execution/offload mode;
+- resident-block prefix count (`resident_blocks`);
 - any adaptive fallback reason;
 - text-encoder execution mode;
 - execution quantization and preserved FP8 linear count;

@@ -168,6 +168,25 @@ Low VRAM (~6 GB) is by design, not headroom.
   (int), `WEBBDUCK_KREA2_IDENTITY_GUIDANCE` (float; `0`/negative skips the
   uncond forward), `WEBBDUCK_KREA2_IDENTITY_CFG_FREE=1` (= guidance 0). Applied
   by `apply_identity_perf_overrides` right after the request defaults resolve.
+- **Resident block prefix (2026-09-08):** the transformer's weights never change
+  during denoising, so `_configure_execution` stages the first N leading blocks
+  on the GPU once per job instead of re-streaming them every step. N comes from
+  `_identity_resident_blocks(free_vram, reserve, per_block, n_blocks)` —
+  budgeted as measured free VRAM minus this resolution's activation reserve
+  minus `_KREA_RESIDENT_WORKSPACE_GB` (1.5), floored at 0 and capped at
+  `n_blocks` (~0.42 GB fp8/block). `WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS`
+  (default `auto`; `0` disables) forces the count. The count is recorded on
+  `pipe.transformer._krea_resident_blocks` and threaded into
+  `edit_transformer_forward_paired` / `edit_transformer_forward_nohooks` as
+  `n_resident`; resident-prefix blocks are never offloaded. Execution-mode
+  strings: `paired-block-N` (partial) or `paired-resident` (all resident).
+  `_run_identity` reports `resident_blocks` in the runtime dict and the OOM
+  ladder steps down: `paired_resident_oom` (drop the prefix, keep paired
+  streaming) before the full `paired_oom` -> `transformer-block` retry.
+- **Megapixel cap default 2.0:** `DEFAULT_MAX_MEGAPIXELS` is 2.0 so standard
+  portrait jobs pass untouched — 832x1216 ≈ 1.01 MP, 1152x1728 ≈ 1.99 MP.
+  Validation clamps 0.125..2.0; explicit per-request caps below that still
+  downscale as before.
 
 ## Captioning And Plugins
 

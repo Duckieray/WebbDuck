@@ -652,6 +652,47 @@ def _activation_reserve_gb(total_vram_gb: float, width: int, height: int) -> flo
     return max(2.0, float(total_vram_gb) * 0.10, 1.35 + 0.85 * megapixels)
 
 
+# Resident-block workspace margin: activations + fp8->bf16 dequant temporaries
+# that transiently share VRAM with the resident block prefix during a forward.
+_KREA_RESIDENT_WORKSPACE_GB = 1.5
+
+
+def _identity_resident_blocks(
+    free_vram_gb: float,
+    reserve_gb: float,
+    per_block_gb: float,
+    n_blocks: int,
+    override: int | None = None,
+) -> int:
+    """How many leading transformer blocks may stay GPU-resident across steps.
+
+    Transformer weights are constant during denoising, so keeping the first N
+    blocks on the accelerator (stored FP8, ~0.42 GB/block) turns N streamed
+    transfers per row into zero. The count comes from measured free VRAM minus
+    the activation reserve for this resolution and a workspace margin, floored
+    at 0 (pure streaming) and capped at ``n_blocks``. ``override`` (or the
+    ``WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS`` env var, applied when no
+    override is given) forces a count; ``0`` disables residency completely.
+    """
+    if override is not None:
+        forced = int(override)
+    else:
+        raw = os.getenv("WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS", "").strip()
+        if raw in {"", "auto", "-1"}:
+            forced = None
+        else:
+            try:
+                forced = int(raw)
+            except Exception:
+                forced = None
+    if forced is not None:
+        return max(0, min(forced, n_blocks))
+    if per_block_gb <= 0.0 or n_blocks <= 0:
+        return 0
+    budget = max(0.0, float(free_vram_gb) - float(reserve_gb) - _KREA_RESIDENT_WORKSPACE_GB)
+    return max(0, min(int(budget / per_block_gb), n_blocks))
+
+
 def _torch_device(hardware: dict[str, Any]) -> str:
     accelerator = str(hardware.get("accelerator") or "cpu")
     if accelerator in {"cuda", "rocm"}:
@@ -714,10 +755,27 @@ def _configure_execution(
     transformer_storage_gb: float,
     reserve_gb: float,
     mode_override: str | None = None,
+    resident_blocks_override: int | None = None,
 ) -> str:
-    """Configure the denoiser only; text encoder/VAE are separate phases."""
+    """Configure the denoiser only; text encoder/VAE are separate phases.
+
+    The identity executor records the resident-prefix count on
+    ``pipe.transformer._krea_resident_blocks`` so ``edit_transformer_forward_*``
+    knows which leading blocks are permanently on-device (never re-streamed).
+    """
     device = _torch_device(hardware)
     mode = str(mode_override or os.getenv("WEBBDUCK_KREA2_OFFLOAD", "auto")).strip().lower()
+
+    def _n_blocks() -> int:
+        blocks = getattr(pipe.transformer, "transformer_blocks", None)
+        return len(blocks) if blocks is not None else 0
+
+    def _set_resident(count: int) -> None:
+        try:
+            pipe.transformer._krea_resident_blocks = int(count)
+        except Exception:
+            pass
+
     if mode == "auto":
         mode = _auto_execution_mode(
             preserved_fp8_linears=int(load_info.get("preserved_fp8_linears") or 0),
@@ -728,10 +786,12 @@ def _configure_execution(
 
     if mode == "cpu":
         pipe.transformer.to("cpu")
+        _set_resident(0)
         return "cpu"
 
     if mode in {"resident-fp8", "resident", "gpu", "none"}:
         pipe.transformer.to(device)
+        _set_resident(_n_blocks())
         return "resident-fp8" if int(load_info.get("preserved_fp8_linears") or 0) else "resident"
 
     onload_device = torch.device(device)
@@ -740,11 +800,31 @@ def _configure_execution(
     # edit_transformer_forward_paired loads each transformer block once per
     # step and runs BOTH the CFG-positive and CFG-negative rows through it
     # before offloading, halving the CPU<->GPU streaming churn of the
-    # cond+uncond pair. Outer modules are pinned; blocks stay on CPU.
+    # cond+uncond pair. Outer modules are pinned; blocks live on CPU except a
+    # VRAM-budgeted resident prefix staged once here (weights never change, so
+    # they stay on device for the whole job instead of re-streaming per step).
     if mode in {"paired", "paired-block"}:
         pipe.transformer.to("cpu")
         _pin_krea_transformer_outer_modules(pipe.transformer, onload_device)
-        return "paired-block"
+        n_blocks = _n_blocks()
+        per_block_gb = (
+            _module_storage_gb(pipe.transformer.transformer_blocks[0])
+            if n_blocks
+            else 0.0
+        )
+        n_resident = _identity_resident_blocks(
+            free_vram_gb=float(hardware.get("free_vram_gb") or 0.0),
+            reserve_gb=reserve_gb,
+            per_block_gb=per_block_gb,
+            n_blocks=n_blocks,
+            override=resident_blocks_override,
+        )
+        for block in list(pipe.transformer.transformer_blocks)[:n_resident]:
+            block.to(onload_device)
+        _set_resident(n_resident)
+        if n_blocks and n_resident >= n_blocks:
+            return "paired-resident"
+        return "paired-block-" + str(n_resident)
 
     # Streamed (use_stream=True) block offload does not return GPU blocks after
     # the manual per-block forward — each block's weights stay resident and
@@ -782,6 +862,7 @@ def _configure_execution(
             )
             _pin_krea_transformer_outer_modules(pipe.transformer, onload_device)
             suffix = "stream" if use_stream else "sync"
+            _set_resident(0)
             return f"transformer-block-{suffix}-{blocks_per_group}"
         except Exception:
             pipe.transformer.enable_group_offload(
@@ -792,6 +873,7 @@ def _configure_execution(
                 record_stream=use_stream,
                 low_cpu_mem_usage=low_cpu_mem_usage,
             )
+            _set_resident(0)
             return "transformer-leaf-stream-fallback" if use_stream else "transformer-leaf-sync-fallback"
 
     if mode in {"group", "stream", "group-stream", "leaf"}:
@@ -803,14 +885,17 @@ def _configure_execution(
             record_stream=use_stream,
             low_cpu_mem_usage=False,
         )
+        _set_resident(0)
         return "transformer-leaf-stream" if use_stream else "transformer-leaf-sync"
 
     if mode in {"sequential", "seq"}:
         pipe.enable_sequential_cpu_offload(device=device)
+        _set_resident(0)
         return "sequential"
 
     if mode in {"model", "1", "true", "yes"}:
         pipe.enable_model_cpu_offload(device=device)
+        _set_resident(0)
         return "model"
 
     raise RuntimeError(f"Unknown WEBBDUCK_KREA2_OFFLOAD mode: {mode}")
@@ -823,6 +908,7 @@ def configure_krea_identity_transformer(
     transformer_storage_gb: float,
     reserve_gb: float,
     mode_override: str | None = None,
+    resident_blocks_override: int | None = None,
 ) -> str:
     """Reconfigure the Krea identity denoiser after a VRAM drain / OOM retry.
 
@@ -831,7 +917,8 @@ def configure_krea_identity_transformer(
     transformer to CPU, run GC + allocator cleanup, re-probe live hardware
     (desktop VRAM jitter differs between attempts), then select the execution
     profile — optionally forced to ``mode_override`` (e.g. ``"transformer-block"``)
-    for a strictly safer retry.
+    for a strictly safer retry. ``resident_blocks_override`` pins the paired-block
+    resident-prefix count (``0`` disables residency, e.g. after an OOM).
     """
     try:
         pipe.transformer.to("cpu")
@@ -851,6 +938,7 @@ def configure_krea_identity_transformer(
         transformer_storage_gb=transformer_storage_gb,
         reserve_gb=reserve_gb,
         mode_override=mode_override,
+        resident_blocks_override=resident_blocks_override,
     )
 
 
@@ -1389,6 +1477,7 @@ def _denoise_one_identity(
     total_denoise_steps: int,
     report: Any,
     paired_block: bool = False,
+    n_resident: int = 0,
 ) -> torch.Tensor:
     """Denoise one identity edit with ``[text | source(frame=1) | target(frame=0)]``.
 
@@ -1484,6 +1573,7 @@ def _denoise_one_identity(
                         timestep,
                         ref_boost=ref_boost,
                         device=device,
+                        n_resident=n_resident,
                     )
                     noise_pred = out_pos + float(guidance) * (out_pos - out_neg)
                     del out_pos, out_neg
@@ -1503,6 +1593,7 @@ def _denoise_one_identity(
                         timestep,
                         position_ids,
                         ref_boost=ref_boost,
+                        n_resident=n_resident,
                     )
                 else:
                     noise_pred = edit_transformer_forward(
@@ -1581,7 +1672,7 @@ def _run_identity(
     ref_boost = float(identity.get("ref_boost") if identity.get("ref_boost") is not None else 2.0)
     grounding_px = int(identity.get("grounding_px") if identity.get("grounding_px") is not None else 768)
     fit_mode = str(identity.get("fit_mode") or "fit")
-    max_megapixels = float(identity.get("max_megapixels") if identity.get("max_megapixels") is not None else 1.0)
+    max_megapixels = float(identity.get("max_megapixels") if identity.get("max_megapixels") is not None else 2.0)
     lora_scale = float(identity.get("lora_scale") if identity.get("lora_scale") is not None else 1.0)
     weight_path = str(identity["weight_path"])
     reference_path = resolve_reference_path(identity.get("reference_image") or "")
@@ -1705,6 +1796,7 @@ def _run_identity(
         reserve_gb=reserve_gb,
         mode_override="paired-block" if paired_block else None,
     )
+    n_resident = int(getattr(pipe.transformer, "_krea_resident_blocks", 0) or 0)
     initial_execution_mode = execution_mode
     fallback_reason: str | None = None
     timing["execution_setup_seconds"] = time.perf_counter() - setup_started
@@ -1717,6 +1809,7 @@ def _run_identity(
         print(
             "KREA2_DEBUG " + json.dumps({
                 "execution_mode": execution_mode,
+                "n_resident": n_resident,
                 "allocated_gb": round(float(torch.cuda.memory_allocated()) / 1e9, 3),
                 "reserved_gb": round(float(torch.cuda.memory_reserved()) / 1e9, 3),
                 "module_storage_gb": child_sizes,
@@ -1758,6 +1851,7 @@ def _run_identity(
                 total_denoise_steps=total_denoise_steps,
                 report=report,
                 paired_block=paired_block,
+                n_resident=n_resident,
             )
         except Exception as exc:
             if (
@@ -1765,34 +1859,70 @@ def _run_identity(
                 and _is_cuda_oom(exc)
                 and (execution_mode.startswith("resident") or execution_mode.startswith("paired"))
             ):
-                fallback_reason = "resident_oom" if execution_mode.startswith("resident") else "paired_oom"
-                report("VRAM changed; retrying Krea identity with safe offload", 0.57)
-                execution_mode = configure_krea_identity_transformer(
-                    pipe,
-                    load_info=load_info,
-                    transformer_storage_gb=transformer_storage_gb,
-                    reserve_gb=reserve_gb,
-                    mode_override="transformer-block",
-                )
-                paired_block = False
-                latent = _denoise_one_identity(
-                    pipe,
-                    prompt_embeds=prompt_embeds,
-                    prompt_mask=prompt_mask,
-                    negative_embeds=negative_embeds,
-                    negative_mask=negative_mask,
-                    src_packed=src_packed,
-                    width=width,
-                    height=height,
-                    steps=steps,
-                    guidance=guidance,
-                    seed=seed + index,
-                    device=device,
-                    ref_boost=ref_boost,
-                    index=index,
-                    total_denoise_steps=total_denoise_steps,
-                    report=report,
-                )
+                cur_resident = int(getattr(pipe.transformer, "_krea_resident_blocks", 0) or 0)
+                if execution_mode.startswith("paired") and cur_resident > 0:
+                    # VRAM shrank: drop the resident prefix, keep paired streaming.
+                    fallback_reason = "paired_resident_oom"
+                    report("VRAM changed; retrying Krea identity without resident blocks", 0.57)
+                    execution_mode = configure_krea_identity_transformer(
+                        pipe,
+                        load_info=load_info,
+                        transformer_storage_gb=transformer_storage_gb,
+                        reserve_gb=reserve_gb,
+                        mode_override="paired-block",
+                        resident_blocks_override=0,
+                    )
+                    n_resident = 0
+                    latent = _denoise_one_identity(
+                        pipe,
+                        prompt_embeds=prompt_embeds,
+                        prompt_mask=prompt_mask,
+                        negative_embeds=negative_embeds,
+                        negative_mask=negative_mask,
+                        src_packed=src_packed,
+                        width=width,
+                        height=height,
+                        steps=steps,
+                        guidance=guidance,
+                        seed=seed + index,
+                        device=device,
+                        ref_boost=ref_boost,
+                        index=index,
+                        total_denoise_steps=total_denoise_steps,
+                        report=report,
+                        paired_block=paired_block,
+                        n_resident=0,
+                    )
+                else:
+                    fallback_reason = "resident_oom" if execution_mode.startswith("resident") else "paired_oom"
+                    report("VRAM changed; retrying Krea identity with safe offload", 0.57)
+                    execution_mode = configure_krea_identity_transformer(
+                        pipe,
+                        load_info=load_info,
+                        transformer_storage_gb=transformer_storage_gb,
+                        reserve_gb=reserve_gb,
+                        mode_override="transformer-block",
+                    )
+                    paired_block = False
+                    n_resident = 0
+                    latent = _denoise_one_identity(
+                        pipe,
+                        prompt_embeds=prompt_embeds,
+                        prompt_mask=prompt_mask,
+                        negative_embeds=negative_embeds,
+                        negative_mask=negative_mask,
+                        src_packed=src_packed,
+                        width=width,
+                        height=height,
+                        steps=steps,
+                        guidance=guidance,
+                        seed=seed + index,
+                        device=device,
+                        ref_boost=ref_boost,
+                        index=index,
+                        total_denoise_steps=total_denoise_steps,
+                        report=report,
+                    )
             else:
                 raise
         latent_batches.append(latent)
@@ -1854,6 +1984,7 @@ def _run_identity(
             "provider": "krea2_identity_edit",
             "offload": execution_mode,
             "initial_offload": initial_execution_mode,
+            "resident_blocks": n_resident,
             "fallback_reason": fallback_reason,
             "text_encoder_mode": encode_mode,
             "vlm_processor": processor_source,

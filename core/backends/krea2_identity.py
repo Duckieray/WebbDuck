@@ -100,7 +100,7 @@ DEFAULT_REF_BOOST = 2.0       # v1.2 likeness dial: 1.0 = off, ~2 = balanced, st
 DEFAULT_GROUNDING_PX = 768    # LoRA trained dial 384-768; higher often still works
 DEFAULT_FIT_MODE = "fit"
 DEFAULT_LORA_SCALE = 1.0
-DEFAULT_MAX_MEGAPIXELS = 1.0  # edit path prepends the source latent (~2x image tokens)
+DEFAULT_MAX_MEGAPIXELS = 2.0  # edit path prepends source latent; portrait 1152x1728 is ~2.0MP
 
 _REF_BOOST_RANGE = (0.0, 10.0)
 _GROUNDING_PX_RANGE = (512, 1536)
@@ -903,6 +903,7 @@ def edit_transformer_forward_nohooks(
     position_ids: Any,
     *,
     ref_boost: float = 1.0,
+    n_resident: int = 0,
 ) -> Any:
     """Single identity forward without accelerate group-offload hooks.
 
@@ -911,7 +912,9 @@ def edit_transformer_forward_nohooks(
     execution mode installs no hooks (outer modules pinned, transformer on
     CPU), so a guidance-free identity step needs this explicit streamer: each
     block is moved to ``latents.device`` for its forward and back to CPU
-    afterwards. Mirrors ``edit_transformer_forward`` math exactly.
+    afterwards. Mirrors ``edit_transformer_forward`` math exactly. The first
+    ``n_resident`` blocks are expected to already live on ``latents.device``
+    (staged once by the executor) and are neither re-loaded nor offloaded.
     """
     import torch
     import torch.nn.functional as F
@@ -942,10 +945,12 @@ def edit_transformer_forward_nohooks(
     )
 
     with _identity_sdpa_ctx():
-        for block in m.transformer_blocks:
-            block = block.to(device)
+        for idx, block in enumerate(m.transformer_blocks):
+            if idx >= n_resident:
+                block = block.to(device)
             hidden = block(hidden, temb_mod, image_rotary_emb, attention_mask)
-            block = block.to("cpu")
+            if idx >= n_resident:
+                block = block.to("cpu")
 
     text_seq_len = enc.shape[1]
     tgt_len = latents.shape[1]
@@ -969,6 +974,7 @@ def edit_transformer_forward_paired(
     *,
     ref_boost: float = 1.0,
     device: Any = None,
+    n_resident: int = 0,
 ) -> tuple[Any, Any]:
     """Run positive + negative identity edits sharing one block stream per step.
 
@@ -979,6 +985,11 @@ def edit_transformer_forward_paired(
     the negative row, then offloaded — halving the transfer/Python-dispatch
     overhead while running both rows as fully independent forwards (identical
     math to two ``edit_transformer_forward`` calls, no attention coupling).
+
+    ``n_resident`` reports how many leading blocks the executor staged on
+    ``device`` once at configure time (weights are constant across steps, so
+    keeping them resident is pure transfer savings). Those blocks are never
+    offloaded here; only the tail is streamed per step.
 
     Returns ``(out_pos, out_neg)`` velocity predictions, both target-only.
     """
@@ -1034,11 +1045,13 @@ def edit_transformer_forward_paired(
         kernel_ctx = __import__("contextlib").nullcontext()
 
     with kernel_ctx:
-        for block in m.transformer_blocks:
-            block = block.to(device)
+        for idx, block in enumerate(m.transformer_blocks):
+            if idx >= n_resident:
+                block = block.to(device)
             hidden_pos = block(hidden_pos, temb_mod, rotary_pos, bias_pos)
             hidden_neg = block(hidden_neg, temb_mod, rotary_neg, bias_neg)
-            block = block.to("cpu")
+            if idx >= n_resident:
+                block = block.to("cpu")
 
     tgt_len = lats.shape[1]
     out_pos = m.final_layer(

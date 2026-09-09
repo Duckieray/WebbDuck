@@ -16,6 +16,7 @@ import pytest
 
 from core.backends import krea2 as krea2_backend
 from core.backends.krea2_identity import KreaIdentityError
+from core.backends.krea2_worker import _identity_resident_blocks
 
 
 # --------------------------------------------------------------------------------------
@@ -66,7 +67,31 @@ def test_identity_payload_env_override(tmp_path, monkeypatch):
     assert payload["grounding_px"] == 768
     assert payload["fit_mode"] == "fit"
     assert payload["lora_scale"] == 1.0
-    assert payload["max_megapixels"] == 1.0
+    assert payload["max_megapixels"] == 2.0
+
+
+# --------------------------------------------------------------------------------------
+# Resident-block VRAM budgeting
+# --------------------------------------------------------------------------------------
+
+def test_identity_resident_blocks_thresholds():
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28) == 20
+    assert _identity_resident_blocks(12.2, 3.04, 0.419, 28) == 18
+    assert _identity_resident_blocks(4.0, 2.0, 0.419, 28) == 1
+    assert _identity_resident_blocks(60.0, 2.0, 0.419, 28) == 28
+    assert _identity_resident_blocks(12.2, 2.0, 0.0, 28) == 0
+
+
+def test_identity_resident_blocks_override(monkeypatch):
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28, override=5) == 5
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28, override=0) == 0
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28, override=1000) == 28
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS", "7")
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28) == 7
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS", "0")
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28) == 0
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS", "bogus")
+    assert _identity_resident_blocks(12.2, 2.0, 0.419, 28) == 20
 
 
 def test_identity_payload_malformed_fails_fast(tmp_path):

@@ -113,7 +113,7 @@ def test_snapshot_defaults(tmp_path):
     assert snap.grounding_px == 768
     assert snap.fit_mode == "fit"
     assert snap.lora_scale == 1.0
-    assert snap.max_megapixels == 1.0
+    assert snap.max_megapixels == 2.0
     assert snap.reference_image == str(ref.resolve())
     assert not snap.warnings
 
@@ -364,8 +364,8 @@ def test_fit_mode_contains_source_in_request_box():
 def test_fit_uses_request_ar():
     src = (512, 512)
     h, w = edit_target_size(src, (1024, 1024))
-    # 1024x1024 is 1.048MP > the 1MP cap, same as the upstream `_target_size`.
-    assert (h, w) == (992, 992)
+    # 1024x1024 is < the 2MP default cap, so the request passes through.
+    assert (h, w) == (1024, 1024)
 
 
 def test_fit_defaults_to_source_ar():
@@ -376,13 +376,28 @@ def test_fit_defaults_to_source_ar():
 
 def test_full_mode_uses_requested():
     h, w = edit_target_size((512, 512), (1024, 1024), fit_mode="full")
-    assert (h, w) == (992, 992)
+    assert (h, w) == (1024, 1024)
 
 
 def test_caps_at_max_megapixels():
-    # 2048x2048 source without a cap would blow past 1MP.
-    h, w = edit_target_size((2048, 2048), max_megapixels=1.0)
+    # 4000x4000 source must cap at the explicit 1MP limit.
+    h, w = edit_target_size((4000, 4000), max_megapixels=1.0)
     assert (w * h) / 1e6 <= 1.0
+
+
+def test_default_cap_allows_portrait_1152x1728():
+    # The user-facing default is 2MP, so portrait requests are not silently
+    # downscaled to ~1MP. Source AR 4865x7297 = 0.667 matches 1152x1728; for
+    # AR-mismatched boxes fit_mode still honors the source AR but no longer
+    # shoves the result under a 1MP cap.
+    h, w = edit_target_size((4865, 7297), (1152, 1728))
+    assert (h, w) == (1728, 1152)
+    h2, w2 = edit_target_size((4865, 7297), (832, 1216))
+    assert max(h2, w2) == 1216
+    assert (w2 * h2) / 1e6 >= 0.95
+
+    h3, w3 = edit_target_size((4865, 7297), (1152, 1728), max_megapixels=1.0)
+    assert (w3 * h3) / 1e6 <= 1.0
 
 
 def test_rejects_invalid_fit_mode():
@@ -778,6 +793,60 @@ def test_nohooks_forward_maskless_cpu_path_finite():
         for block in m.transformer_blocks
         for p in block.parameters()
     )
+
+
+def _transformer_with_recording_blocks(num_blocks: int) -> tuple[_FakeKreaTransformer, list[_RecordingBlock]]:
+    m = _FakeKreaTransformer(num_blocks=num_blocks)
+    recorders = [_RecordingBlock(m.hid) for _ in range(num_blocks)]
+    m.transformer_blocks = torch.nn.ModuleList(recorders)
+    return m, recorders
+
+
+def test_paired_forward_resident_prefix_keeps_blocks():
+    m, rec = _transformer_with_recording_blocks(num_blocks=4)
+    row = _build_toy_inputs(m.hid, text_pos=9, text_neg=6, src_tokens=6, tgt_tokens=6)
+
+    out_resident, _ = edit_transformer_forward_paired(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"], row["position_ids_pos"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"], row["position_ids_neg"],
+        row["timestep"], ref_boost=1.5, device="cpu", n_resident=2,
+    )
+    # Resident prefix blocks (0,1) are never offloaded; the tail (2,3) streams.
+    assert rec[0].moves == []
+    assert rec[1].moves == []
+    assert len(rec[2].moves) == 2
+    assert len(rec[3].moves) == 2
+
+    # Identical math to the streaming-only form (n_resident=0).
+    out_streamed, _ = edit_transformer_forward_paired(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"], row["position_ids_pos"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"], row["position_ids_neg"],
+        row["timestep"], ref_boost=1.5, device="cpu", n_resident=0,
+    )
+    assert torch.allclose(out_resident, out_streamed, atol=1e-5)
+
+
+def test_nohooks_forward_resident_prefix_keeps_blocks():
+    m, rec = _transformer_with_recording_blocks(num_blocks=4)
+    row = _build_toy_inputs(m.hid, text_pos=9, text_neg=6, src_tokens=6, tgt_tokens=6)
+
+    out_resident = edit_transformer_forward_nohooks(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.5, n_resident=2,
+    )
+    assert rec[0].moves == []
+    assert rec[1].moves == []
+    assert len(rec[2].moves) == 2
+
+    out_streamed = edit_transformer_forward_nohooks(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.5, n_resident=0,
+    )
+    assert torch.allclose(out_resident, out_streamed, atol=1e-5)
 
 
 def test_perf_overrides_noop_without_env(monkeypatch):
