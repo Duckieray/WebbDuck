@@ -14,22 +14,79 @@ from core.backends import krea2_identity as _identity
 _identity.DEFAULT_REF_BOOST = 4.0
 
 
-def _host_total_vram_gb() -> float | None:
+def _host_vram_gb() -> tuple[float | None, float | None]:
+    """Return (total, free) CUDA VRAM in GiB when the host can query it."""
     try:
         import torch
 
         if torch.cuda.is_available():
-            return float(torch.cuda.get_device_properties(0).total_memory) / (1024.0**3)
+            total = float(torch.cuda.get_device_properties(0).total_memory) / (1024.0**3)
+            free: float | None = None
+            try:
+                free_bytes, _total_bytes = torch.cuda.mem_get_info()
+                free = float(free_bytes) / (1024.0**3)
+            except Exception:
+                pass
+            return total, free
     except Exception:
         pass
-    return None
+    return None, None
+
+
+def _host_total_vram_gb() -> float | None:
+    return _host_vram_gb()[0]
+
+
+def _recommended_identity_token_budget(
+    total_vram_gb: float | None,
+    free_vram_gb: float | None,
+) -> int | None:
+    """Bias Krea identity toward enough native pixels for coherent faces.
+
+    The old halved text2img budget was intentionally ultra-conservative and can
+    collapse a 16 GB identity render to roughly 0.4-0.5 MP even when the card has
+    ample live headroom. Real 5070 Ti testing already showed 2688 target tokens
+    completes without OOM, so use that tier on healthy ~16 GB cards, then fall
+    back to 2048/1792 as live VRAM pressure increases.
+
+    Explicit request-level ``identity.token_budget`` and the
+    ``WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`` env override still win; this helper
+    is only the automatic default.
+    """
+    if total_vram_gb is None or total_vram_gb <= 0:
+        return None
+
+    if free_vram_gb is None or free_vram_gb <= 0:
+        # Without a live-free reading, avoid assuming a desktop 16 GB card is
+        # empty enough for the aggressive tier.
+        if total_vram_gb >= 15.0:
+            return 2048
+        return 1792 if total_vram_gb < 12.0 else 2048
+
+    occupied_gb = max(0.0, total_vram_gb - free_vram_gb)
+    free_fraction = free_vram_gb / total_vram_gb
+
+    if total_vram_gb >= 15.0:
+        # Mirrors the existing adaptive planner's notion of healthy desktop
+        # headroom rather than relying on total card capacity alone.
+        if free_vram_gb >= 11.5 and occupied_gb < 3.0 and free_fraction >= 0.74:
+            return 2688
+        if free_vram_gb >= 9.5 and occupied_gb < 5.5 and free_fraction >= 0.60:
+            return 2048
+        return 1792
+
+    if total_vram_gb >= 12.0:
+        return 2048 if free_vram_gb >= 8.0 else 1792
+
+    return 1792
 
 
 def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any] | None:
     adapter_cfg = settings.get("identity_adapter")
+    total_vram_gb, free_vram_gb = _host_vram_gb()
     snapshot = _identity.identity_settings_snapshot(
         adapter_cfg,
-        total_vram_gb=_host_total_vram_gb(),
+        total_vram_gb=total_vram_gb,
     )
     if snapshot is None:
         return None
@@ -48,6 +105,17 @@ def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any]
         "1", "true", "yes", "on"
     }:
         snapshot.lora_rank = "full"
+
+    # Request-level token_budget is already in the snapshot. Preserve an
+    # explicit environment override too; otherwise choose a face-fidelity tier
+    # from live host VRAM so healthy 16 GB cards no longer default to the
+    # ultra-conservative ~1792-token envelope.
+    env_budget = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET") or "").strip().lower()
+    if snapshot.token_budget is None and env_budget in {"", "auto", "-1"}:
+        snapshot.token_budget = _recommended_identity_token_budget(
+            total_vram_gb,
+            free_vram_gb,
+        )
 
     token, _source = _impl._huggingface_token()
 
@@ -86,7 +154,9 @@ def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any]
 
 
 def _identity_recipe_defaults(variant: str) -> tuple[int, float]:
-    return (10, 0.0) if str(variant).lower() == "turbo" else (20, 3.0)
+    # Krea2Edit's Turbo range is roughly 8-12 steps. WebbDuck now biases the
+    # default to the face-detail end of that range rather than the speed end.
+    return (12, 0.0) if str(variant).lower() == "turbo" else (20, 3.0)
 
 
 def _identity_enabled(settings: dict[str, Any]) -> bool:
@@ -109,10 +179,16 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
         current_steps = settings.get("steps")
         default_steps = defaults.get("steps")
         try:
+            current_steps_int = int(current_steps) if current_steps is not None else None
             default_like_steps = (
                 current_steps is None
                 or default_steps is not None
-                and int(current_steps) == int(default_steps)
+                and current_steps_int == int(default_steps)
+                # 10 was the previous WebbDuck Krea2Edit Turbo auto-default.
+                # Treat it as legacy-default-looking so existing sessions move
+                # to the new 12-step face-fidelity baseline automatically.
+                or variant == "turbo"
+                and current_steps_int == 10
             )
         except (TypeError, ValueError):
             default_like_steps = True
@@ -133,7 +209,7 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
             settings["cfg"] = recommended_cfg
 
         settings["krea_identity_recipe"] = {
-            "source": "krea2edit-v1.2-baseline",
+            "source": "krea2edit-v1.2-face-fidelity",
             "variant": variant,
             "steps": int(settings.get("steps") or recommended_steps),
             "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else recommended_cfg),
@@ -146,6 +222,8 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
 
 _impl._identity_worker_payload = _quality_identity_worker_payload
 _impl._identity_recipe_defaults = _identity_recipe_defaults
+_impl._recommended_identity_token_budget = _recommended_identity_token_budget
+_impl._host_vram_gb = _host_vram_gb
 _impl.Krea2DiffusersBackend.generate = _quality_generate
 
 # Keep monkeypatch paths and function globals coherent for the existing test
