@@ -198,6 +198,18 @@ Low VRAM (~6 GB) is by design, not headroom.
   (~7320 combined+text). All tiers completed without NaN/gray-wash/fallback but
   past ~2048 the combined sequence exceeds the LoRA's training envelope, so
   visual quality must be eyeballed before promoting a tier.
+- **Artifact upscale to requested size:** the worker saves at the VRAM-capped
+  effective resolution (e.g. 528x784 for a 832x1216 portrait request); without
+  post-scaling that reads as a compressed/low-detail render. When a request is
+  adapted, `krea2.py` (server process, not the isolated runtime) applies
+  `_maybe_upscale_identity_artifact` to each returned image — Real-ESRGAN x2/x4
+  (smallest factor whose upscale clears the target, then LANCZOS to the exact
+  `requested_width`/`requested_height`), plain-LANCZOS fallback if the upscaler
+  weights/libs are missing — and records the note in `settings["krea_upscale"]`
+  plus `performance_timing.krea_upscale_seconds` (measured ~2.1 s on the 5070
+  Ti). Original dims come from `settings["requested_*"]` (set by
+  `_apply_effective_request_settings`); the worker's own `request` holds only
+  the adapted dims. Disable with `WEBBDUCK_KREA2_IDENTITY_UPSCALE=0`.
 
 ## Captioning And Plugins
 

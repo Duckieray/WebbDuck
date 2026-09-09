@@ -1637,6 +1637,76 @@ def _is_cuda_oom(exc: BaseException) -> bool:
     return isinstance(exc, oom_type) or "out of memory" in str(exc).lower()
 
 
+def _infer_upscale_step(effective: tuple[int, int], requested: tuple[int, int]) -> int:
+    """Pick the smallest Real-ESRGAN factor whose upscale clears the target.
+
+    The identity target grid is VRAM-capped far below the requested size, so the
+    decoded artifact needs magnification before resizing. Prefer x2 (gentler on
+    faces) and only step to x4 when even 2x leaves the short edge short.
+    """
+    eff_w, eff_h = effective
+    req_w, req_h = requested
+    if eff_w <= 0 or eff_h <= 0 or req_w <= 0 or req_h <= 0:
+        return 2
+    if min(eff_w, eff_h) * 2 >= min(req_w, req_h):
+        return 2
+    return 4
+
+
+def _maybe_upscale_identity_artifact(
+    image: Any,
+    *,
+    requested: tuple[int, int] | None,
+    effective: tuple[int, int] | None,
+) -> tuple[Any, dict | None]:
+    """Bring the identity decode back up to the requested size before saving.
+
+    Identity edits generate at the (VRAM-capped) effective target grid, often
+    ~0.4-0.5 MP for portrait requests; leaving that as the artifact reads as
+    compressed/low-detail at the requested size. This scales the decode with
+    Real-ESRGAN (best-effort; plain LANCZOS fallback) to the exact requested
+    dimensions. Disable with ``WEBBDUCK_KREA2_IDENTITY_UPSCALE=0``.
+
+    Returns ``(image, note)``; ``note`` is a small runtime dict describing what
+    happened (or ``None`` when no upscale was applied).
+    """
+    if effective is None or requested is None:
+        return image, None
+    eff_w, eff_h = effective
+    req_w, req_h = requested
+    if eff_w <= 0 or eff_h <= 0 or req_w <= 0 or req_h <= 0:
+        return image, None
+    if eff_w == req_w and eff_h == req_h:
+        return image, None
+    toggle = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE") or "").strip()
+    if toggle and toggle.isdigit() and int(toggle) == 0:
+        return image, None
+
+    note: dict = {
+        "from": [eff_w, eff_h],
+        "to": [req_w, req_h],
+    }
+    scale = _infer_upscale_step((eff_w, eff_h), (req_w, req_h))
+    try:
+        from models.upscaler import get_upsampler
+
+        upsampler = get_upsampler(scale)
+        img_rgb = np.asarray(image.convert("RGB"))
+        img_bgr = img_rgb[:, :, ::-1]
+        with torch.inference_mode():
+            upscaled_bgr, _ = upsampler.enhance(img_bgr, outscale=scale)
+        if isinstance(upscaled_bgr, np.ndarray):
+            image = Image.fromarray(upscaled_bgr[:, :, ::-1])
+        note["upscaler"] = f"realesrgan-x{scale}"
+    except Exception as exc:
+        note["upscaler"] = "lanczos"
+        note["upscale_error"] = f"{type(exc).__name__}: {exc}"
+
+    if image.size != (req_w, req_h):
+        image = image.resize((req_w, req_h), Image.LANCZOS)
+    return image, note
+
+
 def _run_identity(
     request: dict,
     output_dir: Path,

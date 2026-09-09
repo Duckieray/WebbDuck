@@ -57,6 +57,7 @@ python run.py --hf-cache /path/to/huggingface-cache
 - `WEBBDUCK_DTYPE`: `float16`, `bfloat16`, or `float32`.
 - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS`: bounded wait for shared GPU lease.
 - `WEBBDUCK_KREA2_IDENTITY_WEIGHT`: local Krea `krea2-identity-edit` LoRA safetensors override (defaults to auto-download by LoRA rank).
+- `WEBBDUCK_KREA2_IDENTITY_UPSCALE=0`: disable the Real-ESRGAN upscale-back that brings identity edits to the requested size.
 - `WEBBDUCK_CATALOG_POLL_SECONDS`: asset refresh interval.
 
 See `docs/DEVELOPMENT.md` and `AGENTS.md` for the full list and when to use each variable.

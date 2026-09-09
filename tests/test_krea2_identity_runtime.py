@@ -416,3 +416,101 @@ def test_preset_save_persists_krea_keys(tmp_path, monkeypatch):
     assert cfg["grounding_px"] == 896
     assert cfg["lora_scale"] == 0.9  # explicit wins
     assert cfg["lora_rank"] == "r128"
+
+
+# --------------------------------------------------------------------------------------
+# Identity artifact upscale (effective res -> requested size)
+# --------------------------------------------------------------------------------------
+
+def test_identity_artifact_infer_upscale_step():
+    from core.backends.krea2_worker import _infer_upscale_step
+
+    assert _infer_upscale_step((528, 784), (832, 1216)) == 2
+    assert _infer_upscale_step((512, 768), (1024, 1536)) == 2
+    assert _infer_upscale_step((256, 384), (832, 1216)) == 4
+    assert _infer_upscale_step((0, 0), (832, 1216)) == 2
+
+
+def test_identity_artifact_no_upscale_when_native(monkeypatch):
+    from PIL import Image
+
+    from core.backends.krea2_worker import _maybe_upscale_identity_artifact
+
+    monkeypatch.delenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE", raising=False)
+    img = Image.new("RGB", (832, 1216), (10, 20, 30))
+    out, note = _maybe_upscale_identity_artifact(
+        img, requested=(832, 1216), effective=(832, 1216)
+    )
+    assert note is None
+    assert out is img
+
+
+def test_identity_artifact_upscale_disabled_env(monkeypatch):
+    from PIL import Image
+
+    from core.backends.krea2_worker import _maybe_upscale_identity_artifact
+
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE", "0")
+    img = Image.new("RGB", (528, 784), (10, 20, 30))
+    out, note = _maybe_upscale_identity_artifact(
+        img, requested=(832, 1216), effective=(528, 784)
+    )
+    assert note is None
+    assert out is img
+
+
+def test_identity_artifact_upscale_realesrgan_path(monkeypatch):
+    import sys
+    import types
+
+    import numpy as np
+    from PIL import Image
+
+    from core.backends.krea2_worker import _maybe_upscale_identity_artifact
+
+    class FakeUpsampler:
+        def enhance(self, bgr, outscale=2):
+            h, w = bgr.shape[:2]
+            return (
+                np.repeat(bgr, outscale, axis=0).repeat(outscale, axis=1),
+                None,
+            )
+
+    fake = types.ModuleType("models.upscaler")
+    fake.get_upsampler = lambda scale: FakeUpsampler()
+    monkeypatch.setitem(sys.modules, "models.upscaler", fake)
+    monkeypatch.delenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE", raising=False)
+
+    img = Image.new("RGB", (528, 784), (120, 30, 200))
+    out, note = _maybe_upscale_identity_artifact(
+        img, requested=(832, 1216), effective=(528, 784)
+    )
+    assert note["upscaler"] == "realesrgan-x2"
+    assert note["from"] == [528, 784]
+    assert note["to"] == [832, 1216]
+    assert out.size == (832, 1216)
+
+
+def test_identity_artifact_upscale_lanczos_fallback(monkeypatch):
+    import sys
+    import types
+
+    from PIL import Image
+
+    from core.backends.krea2_worker import _maybe_upscale_identity_artifact
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("no upscaler here")
+
+    fake = types.ModuleType("models.upscaler")
+    fake.get_upsampler = boom
+    monkeypatch.setitem(sys.modules, "models.upscaler", fake)
+    monkeypatch.delenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE", raising=False)
+
+    img = Image.new("RGB", (528, 784), (120, 30, 200))
+    out, note = _maybe_upscale_identity_artifact(
+        img, requested=(832, 1216), effective=(528, 784)
+    )
+    assert note["upscaler"] == "lanczos"
+    assert "RuntimeError" in note["upscale_error"]
+    assert out.size == (832, 1216)

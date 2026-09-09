@@ -162,6 +162,32 @@ outputs should be eyeballed (all tiers above completed without NaN/gray-wash
 signals, but sequence-length extrapolation can degrade attention/identity
 quality before stats show it).
 
+## Artifact upscale (effective res → requested size)
+
+The effective output above is what the worker **saves** — a 832x1216 portrait
+request at the default budget lands as a 528x784 PNG. Viewed at the requested
+size that reads as compressed/low-detail. To fix that, the server-side
+(webbduck env, not the isolated runtime) applies `_maybe_upscale_identity_artifact`
+to every returned identity image once the worker is done:
+
+- Target is the true requested size (`settings["requested_*"]`, preserved by the
+  adaptive plan) — never the adapted dims.
+- Real-ESRGAN at the smallest factor whose upscale clears the target short edge
+  (x2 for typical portrait down-steps, x4 for deeper ones), then LANCZOS to the
+  exact requested dimensions. Plain LANCZOS fallback if the weights/libs are
+  missing (weights resolve from `WEBBDUCK_WEIGHTS_DIR` → `WEBBDUCK_MODELS_DIR/weights` →
+  repo `weights/`).
+- Recorded in meta as `krea_upscale` (`{from, to, upscaler, upscale_error?}`) and
+  `performance_timing.krea_upscale_seconds` (~2.1 s for 528x784 → 832x1216 on the
+  5070 Ti; runs with the worker's GPU lease still held, so no extra lease).
+- Disable with `WEBBDUCK_KREA2_IDENTITY_UPSCALE=0` (set in the server env, not the
+  isolated runtime).
+
+This is post-hoc magnification, not recovery: the native generation is still the
+~0.4-0.5 MP effective grid, and upscaling adds plausible texture rather than true
+missing detail. For true native sharpness at 832x1216+ the token budget must be
+raised (see tiers above) or the GPU's VRAM increased.
+
 ## Measurements
 
 Each Krea generation records backend timings in generation metadata:

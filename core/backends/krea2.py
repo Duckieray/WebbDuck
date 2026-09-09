@@ -460,12 +460,43 @@ class Krea2DiffusersBackend(GenerationBackend):
                 settings["krea_runtime"] = runtime
                 _apply_effective_request_settings(settings, runtime)
 
+            req_w = int(settings["requested_width"]) if settings.get("requested_width") else None
+            req_h = int(settings["requested_height"]) if settings.get("requested_height") else None
+            if req_w is None or req_h is None:
+                req_w = int(result.get("width") or settings.get("width") or 0)
+                req_h = int(result.get("height") or settings.get("height") or 0)
+            eff_w = eff_h = 0
+            if isinstance(runtime, dict):
+                ident = runtime.get("identity")
+                if isinstance(ident, dict):
+                    eff_w = int(ident.get("effective_width") or 0)
+                    eff_h = int(ident.get("effective_height") or 0)
+            upscale_note_merged: dict = {}
+            upscale_started = time.perf_counter()
+
+            from core.backends.krea2_worker import _maybe_upscale_identity_artifact
+
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:
                 with Image.open(raw_path) as image:
-                    images.append(image.convert("RGB").copy())
+                    image = image.convert("RGB").copy()
+                image, upscale_note = _maybe_upscale_identity_artifact(
+                    image,
+                    requested=(req_w, req_h),
+                    effective=(eff_w, eff_h),
+                )
+                if upscale_note is not None:
+                    upscale_note_merged = upscale_note
+                images.append(image)
             if not images:
                 raise RuntimeError("Krea 2 runtime returned no images")
+            if upscale_note_merged:
+                settings["krea_upscale"] = upscale_note_merged
+                perf = settings.setdefault("performance_timing", {})
+                if isinstance(perf, dict):
+                    perf["krea_upscale_seconds"] = round(
+                        max(0.0, time.perf_counter() - upscale_started), 6
+                    )
             return images, int(result.get("seed", seed))
 
 
