@@ -105,7 +105,7 @@ def test_snapshot_defaults(tmp_path):
     ref = _make_ref(tmp_path)
     snap = identity_settings_snapshot({"type": PROVIDER_ID, "reference_images": [str(ref)]})
     assert snap.reference_count_used == 1
-    assert snap.ref_boost == 4.0
+    assert snap.ref_boost == 2.0
     assert snap.grounding_px == 768
     assert snap.fit_mode == "fit"
     assert snap.lora_scale == 1.0
@@ -199,6 +199,18 @@ def test_resolve_absolute_path(tmp_path):
     ref = tmp_path / "face.png"
     ref.write_bytes(b"x")
     assert resolve_reference_path(str(ref)) == ref.resolve()
+
+
+def test_resolve_absolute_path_with_outputs_segment(tmp_path):
+    # An already-resolved filesystem path may legitimately contain an
+    # "outputs/" segment (e.g. <BASE>/outputs/WebbDuck/refs/face.png when the
+    # output root is itself named after the project). Only the web-path
+    # prefix (/outputs/ or outputs/) may trigger re-prefixing, otherwise the
+    # path is double-mounted and resolve fails.
+    ref = tmp_path / "outputs" / "WebbDuck" / "refs" / "face.png"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"x")
+    assert resolve_reference_path(str(ref), output_base=tmp_path) == ref.resolve()
 
 
 def test_resolve_missing_raises(tmp_path):

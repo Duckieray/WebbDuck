@@ -233,8 +233,8 @@ def _native_forward(self: Any, x: torch.Tensor) -> torch.Tensor:
                 self.lora_rank, self.lora_alpha, float(getattr(self, "lora_scale", 1.0))
             )
             if coef != 0.0:
-                down = F.linear(x, self.lora_a.to(dtype=x.dtype))
-                up = F.linear(down, self.lora_b.to(dtype=x.dtype))
+                down = F.linear(x, self.lora_a.to(device=x.device, dtype=x.dtype))
+                up = F.linear(down, self.lora_b.to(device=x.device, dtype=x.dtype))
                 output = output + coef * up
 
         _NATIVE_CALLS += 1

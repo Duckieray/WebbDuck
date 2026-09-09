@@ -94,16 +94,16 @@ function setScaleSliderDefaults(provider) {
     };
     const scale = byId('ip-adapter-scale');
     const lora = byId('ip-adapter-lora-scale');
+    // A single 0..1 "Identity Strength" control for every provider. Under the
+    // hood: SDXL/FLUX use adapter_scale = slider; Krea maps slider -> ref_boost
+    // as 1 + 10*slider (0.1 == the balanced default of 2.0, 1.0 == max 10).
+    applyDefaults(scale, byId('ip-adapter-scale-value'), '0', '1', '0.05', provider === 'krea2_identity_edit' ? 0.1 : 1.0);
+    applyDefaults(lora, byId('ip-adapter-lora-scale-value'), '0', '1', '0.05', provider === 'krea2_identity_edit' ? 1.0 : 0.60);
+    setText('label[for="ip-adapter-scale"]', 'Identity Strength');
+    setText('label[for="ip-adapter-lora-scale"]', 'Identity LoRA Scale');
     if (provider === 'krea2_identity_edit') {
-        applyDefaults(scale, byId('ip-adapter-scale-value'), '0', '10', '0.5', 4.0);
-        applyDefaults(lora, byId('ip-adapter-lora-scale-value'), '0', '1.5', '0.05', 1.0);
-        setText('label[for="ip-adapter-scale"]', 'Identity Strength (ref_boost)');
-        setText('label[for="ip-adapter-lora-scale"]', 'Identity LoRA Scale');
-    } else {
-        applyDefaults(scale, byId('ip-adapter-scale-value'), '0', '1.5', '0.05', 1.0);
-        applyDefaults(lora, byId('ip-adapter-lora-scale-value'), '0', '1.0', '0.05', 0.60);
-        setText('label[for="ip-adapter-scale"]', 'Adapter Scale');
-        setText('label[for="ip-adapter-lora-scale"]', 'LoRA Scale');
+        const span = byId('ip-adapter-scale-value');
+        if (span) span.textContent = Number(parseFloat(byId('ip-adapter-scale')?.value) || 0.1).toFixed(2);
     }
 }
 
@@ -133,7 +133,7 @@ function syncProviderForSelectedModel() {
         setKreaOnlyControlsVisible(true);
         setScaleSliderDefaults('krea2_identity_edit');
         if (hint) {
-            hint.textContent = 'Krea Identity Edit uses a single anchor reference and the krea2-identity-edit LoRA for identity. Ref count is limited to 1, so the last image you select becomes the anchor.';
+            hint.textContent = 'Krea Identity Edit uses a single anchor reference and the krea2-identity-edit LoRA for identity. Identity Strength is a 0..1 control mapped to the ref_boost likeness dial (0.1 = balanced default, lower = weaker likeness, higher = stronger but can lock the reference composition). Ref count is limited to 1, so the last image you select becomes the anchor.';
         }
     } else {
         if (select.value === 'flux2_native' || select.value === 'krea2_identity_edit') select.value = 'faceid_sdxl';

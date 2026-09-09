@@ -86,7 +86,7 @@ Click an image to inspect it full size.
   - **Anchor boost:** duplicates your strongest (first) reference so it dominates identity conditioning.
   - **Close-up face-focus framing:** adds a portrait-framing instruction so generated scenes keep the face large, centered, and sharp.
 - Load a saved persona from the dropdown; its reference order and tuning options restore automatically and can be overridden per request.
-- **Krea Identity** (Krea 2 checkpoints): the same persona photos drive the Krea dual-conditioning recipe — a single anchor reference plus the `krea2-identity-edit` LoRA. When a Krea model is selected the provider switches automatically, the strength slider becomes **Identity Strength (ref_boost)**, and Grounding Res + Identity LoRA Rank appear. Reference count is capped at one, so the last image you select becomes the anchor.
+- **Krea Identity** (Krea 2 checkpoints): the same persona photos drive the Krea dual-conditioning recipe — a single anchor reference plus the `krea2-identity-edit` LoRA. When a Krea model is selected the provider switches automatically, the same **Identity Strength** slider controls likeness (mapped to the `ref_boost` dial, where 0.1 is the balanced default), and Grounding Res + Identity LoRA Rank appear. Reference count is capped at one, so the last image you select becomes the anchor.
 
 ## Image Editing Workflows
 

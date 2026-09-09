@@ -1272,7 +1272,8 @@ function collectFormData() {
                 payload.flux2_anchor_dup = Boolean(byId('ip-adapter-anchor-dup')?.checked);
                 payload.face_focus = Boolean(byId('ip-adapter-face-focus')?.checked);
             } else if (adapterType === 'krea2_identity_edit') {
-                payload.ref_boost = parseFloat(byId('ip-adapter-scale')?.value || 4.0);
+                const strength = parseFloat(byId('ip-adapter-scale')?.value || 0.1);
+                payload.ref_boost = Math.min(10, +(1 + 10 * strength).toFixed(2));
                 payload.grounding_px = parseInt(byId('ip-adapter-grounding-px')?.value || '768', 10);
                 payload.fit_mode = 'fit';
                 payload.lora_scale = parseFloat(byId('ip-adapter-lora-scale')?.value || 1.0);
@@ -2987,9 +2988,20 @@ function setupIpAdapterManager() {
         _ipAdapterRefs = Array.isArray(preset.refs) ? [...preset.refs] : [];
         syncRefsState();
         renderGrid();
-        if (preset.adapter_scale != null) {
-            byId('ip-adapter-scale').value = preset.adapter_scale;
-            byId('ip-adapter-scale-value').textContent = preset.adapter_scale;
+        if (preset.type) {
+            byId('ip-adapter-type').value = preset.type;
+        }
+        if (preset.type === 'krea2_identity_edit') {
+            // Slider holds ref_boost on a 0..1 Identity Strength scale: 0 -> 1.0, 1 -> 10.
+            if (preset.ref_boost != null) {
+                const sv = Math.min(1, Math.max(0, (+preset.ref_boost - 1) / 10));
+                byId('ip-adapter-scale').value = String(sv);
+                byId('ip-adapter-scale-value').textContent = sv.toFixed(2);
+            }
+        } else if (preset.adapter_scale != null) {
+            const sv = Math.min(1, Math.max(0, +preset.adapter_scale));
+            byId('ip-adapter-scale').value = String(sv);
+            byId('ip-adapter-scale-value').textContent = sv.toFixed(2);
         }
         if (preset.lora_scale != null) {
             byId('ip-adapter-lora-scale').value = preset.lora_scale;
@@ -3000,10 +3012,6 @@ function setupIpAdapterManager() {
         }
         if (preset.face_crop) {
             byId('ip-adapter-face-crop').value = preset.face_crop;
-        }
-        if (preset.ref_boost != null) {
-            byId('ip-adapter-scale').value = preset.ref_boost;
-            byId('ip-adapter-scale-value').textContent = preset.ref_boost;
         }
         if (preset.grounding_px != null) {
             byId('ip-adapter-grounding-px').value = preset.grounding_px;
@@ -3025,16 +3033,19 @@ function setupIpAdapterManager() {
     confirmSave.addEventListener('click', async () => {
         const name = nameInput.value.trim();
         if (!name) return;
+        const adapterType = byId('ip-adapter-type')?.value || 'faceid_sdxl';
+        const isKrea = adapterType === 'krea2_identity_edit';
+        const strength = parseFloat(byId('ip-adapter-scale')?.value || (isKrea ? 0.1 : 1.0));
         const payload = {
             name,
-            type: byId('ip-adapter-type')?.value || 'faceid_sdxl',
+            type: adapterType,
             refs: _ipAdapterRefs,
-            adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
+            adapter_scale: Number(strength.toFixed(2)),
             lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
             face_crop: byId('ip-adapter-face-crop')?.value || 'auto',
             flux2_anchor_dup: Boolean(byId('ip-adapter-anchor-dup')?.checked),
             face_focus: Boolean(byId('ip-adapter-face-focus')?.checked),
-            ref_boost: parseFloat(byId('ip-adapter-scale')?.value || 4.0),
+            ref_boost: isKrea ? Math.min(10, +(1 + 10 * strength).toFixed(2)) : Number(strength.toFixed(2)),
             grounding_px: parseInt(byId('ip-adapter-grounding-px')?.value || '768', 10),
             fit_mode: 'fit',
             lora_rank: byId('ip-adapter-lora-rank')?.value || 'auto',

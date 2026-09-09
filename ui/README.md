@@ -49,7 +49,7 @@ ui/
 - `ui/modules/EmbeddingManager.js`: embedding selection and token editing.
 - `ui/modules/MaskEditor.js`: inpaint mask interactions.
 - `ui/modules/ProgressManager.js`: progress card and cancel handling.
-- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation over the shared reference + preset manager. Includes the FLUX.2-only persona tuning controls (reference face crop, anchor boost, face-focus framing) and the Krea Identity (`krea2_identity_edit`) branch, which forces the Krea provider on Krea models (no silent `faceid_sdxl` fallback), remaps the strength slider to `ref_boost`, exposes Grounding Res (`grounding_px`) and Identity LoRA Rank, and caps references to a single anchor.
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation over the shared reference + preset manager. Includes the FLUX.2-only persona tuning controls (reference face crop, anchor boost, face-focus framing) and the Krea Identity (`krea2_identity_edit`) branch, which forces the Krea provider on Krea models (no silent `faceid_sdxl` fallback), exposes one unified 0–1 **Identity Strength** slider for every provider (`adapter_scale = slider` on SDXL/FLUX; `ref_boost = 1 + 10*slider` on Krea, default slider 0.1), shows Grounding Res (`grounding_px`) and Identity LoRA Rank, and caps references to a single anchor.
 
 ## Realtime Flow
 

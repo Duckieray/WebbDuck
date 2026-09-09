@@ -39,7 +39,37 @@ PROVIDER_ID = "krea2_identity_edit"
 DEFAULT_REPO = "conradlocke/krea2-identity-edit"
 DEFAULT_WEIGHT_FILE = "krea2_identity_edit_v1_2.safetensors"
 
-DEFAULT_REF_BOOST = 4.0       # v1.2 likeness dial: 1.0 = off, ~4 = strong likeness
+
+def _probe_mem(stage: str, **shapes: Any) -> None:
+    """Env-gated (``WEBBDUCK_KREA2_DEBUG_PRINT``) CUDA-stage memory probe.
+
+    Prints to stderr so it lands in a failed job's captured error payload.
+    Lazy imports keep this importable with no runtime torch installed.
+    """
+    if not os.environ.get("WEBBDUCK_KREA2_DEBUG_PRINT"):
+        return
+    try:
+        import sys as _sys
+
+        import torch as _t
+
+        if not _t.cuda.is_available():
+            return
+        shape_str = " ".join("%s=%s" % (k, v) for k, v in shapes.items())
+        print(
+            "KREA2_MEM %s %salloc=%.3fGb reserved=%.3fGb" % (
+                stage,
+                shape_str + " " if shape_str else "",
+                _t.cuda.memory_allocated() / 1e9,
+                _t.cuda.memory_reserved() / 1e9,
+            ),
+            file=_sys.stderr,
+            flush=True,
+        )
+    except Exception:
+        pass
+
+DEFAULT_REF_BOOST = 2.0       # v1.2 likeness dial: 1.0 = off, ~2 = balanced, strong locks composition
 DEFAULT_GROUNDING_PX = 768    # LoRA trained dial 384-768; higher often still works
 DEFAULT_FIT_MODE = "fit"
 DEFAULT_LORA_SCALE = 1.0
@@ -52,7 +82,7 @@ _LORA_SCALE_RANGE = (0.0, 1.5)
 # Weight files ship a full-rank (r=2048) and two reduced-rank variants. The
 # reduced ranks trade a little likeness for much smaller downloads and lower
 # VRAM pressure. ``approx_bytes`` is informational; the real probe happens on
-# disk/HF.
+# disk/HF. Filenames must match the v1_2 naming in the upstream repo.
 WEIGHT_SPECS: dict[str, dict[str, Any]] = {
     "full": {
         "filename": DEFAULT_WEIGHT_FILE,
@@ -60,12 +90,12 @@ WEIGHT_SPECS: dict[str, dict[str, Any]] = {
         "rank": 2048,
     },
     "r128": {
-        "filename": "krea2_identity_edit_r128.safetensors",
+        "filename": "krea2_identity_edit_v1_2_r128.safetensors",
         "approx_bytes": 910_000_000,
         "rank": 128,
     },
     "r64": {
-        "filename": "krea2_identity_edit_r64.safetensors",
+        "filename": "krea2_identity_edit_v1_2_r64.safetensors",
         "approx_bytes": 460_000_000,
         "rank": 64,
     },
@@ -283,7 +313,7 @@ def resolve_reference_path(value: str, output_base: str | Path | None = None) ->
     if not raw:
         raise KreaIdentityError("Identity reference path is empty.")
 
-    if "outputs/" in raw:
+    if raw.startswith("/outputs/") or raw.startswith("outputs/"):
         rel = raw.split("outputs/", 1)[1]
         base = output_base or os.getenv("WEBBDUCK_OUTPUT_DIR") or "outputs"
         candidate = Path(base).expanduser() / rel.lstrip("/")
@@ -722,6 +752,12 @@ def mask_compat_processor(base_cls: type) -> type:
             if rep > 1:
                 key = key.repeat_interleave(rep, dim=2)
                 value = value.repeat_interleave(rep, dim=2)
+            _probe_mem(
+                "attn:qkv ready",
+                heads=attn.num_heads,
+                q=tuple(query.shape),
+                mask=str(attention_mask.shape) if attention_mask is not None else "none",
+            )
             hidden_states = dispatch_attention_fn(
                 query,
                 key,
@@ -731,6 +767,7 @@ def mask_compat_processor(base_cls: type) -> type:
                 backend=self._attention_backend,
                 parallel_config=self._parallel_config,
             )
+            _probe_mem("attn:dispatch done")
             hidden_states = hidden_states.flatten(2, 3)
             hidden_states = hidden_states * torch.sigmoid(gate)
             return attn.to_out[0](hidden_states)
@@ -769,14 +806,17 @@ def edit_transformer_forward(
 
     temb = m.time_embed(timestep, dtype=latents.dtype)
     temb_mod = m.time_mod_proj(F.gelu(temb, approximate="tanh"))
+    _probe_mem("time_embed")
 
     text_attn_mask = (
         prompt_mask[:, None, None, :] if prompt_mask is not None else None
     )
     enc = m.text_fusion(prompt_embeds, attention_mask=text_attn_mask)
     enc = m.txt_in(enc)
+    _probe_mem("text_fusion/txt_in closed")
 
     img = m.img_in(combined_img)
+    _probe_mem("img_in")
     hidden = torch.cat([enc, img], dim=1)  # [text | source | target]
 
     image_rotary_emb = m.rotary_emb(position_ids)
@@ -789,6 +829,8 @@ def edit_transformer_forward(
         hidden.device,
         hidden.dtype,
     )
+
+    _probe_mem("forward:embeds/enc/img hidden", enc=enc.shape[1], src=src_packed.shape[1], tgt=latents.shape[1])
 
     try:
         from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -807,7 +849,9 @@ def edit_transformer_forward(
     tgt_len = latents.shape[1]
     hidden = hidden[:, text_seq_len:]   # [source | target]
     hidden = hidden[:, -tgt_len:]       # target only
-    return m.final_layer(hidden, temb)
+    out = m.final_layer(hidden, temb)
+    _probe_mem("final_layer out")
+    return out
 
 
 # Backward-compatible alias used by tests and early wiring.

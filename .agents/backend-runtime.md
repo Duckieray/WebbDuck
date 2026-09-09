@@ -132,6 +132,23 @@ Krea checkpoints advertise `identity_adapter=True` but deliberately NOT generic
 `img2img` in `models/model_descriptor.py`; the UI keys the persona section off
 the capability, not string detection.
 
+### 5070 Ti validation: sync block offload + ref_boost default (Phase 6/7)
+
+On a real 16 GB RTX 5070 Ti the initially-chosen streamed block offload
+(`use_stream=True`) accumulates GPU-resident weights — each manual per-block
+forward during denoise leaves the block on the GPU (+~0.45 GiB each) until it
+OOMs at block ~9 regardless of resolution. `_configure_execution` now forces
+`use_stream=False` for the block path, giving `transformer-block-sync-2`; the
+fp8 checkpoint keeps 12.2 GiB on CPU, ~0.42 GiB/block touches the GPU, and
+768x768 10-step finishes in ~4 m 45 s / 28-step in ~11 m on 15.5 GiB.
+
+A/B tuning showed `ref_boost` — not steps — governs likeness-vs-prompt balance:
+4.0 correlates ~0.81 with the reference (composition copied wholesale), 1.0
+drops to ~0.695 and follows the prompt. `DEFAULT_REF_BOOST` and the server
+preset default are therefore 2.0. The UI exposes one unified 0..1 Identity
+Strength slider (`adapter_scale = slider` on SDXL/FLUX; `ref_boost = 1 + 10*slider`
+on Krea), and persona presets round-trip the same mapping.
+
 ## Captioning And Plugins
 
 - `core/captioning_config.py`: plugin search roots and captioner discovery.

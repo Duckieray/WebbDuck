@@ -26,6 +26,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +38,7 @@ from core.backends.krea2_identity import (
     combined_token_count,
     edit_position_ids,
     edit_target_size,
+    edit_transformer_forward,
     grid_dims,
     grounded_template,
     mask_compat_processor,
@@ -162,8 +164,8 @@ class ScaledFP8Linear(nn.Module):
         if self.lora_rank > 0 and self.lora_a is not None:
             coef = _linear_lora_coefficient(self.lora_rank, self.lora_alpha, self.lora_scale)
             if coef != 0.0:
-                down = F.linear(x, self.lora_a.to(dtype=x.dtype))
-                up = F.linear(down, self.lora_b.to(dtype=x.dtype))
+                down = F.linear(x, self.lora_a.to(device=x.device, dtype=x.dtype))
+                up = F.linear(down, self.lora_b.to(device=x.device, dtype=x.dtype))
                 out = out + coef * up
         return out
 
@@ -659,6 +661,25 @@ def _torch_device(hardware: dict[str, Any]) -> str:
     return "cpu"
 
 
+def _pin_krea_transformer_outer_modules(transformer: nn.Module, device: torch.device) -> None:
+    """Keep non-block top-level modules on the active device under group offload.
+
+    ``block_level`` group offload only streams ``transformer_blocks``; every other
+    top-level module (time_embed, time_mod_proj, img_in, txt_in, text_fusion,
+    rotary_emb, final_layer, plus root params/buffers) is collected into an
+    "unmatched" group whose onload hook is attached to the root module forward.
+    The identity worker drives the transformer manually via
+    ``edit_transformer_forward`` (it never calls the root forward), so that hook
+    never fires and those weights stay on CPU. Pinning them explicitly keeps them
+    resident on the GPU where the manual forward needs them; the block-level
+    streaming of ``transformer_blocks`` is unaffected.
+    """
+    for name, child in transformer.named_children():
+        if name == "transformer_blocks":
+            continue
+        child.to(device)
+
+
 def _auto_execution_mode(
     *,
     preserved_fp8_linears: int,
@@ -714,7 +735,12 @@ def _configure_execution(
         return "resident-fp8" if int(load_info.get("preserved_fp8_linears") or 0) else "resident"
 
     onload_device = torch.device(device)
-    use_stream = bool(hardware.get("stream_prefetch")) and device == "cuda"
+    # Streamed (use_stream=True) block offload does not return GPU blocks after
+    # the manual per-block forward — each block's weights stay resident and
+    # accumulate (~block_size per transformer block), OOMing mid-denoise. FLUX.2
+    # hit the same wall and blocks accumulate ~block_size per turn; it fixed it
+    # by running block-level offload with use_stream=False. Mirror that here.
+    use_stream = False
 
     if mode in {"transformer-block", "block", "group-block"}:
         blocks_default = "1" if use_stream else "2"
@@ -743,6 +769,7 @@ def _configure_execution(
                 record_stream=use_stream,
                 low_cpu_mem_usage=low_cpu_mem_usage,
             )
+            _pin_krea_transformer_outer_modules(pipe.transformer, onload_device)
             suffix = "stream" if use_stream else "sync"
             return f"transformer-block-{suffix}-{blocks_per_group}"
         except Exception:
@@ -1311,6 +1338,7 @@ def _encode_identity_reference(
     target grid so it can be prepended to the transformer sequence.
     """
     px = pipe.image_processor.preprocess(source.convert("RGB"), height=height, width=width)
+    vae.to(device)  # mirror _decode_latents: this VAE is detached (no offload hooks)
     px = px.unsqueeze(2).to(device=device, dtype=vae.dtype)  # (B, C, 1, H, W)
 
     with torch.inference_mode():
@@ -1394,6 +1422,19 @@ def _denoise_one_identity(
     neg_gpu = negative_embeds.to(device_obj) if negative_embeds is not None else None
     neg_mask_gpu = negative_mask.to(device_obj) if negative_mask is not None else None
     src_gpu = src_packed.to(device_obj)
+
+    if device == "cuda" and os.environ.get("WEBBDUCK_KREA2_DEBUG_PRINT"):
+        print(
+            "KREA2_MEM denoise-start latents=%s src=%s prompt=%s alloc=%.3fGb reserved=%.3fGb" % (
+                tuple(latents.shape),
+                tuple(src_gpu.shape),
+                tuple(prompt_gpu.shape),
+                torch.cuda.memory_allocated() / 1e9,
+                torch.cuda.memory_reserved() / 1e9,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
 
     def on_step_end(
         _pipe: Any,
@@ -1483,7 +1524,7 @@ def _run_identity(
     guidance = float(request.get("guidance") if request.get("guidance") is not None else 0.0)
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") or 0)
-    ref_boost = float(identity.get("ref_boost") if identity.get("ref_boost") is not None else 1.0)
+    ref_boost = float(identity.get("ref_boost") if identity.get("ref_boost") is not None else 2.0)
     grounding_px = int(identity.get("grounding_px") if identity.get("grounding_px") is not None else 768)
     fit_mode = str(identity.get("fit_mode") or "fit")
     max_megapixels = float(identity.get("max_megapixels") if identity.get("max_megapixels") is not None else 1.0)
@@ -1575,18 +1616,11 @@ def _run_identity(
         height,
     )
 
-    report("Selecting Krea GPU profile", 0.52)
-    setup_started = time.perf_counter()
-    execution_mode = configure_krea_identity_transformer(
-        pipe,
-        load_info=load_info,
-        transformer_storage_gb=transformer_storage_gb,
-        reserve_gb=reserve_gb,
-    )
-    initial_execution_mode = execution_mode
-    fallback_reason: str | None = None
-    timing["execution_setup_seconds"] = time.perf_counter() - setup_started
-
+    # Install the identity LoRA BEFORE selecting the group-offload profile. The
+    # diffusers group hooks snapshot the block's params/buffers into a pinned
+    # CPU dict when enable_group_offload() runs; any buffer registered later
+    # (the FP8 residual factors from install_lora) is invisible to the streamed
+    # onload path and blows up with a KeyError on the first block forward.
     report("Installing Krea identity LoRA", 0.54)
     lora_install_started = time.perf_counter()
     try:
@@ -1599,6 +1633,35 @@ def _run_identity(
     except Exception as exc:
         raise KreaIdentityError(f"Krea identity LoRA install failed: {exc}") from exc
     timing["lora_install_seconds"] = time.perf_counter() - lora_install_started
+
+    report("Selecting Krea GPU profile", 0.52)
+    setup_started = time.perf_counter()
+    execution_mode = configure_krea_identity_transformer(
+        pipe,
+        load_info=load_info,
+        transformer_storage_gb=transformer_storage_gb,
+        reserve_gb=reserve_gb,
+    )
+    initial_execution_mode = execution_mode
+    fallback_reason: str | None = None
+    timing["execution_setup_seconds"] = time.perf_counter() - setup_started
+
+    if device == "cuda":
+        child_sizes = {
+            name: round(_module_storage_gb(child), 3)
+            for name, child in pipe.transformer.named_children()
+        }
+        print(
+            "KREA2_DEBUG " + json.dumps({
+                "execution_mode": execution_mode,
+                "allocated_gb": round(float(torch.cuda.memory_allocated()) / 1e9, 3),
+                "reserved_gb": round(float(torch.cuda.memory_reserved()) / 1e9, 3),
+                "module_storage_gb": child_sizes,
+                "text_encoder_present": getattr(pipe, "text_encoder", None) is not None,
+            }),
+            file=sys.stderr,
+            flush=True,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
