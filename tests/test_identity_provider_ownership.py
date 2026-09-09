@@ -59,6 +59,7 @@ def test_krea_replaces_stale_sdxl_provider_and_never_keeps_sdxl_lora_scale():
     assert cfg["ref_boost"] == 4.0
     assert cfg["grounding_px"] == 768
     assert cfg["lora_scale"] == 1.0
+    assert "lora_rank" not in cfg
     assert "embedder" not in cfg
     assert "adapter_scale" not in cfg
 
@@ -89,6 +90,7 @@ def test_correct_provider_preserves_explicit_provider_tuning():
             "reference_images": ["/refs/person.png"],
             "ref_boost": 5.0,
             "lora_scale": 0.9,
+            "lora_rank": "r128",
         }
     }
     model_runtime._normalize_identity_adapter_for_descriptor(
@@ -96,6 +98,38 @@ def test_correct_provider_preserves_explicit_provider_tuning():
     )
     assert settings["identity_adapter"]["ref_boost"] == 5.0
     assert settings["identity_adapter"]["lora_scale"] == 0.9
+    assert settings["identity_adapter"]["lora_rank"] == "r128"
+
+
+def test_krea_auto_rank_is_removed_so_backend_can_choose_from_gpu_vram():
+    settings = {
+        "identity_adapter": {
+            "enabled": True,
+            "type": "krea2_identity_edit",
+            "reference_images": ["/refs/person.png"],
+            "lora_rank": "auto",
+        }
+    }
+    model_runtime._normalize_identity_adapter_for_descriptor(
+        _descriptor("krea2", "krea2_diffusers"), settings
+    )
+    assert "lora_rank" not in settings["identity_adapter"]
+
+
+def test_krea_explicit_rank_is_not_removed():
+    for rank in ("full", "r128", "r64"):
+        settings = {
+            "identity_adapter": {
+                "enabled": True,
+                "type": "krea2_identity_edit",
+                "reference_images": ["/refs/person.png"],
+                "lora_rank": rank,
+            }
+        }
+        model_runtime._normalize_identity_adapter_for_descriptor(
+            _descriptor("krea2", "krea2_diffusers"), settings
+        )
+        assert settings["identity_adapter"]["lora_rank"] == rank
 
 
 def test_architecture_without_identity_support_rejects_adapter():
