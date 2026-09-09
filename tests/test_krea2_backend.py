@@ -64,7 +64,7 @@ def test_krea2_descriptor_matches_turbo_contract():
     assert descriptor.supported is True
     assert descriptor.capabilities.text2img is True
     assert descriptor.capabilities.img2img is False
-    assert descriptor.capabilities.lora is False
+    assert descriptor.capabilities.lora is True
     assert descriptor.defaults["width"] == 1024
     assert descriptor.defaults["height"] == 1024
     assert descriptor.defaults["steps"] == 8
