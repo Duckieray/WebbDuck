@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import save_file
 
@@ -11,6 +12,7 @@ from core.backends.krea2_lora import (
     _install_stacking_scaled_fp8,
     convert_krea2_lora_state,
     inject_lora_trigger,
+    install_krea2_user_loras,
     is_krea2_lora_entry,
 )
 
@@ -92,6 +94,42 @@ def test_native_diffusers_krea_lora_is_recognized_by_6144_hidden_size(tmp_path: 
     # Older generic discovery could label this as flux2 because both families
     # use transformer.transformer_blocks. The Krea 6144 hidden width resolves it.
     assert is_krea2_lora_entry({"arch": "flux2", "path": str(path)}) is True
+
+
+def test_dense_user_lora_is_loaded_converted_and_fused(tmp_path: Path):
+    class Attention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.to_q = nn.Linear(2, 2, bias=False)
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = Attention()
+
+    class Transformer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.transformer_blocks = nn.ModuleList([Block()])
+
+    transformer = Transformer()
+    transformer.transformer_blocks[0].attn.to_q.weight.data.zero_()
+    path = tmp_path / "dense.safetensors"
+    save_file(
+        {
+            "transformer.transformer_blocks.0.attn.to_q.lora_A.weight": torch.tensor([[1.0, 0.0]]),
+            "transformer.transformer_blocks.0.attn.to_q.lora_B.weight": torch.tensor([[2.0], [-1.0]]),
+        },
+        str(path),
+    )
+    applied = install_krea2_user_loras(
+        worker_impl,
+        transformer,
+        [{"name": "dense", "path": str(path), "weight": 0.5}],
+    )
+    assert applied[0]["applied_modules"] == 1
+    expected = torch.tensor([[1.0, 0.0], [-0.5, 0.0]])
+    torch.testing.assert_close(transformer.transformer_blocks[0].attn.to_q.weight, expected)
 
 
 def test_scaled_fp8_multiple_loras_are_added_not_overwritten():
