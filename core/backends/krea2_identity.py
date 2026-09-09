@@ -881,6 +881,80 @@ def edit_transformer_forward(
     return out
 
 
+def _identity_sdpa_ctx() -> Any:
+    """FLASH/EFFICIENT SDP kernel context used by the Krea identity forwards."""
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        return sdpa_kernel(
+            [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
+        )
+    except Exception:
+        return __import__("contextlib").nullcontext()
+
+
+def edit_transformer_forward_nohooks(
+    transformer: Any,
+    latents: Any,
+    src_packed: Any,
+    prompt_embeds: Any,
+    prompt_mask: Any,
+    timestep: Any,
+    position_ids: Any,
+    *,
+    ref_boost: float = 1.0,
+) -> Any:
+    """Single identity forward without accelerate group-offload hooks.
+
+    ``edit_transformer_forward`` relies on ``enable_group_offload`` hooks to
+    materialize each block on the accelerator at call time. The paired-block
+    execution mode installs no hooks (outer modules pinned, transformer on
+    CPU), so a guidance-free identity step needs this explicit streamer: each
+    block is moved to ``latents.device`` for its forward and back to CPU
+    afterwards. Mirrors ``edit_transformer_forward`` math exactly.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    m = transformer
+    device = torch.device(latents.device)
+    combined_img = torch.cat([src_packed.to(device), latents], dim=1)
+
+    temb = m.time_embed(timestep.to(device), dtype=latents.dtype)
+    temb_mod = m.time_mod_proj(F.gelu(temb, approximate="tanh"))
+
+    text_attn_mask = (
+        prompt_mask[:, None, None, :] if prompt_mask is not None else None
+    )
+    enc = m.text_fusion(prompt_embeds.to(device), attention_mask=text_attn_mask)
+    enc = m.txt_in(enc)
+    img = m.img_in(combined_img)
+    hidden = torch.cat([enc, img], dim=1)
+    image_rotary_emb = m.rotary_emb(position_ids.to(device))
+
+    attention_mask = ref_boost_bias(
+        enc.shape[1],
+        src_packed.shape[1],
+        latents.shape[1],
+        ref_boost,
+        hidden.device,
+        hidden.dtype,
+    )
+
+    with _identity_sdpa_ctx():
+        for block in m.transformer_blocks:
+            block = block.to(device)
+            hidden = block(hidden, temb_mod, image_rotary_emb, attention_mask)
+            block = block.to("cpu")
+
+    text_seq_len = enc.shape[1]
+    tgt_len = latents.shape[1]
+    hidden = hidden[:, text_seq_len:]  # [source | target]
+    hidden = hidden[:, -tgt_len:]      # target only
+    out = m.final_layer(hidden, temb)
+    return out
+
+
 def edit_transformer_forward_paired(
     transformer: Any,
     latents: Any,

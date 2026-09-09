@@ -1466,39 +1466,56 @@ def _denoise_one_identity(
                     latents.shape[0]
                 ).to(latents.dtype)
 
-                noise_pred = edit_transformer_forward(
-                    pipe.transformer,
-                    latents,
-                    src_gpu,
-                    prompt_gpu,
-                    mask_gpu,
-                    timestep,
-                    position_ids,
-                    ref_boost=ref_boost,
-                )
-                if neg_gpu is not None:
-                    if paired_block:
-                        from core.backends.krea2_identity import (
-                            edit_transformer_forward_paired,
-                        )
+                if paired_block and neg_gpu is not None:
+                    from core.backends.krea2_identity import (
+                        edit_transformer_forward_paired,
+                    )
 
-                        out_pos, out_neg = edit_transformer_forward_paired(
-                            pipe.transformer,
-                            latents,
-                            src_gpu,
-                            prompt_gpu,
-                            mask_gpu,
-                            position_ids,
-                            neg_gpu,
-                            neg_mask_gpu,
-                            neg_position_ids,
-                            timestep,
-                            ref_boost=ref_boost,
-                            device=device,
-                        )
-                        noise_pred = out_pos + float(guidance) * (out_pos - out_neg)
-                        del out_pos, out_neg
-                    else:
+                    out_pos, out_neg = edit_transformer_forward_paired(
+                        pipe.transformer,
+                        latents,
+                        src_gpu,
+                        prompt_gpu,
+                        mask_gpu,
+                        position_ids,
+                        neg_gpu,
+                        neg_mask_gpu,
+                        neg_position_ids,
+                        timestep,
+                        ref_boost=ref_boost,
+                        device=device,
+                    )
+                    noise_pred = out_pos + float(guidance) * (out_pos - out_neg)
+                    del out_pos, out_neg
+                elif paired_block:
+                    # No CFG row (identity guidance <= 0): single forward with
+                    # explicit block streaming — paired-block mode has no hooks.
+                    from core.backends.krea2_identity import (
+                        edit_transformer_forward_nohooks,
+                    )
+
+                    noise_pred = edit_transformer_forward_nohooks(
+                        pipe.transformer,
+                        latents,
+                        src_gpu,
+                        prompt_gpu,
+                        mask_gpu,
+                        timestep,
+                        position_ids,
+                        ref_boost=ref_boost,
+                    )
+                else:
+                    noise_pred = edit_transformer_forward(
+                        pipe.transformer,
+                        latents,
+                        src_gpu,
+                        prompt_gpu,
+                        mask_gpu,
+                        timestep,
+                        position_ids,
+                        ref_boost=ref_boost,
+                    )
+                    if neg_gpu is not None:
                         neg_pred = edit_transformer_forward(
                             pipe.transformer,
                             latents,

@@ -26,6 +26,7 @@ from core.backends.krea2_identity import (
     edit_position_ids,
     edit_target_size,
     edit_transformer_forward,
+    edit_transformer_forward_nohooks,
     edit_transformer_forward_paired,
     grid_dims,
     grounded_template,
@@ -724,6 +725,59 @@ def test_paired_forward_shared_text_length_rows():
     )
     # Identical prompt rows must give identical predictions even in a shared stream.
     assert torch.allclose(out_p, out_n, atol=1e-5)
+
+
+class _RecordingBlock(_FakeBlock):
+    """Fake block that records explicit ``.to()`` streaming calls."""
+
+    def __init__(self, hid: int) -> None:
+        super().__init__(hid)
+        self.moves: list[tuple] = []
+
+    def to(self, *args, **kwargs):  # noqa: D102
+        self.moves.append(args)
+        return self
+
+
+def test_nohooks_forward_matches_single_and_streams_blocks():
+    m = _FakeKreaTransformer()
+    row = _build_toy_inputs(m.hid, text_pos=9, text_neg=6, src_tokens=6, tgt_tokens=6)
+    recorder = _RecordingBlock(m.hid)
+    m.transformer_blocks = torch.nn.ModuleList([recorder])
+
+    out_hook = edit_transformer_forward(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.5,
+    )
+    out_nohooks = edit_transformer_forward_nohooks(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.5,
+    )
+    assert torch.allclose(out_nohooks, out_hook, atol=1e-5)
+    # The no-hooks path must explicitly move the block on and off the stream
+    # device (backing accelerator), unlike the hook-driven single forward.
+    assert len(recorder.moves) == 2
+    assert str(recorder.moves[0][0]) == "cpu"
+    assert str(recorder.moves[1][0]) == "cpu"
+
+
+def test_nohooks_forward_maskless_cpu_path_finite():
+    m = _FakeKreaTransformer(num_blocks=2)
+    row = _build_toy_inputs(m.hid, text_pos=7, text_neg=5, src_tokens=4, tgt_tokens=4)
+    row["prompt_mask_pos"] = None
+    out = edit_transformer_forward_nohooks(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.0,
+    )
+    assert torch.isfinite(out).all()
+    assert all(
+        p.device.type == "cpu"
+        for block in m.transformer_blocks
+        for p in block.parameters()
+    )
 
 
 def test_perf_overrides_noop_without_env(monkeypatch):
