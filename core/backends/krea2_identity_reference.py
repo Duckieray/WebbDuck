@@ -23,6 +23,7 @@ from PIL import Image
 DEFAULT_REFERENCE_MAX_EDGE = 1024
 _OFF_VALUES = {"0", "false", "off", "no", "none", "disabled"}
 _REAL_ESRGAN_VALUES = {"1", "true", "yes", "on", "auto", "realesrgan", "real-esrgan"}
+_LEGACY_REAL_ESRGAN_VALUES = {"1", "true", "yes", "on"}
 
 
 def _lanczos() -> Any:
@@ -159,12 +160,33 @@ def _final_size_upscaler(original: Any):
     native denoise size for debugging.
     """
 
+    def _call_realesrgan(image: Any, *, requested: Any, effective: Any, raw: str):
+        # The earlier quality wrapper only recognizes the legacy truthy spellings.
+        # Normalize newer explicit names ("realesrgan"/"auto") while delegating.
+        key = "WEBBDUCK_KREA2_IDENTITY_UPSCALE"
+        previous = os.environ.get(key)
+        if raw not in _LEGACY_REAL_ESRGAN_VALUES:
+            os.environ[key] = "1"
+        try:
+            return original(image, requested=requested, effective=effective)
+        finally:
+            if raw not in _LEGACY_REAL_ESRGAN_VALUES:
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+
     def _maybe_upscale(image: Any, *, requested: Any, effective: Any):
         raw = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE") or "").strip().lower()
         if raw in _OFF_VALUES:
             return image, None
         if raw in _REAL_ESRGAN_VALUES:
-            return original(image, requested=requested, effective=effective)
+            return _call_realesrgan(
+                image,
+                requested=requested,
+                effective=effective,
+                raw=raw,
+            )
 
         if requested is None:
             return image, None
