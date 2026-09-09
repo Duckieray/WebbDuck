@@ -171,7 +171,8 @@ _original_generate = _impl.Krea2DiffusersBackend.generate
 
 
 def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kwargs: Any):
-    if _identity_enabled(settings):
+    identity_active = _identity_enabled(settings)
+    if identity_active:
         variant = str(descriptor.detection.get("variant") or "base").lower()
         recommended_steps, recommended_cfg = _identity_recipe_defaults(variant)
         defaults = descriptor.defaults or {}
@@ -215,9 +216,44 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
             "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else recommended_cfg),
             "ref_boost_default": 4.0,
             "grounding_px_default": 768,
+            "reference_max_edge_default": 1024,
+            "final_size_policy": "exact-requested-size",
         }
 
-    return _original_generate(self, descriptor, settings, **kwargs)
+    result = _original_generate(self, descriptor, settings, **kwargs)
+
+    # The adaptive worker records the native denoise dimensions separately. For
+    # identity runs the returned artifact may be restored to the user's requested
+    # size after decode, so saved metadata should describe the artifact rather
+    # than incorrectly claiming the smaller native grid as the final image size.
+    if identity_active and isinstance(result, tuple) and len(result) == 2:
+        images, _seed = result
+        runtime = settings.get("krea_runtime")
+        if isinstance(runtime, dict):
+            identity_runtime = runtime.get("identity")
+            if isinstance(identity_runtime, dict):
+                try:
+                    eff_w = int(identity_runtime.get("effective_width") or 0)
+                    eff_h = int(identity_runtime.get("effective_height") or 0)
+                except (TypeError, ValueError):
+                    eff_w = eff_h = 0
+                if eff_w > 0 and eff_h > 0:
+                    settings["krea_effective_width"] = eff_w
+                    settings["krea_effective_height"] = eff_h
+        if images:
+            try:
+                final_w, final_h = images[0].size
+                settings["width"] = int(final_w)
+                settings["height"] = int(final_h)
+                settings["krea_final_width"] = int(final_w)
+                settings["krea_final_height"] = int(final_h)
+                eff_w = int(settings.get("krea_effective_width") or final_w)
+                eff_h = int(settings.get("krea_effective_height") or final_h)
+                settings["krea_final_upscaled"] = (eff_w, eff_h) != (final_w, final_h)
+            except Exception:
+                pass
+
+    return result
 
 
 _impl._identity_worker_payload = _quality_identity_worker_payload
