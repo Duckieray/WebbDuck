@@ -196,6 +196,44 @@ def test_identity_token_budget_halves_text2img_budget():
     assert adaptive._identity_token_budget(big, "base") is None
 
 
+def test_identity_token_budget_override(monkeypatch):
+    hw = _cuda_hardware(15.51, 13.2)
+    assert adaptive._identity_token_budget(hw, "base") == 1792
+
+    # Request-level override (identity.token_budget) short-circuits the env.
+    assert adaptive._identity_token_budget(hw, "base", override=2688) == 2688
+    assert adaptive._identity_token_budget(hw, "base", override=2048) == 2048
+    assert adaptive._identity_token_budget(hw, "base", override=0) == 16
+    assert adaptive._identity_token_budget(hw, "base", override=7777) == 7776
+
+    # Env override (no explicit override) snaps to the 16-token grid.
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET", "2048")
+    assert adaptive._identity_token_budget(hw, "base") == 2048
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET", "bogus")
+    assert adaptive._identity_token_budget(hw, "base") == 1792
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET", "auto")
+    assert adaptive._identity_token_budget(hw, "base") == 1792
+
+
+def test_identity_request_token_budget_plans_bigger_box(tmp_path):
+    hw = _cuda_hardware(15.51, 13.2)
+    ref = _make_reference(tmp_path, 768, 1024)
+    request = {
+        "width": 1024,
+        "height": 1408,
+        "identity": {"reference_image": str(ref), "fit_mode": "fit"},
+        "steps": 28,
+    }
+    tuned_default, _ = adaptive._adaptive_request(request, hw)
+    request["identity"]["token_budget"] = 2688
+    tuned_override, plan = adaptive._adaptive_request(request, hw)
+    assert plan["identity"]["token_budget"] == 2688
+    scaled_tokens = (tuned_override["width"] // 16) * (tuned_override["height"] // 16)
+    default_tokens = (tuned_default["width"] // 16) * (tuned_default["height"] // 16)
+    assert scaled_tokens > default_tokens
+    assert plan["identity"]["target_tokens"] <= 2688
+
+
 def test_identity_token_plan_counts_combined_tokens(tmp_path):
     ref = _make_reference(tmp_path, 768, 1024)
     identity = {"reference_image": str(ref), "fit_mode": "fit"}

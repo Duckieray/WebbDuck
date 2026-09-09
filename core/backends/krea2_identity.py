@@ -152,6 +152,7 @@ class IdentitySnapshot:
     max_megapixels: float = DEFAULT_MAX_MEGAPIXELS
     lora_rank: str = DEFAULT_RANK
     face_crop: str = "off"               # reserved (mirrors FLUX persona knob); v1: off
+    token_budget: int | None = None     # A/B override for the adaptive target-grid budget
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -311,6 +312,22 @@ def identity_settings_snapshot(
         )
         face_crop = "off"  # report the effective value
 
+    token_budget: int | None = None
+    raw_budget = adapter_cfg.get("token_budget")
+    if raw_budget is not None:
+        try:
+            parsed_budget = int(float(raw_budget))
+        except (TypeError, ValueError):
+            raise KreaIdentityError(
+                f"Krea identity token_budget {raw_budget!r} is invalid; "
+                "expected a positive integer (target grid tokens)."
+            ) from None
+        if parsed_budget < 16:
+            raise KreaIdentityError(
+                "Krea identity token_budget must be at least 16 tokens."
+            )
+        token_budget = parsed_budget
+
     return IdentitySnapshot(
         reference_image=str(ref_path),
         ref_boost=ref_boost,
@@ -320,6 +337,7 @@ def identity_settings_snapshot(
         max_megapixels=max_mp,
         lora_rank=lora_rank,
         face_crop=face_crop,
+        token_budget=token_budget,
         warnings=warnings,
     )
 

@@ -111,6 +111,7 @@ def _identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any] | None:
         "lora_rank": snapshot.lora_rank,
         "max_megapixels": snapshot.max_megapixels,
         "face_crop": snapshot.face_crop,
+        "token_budget": snapshot.token_budget,
     }
 
 

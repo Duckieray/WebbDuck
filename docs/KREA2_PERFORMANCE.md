@@ -133,15 +133,34 @@ Identity-specific (no effect on text2img):
   identity only; `0` (or negative) skips the unconditional forward altogether
   (single forward per step).
 - `WEBBDUCK_KREA2_IDENTITY_CFG_FREE=1` — shorthand for guidance `0`.
+- `WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET=<int>` / `identity.token_budget` — A/B
+  the adaptive target-grid token budget (the real identity size limit). An
+  identity forward packs `[text | reference grid | target grid]` into **one**
+  sequence (~2x image tokens/output grid + prompt), so the planner halves the
+  card's text2img budget (3584) to 1792 by default, and any request ≥ ~800x1200
+  collapses to ~528x784 effective regardless of the megapixel cap (default 2.0,
+  which is *not* the binding limit). Request-level `token_budget` beats the env
+  var.
 
 These knobs exist so the two dominant levers (drop CFG for identity; cut
 identity steps) can be A/B'd on live hardware without code changes. Steps and
 CFG affect output character, so validate before promoting any value to a
 default.
 
-The identity edit-path megapixel cap defaults to **2.0**, so the common portrait
-sizes pass untouched: 832x1216 ≈ 1.01 MP and 1152x1728 ≈ 1.99 MP. Explicitly
-lower per-request caps still downscale as requested.
+Hardware-validated identity size tiers (16 GB 5070 Ti, same prompt/ref, 28
+steps, cfg 7.5, no OOM/fallback):
+
+| token budget | requested | effective output | combined seq (+text) | wall time |
+|---|---|---|---|---|
+| 1792 (default) | 832x1216 | 528x784 (0.41 MP) | ~3468 (~3800) | ~166 s |
+| 2048 | 832x1216 | 576x864 (0.50 MP) | ~3888 (~4240) | ~194 s |
+| 2688 | 832x1216 | 672x1008 (0.68 MP) | ~5292 (~5650) | ~243 s |
+| 3584 | 1152x1728 | 768x1152 (0.88 MP) | ~6912 (~7320) | ~340 s |
+
+The ~4096-token training envelope is crossed between 2048 and 2688; past that,
+outputs should be eyeballed (all tiers above completed without NaN/gray-wash
+signals, but sequence-length extrapolation can degrade attention/identity
+quality before stats show it).
 
 ## Measurements
 

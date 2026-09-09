@@ -199,7 +199,11 @@ def _reference_source_size(identity_cfg: dict[str, Any]) -> tuple[int, int, bool
         return 0, 0, False
 
 
-def _identity_token_budget(hardware: dict[str, Any], variant: str) -> int | None:
+def _identity_token_budget(
+    hardware: dict[str, Any],
+    variant: str,
+    override: int | None = None,
+) -> int | None:
     """Conservative target-token budget for identity edits on this accelerator.
 
     An identity forward packs the reference and target grids into one combined
@@ -207,7 +211,26 @@ def _identity_token_budget(hardware: dict[str, Any], variant: str) -> int | None
     image-side tokens of a text2img step. The planner therefore halves the card's
     text2img budget (which already reflects live free-VRAM pressure) before it
     compares the requested output grid — a strictly safer envelope.
+
+    ``override`` (from the request-level ``identity.token_budget``) short-
+    circuits everything; otherwise the
+    ``WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`` env var (``auto``/empty = the
+    halved default; integer = explicit, snapped to the 16-token grid) applies.
+    Both are A/B escape hatches. Note the edit forward's *combined* sequence is
+    ~2x this target budget plus the prompt tokens, so staying under the model's
+    ~4096-token training envelope effectively caps the override near the
+    default unless the A/B deliberately probes past it.
     """
+    if override is not None:
+        return max(_EFFECTIVE_TOKEN_MULTIPLE, _snap(int(override)))
+    raw = os.getenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET", "").strip()
+    if raw not in {"", "auto", "-1"}:
+        try:
+            forced = int(float(raw))
+        except (TypeError, ValueError):
+            forced = None
+        if forced is not None:
+            return max(_EFFECTIVE_TOKEN_MULTIPLE, _snap(forced))
     base = _token_budget(hardware, variant)
     if base is None:
         return None
@@ -353,7 +376,11 @@ def _adaptive_request(
         identity_cfg = tuned.get("identity")
         identity_cfg = identity_cfg if isinstance(identity_cfg, dict) else {}
         src_w, src_h, readable = _reference_source_size(identity_cfg)
-        identity_budget = _identity_token_budget(hardware, variant)
+        identity_budget = _identity_token_budget(
+            hardware,
+            variant,
+            override=identity_cfg.get("token_budget"),
+        )
         identity_accounting, identity_box = _identity_token_plan(
             identity_cfg,
             (src_w, src_h),

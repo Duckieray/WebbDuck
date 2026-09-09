@@ -183,10 +183,21 @@ Low VRAM (~6 GB) is by design, not headroom.
   `_run_identity` reports `resident_blocks` in the runtime dict and the OOM
   ladder steps down: `paired_resident_oom` (drop the prefix, keep paired
   streaming) before the full `paired_oom` -> `transformer-block` retry.
-- **Megapixel cap default 2.0:** `DEFAULT_MAX_MEGAPIXELS` is 2.0 so standard
-  portrait jobs pass untouched — 832x1216 ≈ 1.01 MP, 1152x1728 ≈ 1.99 MP.
-  Validation clamps 0.125..2.0; explicit per-request caps below that still
-  downscale as before.
+- **Megapixel cap is not the binding limit — the token budget is:** an identity
+  forward packs `[text | reference grid | target grid]` into ONE combined
+  sequence (~2x image tokens per output grid + prompt tokens), so on this card
+  the adaptive planner caps the target grid at 1792 tokens (half the 3584
+  text2img budget) and any request ≥ ~800x1200 collapses to ~528x784 effective
+  (~0.41 MP) regardless of `max_megapixels` (default 2.0, clamp 0.125..2.0).
+- **`identity.token_budget` / `WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`:** A/B
+  escape hatch for that target-grid token budget (`auto`/empty = 1792 halved
+  default; integer = explicit, snapped to the 16-token grid; request-level
+  `token_budget` in the identity payload beats the env var). Hardware-validated
+  tiers on the 5070 Ti: 1792 → 528x784; 2048 → 576x864 (~4240 combined+text,
+  just past the ~4096 training envelope); 2688 → 672x1008; 3584 → 768x1152
+  (~7320 combined+text). All tiers completed without NaN/gray-wash/fallback but
+  past ~2048 the combined sequence exceeds the LoRA's training envelope, so
+  visual quality must be eyeballed before promoting a tier.
 
 ## Captioning And Plugins
 

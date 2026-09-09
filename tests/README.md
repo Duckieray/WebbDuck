@@ -44,9 +44,9 @@ conda run -n webbduck pytest -v -m "not slow"
 | `tests/test_flux2_identity_architecture.py` | FLUX.2 identity capability contract |
 | `tests/test_capability_driven_ui.py` | capability-driven frontend contract (no server needed) |
 | `tests/test_krea2_backend.py` | Krea 2 backend payloads and runtime launch |
-| `tests/test_krea2_identity.py` | Krea identity adapter contract, markup controls, paired-block + resident-prefix forwards, perf-env overrides, 2.0-MP cap behavior |
+| `tests/test_krea2_identity.py` | Krea identity adapter contract, markup controls, paired-block + resident-prefix forwards, perf-env overrides, 2.0-MP cap, token_budget validation |
 | `tests/test_krea2_identity_runtime.py` | Krea identity worker payload/dispatch, resident-block VRAM budgeting, and persona presets |
-| `tests/test_krea2_adaptive_runtime.py` | Krea identity-aware adaptive planning and token accounting |
+| `tests/test_krea2_adaptive_runtime.py` | Krea identity-aware adaptive planning, token accounting, and token_budget override |
 
 Shared fixtures and helpers live in `tests/conftest.py`.
 

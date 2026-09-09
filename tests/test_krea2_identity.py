@@ -114,8 +114,26 @@ def test_snapshot_defaults(tmp_path):
     assert snap.fit_mode == "fit"
     assert snap.lora_scale == 1.0
     assert snap.max_megapixels == 2.0
+    assert snap.token_budget is None
     assert snap.reference_image == str(ref.resolve())
     assert not snap.warnings
+
+
+def test_snapshot_token_budget_validation(tmp_path):
+    ref = _make_ref(tmp_path)
+
+    def snap_with(budget):
+        return identity_settings_snapshot(
+            {"type": PROVIDER_ID, "reference_images": [str(ref)], "token_budget": budget}
+        )
+
+    assert snap_with("2048").token_budget == 2048
+    assert snap_with(2048).token_budget == 2048
+    assert snap_with("2688.0").token_budget == 2688
+    with pytest.raises(KreaIdentityError, match="token_budget"):
+        snap_with("bogus")
+    with pytest.raises(KreaIdentityError, match="at least 16"):
+        snap_with(8)
 
 
 def test_snapshot_resolves_web_path(tmp_path, monkeypatch):
