@@ -69,6 +69,13 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `core/perf.py` | performance tracking |
 | `core/exceptions.py` | custom exceptions |
 | `core/backends/flux_identity.py` | FLUX.2 persona preprocessing: face cropping, anchor weighting, face-focus prompt |
+| `core/backends/krea2.py` | Krea 2 isolated-runtime backend: identity payload normalization, component resolution, worker launch |
+| `core/backends/krea2_identity.py` | Krea identity contract layer: validation, preset snapshot, weight resolution, edit geometry helpers |
+| `core/backends/krea2_worker.py` | Krea phased GPU worker; identity edit run, FP8 LoRA residuals, OOM demotion + shared transformer reconfigure |
+| `core/backends/krea2_worker_adaptive.py` | request-level adaptive planning incl. identity token accounting and geometry scaling |
+| `core/backends/krea2_worker_safe.py` | safe-runtime wrapper dispatching identity runs to the phased worker |
+| `core/backends/krea2_native_fp8.py` | native FP8 GEMM kernel + post-GEMM LoRA residual overlay |
+| `core/backends/krea2_weights.py` | Krea single-file/GGUF weight loading and metadata overlay |
 
 ### Frontend Map
 

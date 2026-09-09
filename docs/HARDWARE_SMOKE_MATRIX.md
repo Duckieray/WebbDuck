@@ -149,7 +149,8 @@ python tools/run_hardware_smoke.py \
 
 Rows whose runtime/weights are ready print `READY`; missing required targets are
 `BLOCKED`. The optional SDXL asset row is skipped unless `--lora` or `--refiner`
-is supplied.
+is supplied. The `/runtime-readiness` probe can take a few minutes on a cold
+runtime set; `--readiness-timeout` (default 300 seconds) controls that probe.
 
 When the preflight is green, explicitly opt into real generation:
 
@@ -168,6 +169,7 @@ Useful controls:
 --only flux-t2i             run one row
 --only ltx-like-name        invalid here; row names are image rows only
 --timeout 7200              per-generation timeout
+--readiness-timeout 300     /runtime-readiness preflight probe timeout
 --report-dir smoke_reports  JSON report destination
 ```
 

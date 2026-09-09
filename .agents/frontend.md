@@ -13,6 +13,7 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 - `ui/core/events.js`: local event bus and WebSocket client for `/ws`.
 - `ui/core/state.js`: persisted Studio state in `localStorage` under `webbduck_state_v2`.
 - `ui/core/utils.js`: DOM helpers, form-data helpers, throttling/debouncing, downloads, and toast UI.
+- `ui/core/modelCapabilities.js`: capability-driven model profile layer; gates sections/controls from `/model-catalog` capabilities and never dispatches on architecture names.
 
 ## Feature Modules
 
@@ -22,6 +23,7 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 - `ui/modules/EmbeddingManager.js`: embedding loading, selection, token editing, and restore-from-state behavior.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, favorites, selection mode, and batch delete.
 - `ui/modules/LightboxManager.js`: PhotoSwipe integration, metadata panel, compare mode, HD toggle, and image actions.
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section.
 
 ## Styles
 
