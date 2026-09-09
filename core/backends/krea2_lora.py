@@ -361,7 +361,7 @@ def install_krea2_user_loras(
         converted = convert_krea2_lora_state(raw)
         info = base_module.apply_identity_lora_residuals(
             transformer,
-            converted,
+            converted_state=converted,
             lora_scale=weight,
         )
         applied_modules = int(info.get("applied_modules") or 0)
