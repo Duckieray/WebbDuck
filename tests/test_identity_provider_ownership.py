@@ -64,6 +64,35 @@ def test_krea_replaces_stale_sdxl_provider_and_never_keeps_sdxl_lora_scale():
     assert "adapter_scale" not in cfg
 
 
+def test_krea_always_clamps_to_single_last_anchor():
+    settings = {
+        "identity_adapter": {
+            "enabled": True,
+            "type": "krea2_identity_edit",
+            "reference_images": ["/refs/a.png", "/refs/b.png", "/refs/c.png"],
+        }
+    }
+    model_runtime._normalize_identity_adapter_for_descriptor(
+        _descriptor("krea2", "krea2_diffusers"), settings
+    )
+    assert settings["identity_adapter"]["reference_images"] == ["/refs/c.png"]
+
+
+def test_krea_provider_switch_also_clamps_to_single_last_anchor():
+    settings = {
+        "identity_adapter": {
+            "enabled": True,
+            "type": "faceid_sdxl",
+            "reference_images": ["/refs/a.png", "/refs/b.png"],
+        }
+    }
+    model_runtime._normalize_identity_adapter_for_descriptor(
+        _descriptor("krea2", "krea2_diffusers"), settings
+    )
+    assert settings["identity_adapter"]["type"] == "krea2_identity_edit"
+    assert settings["identity_adapter"]["reference_images"] == ["/refs/b.png"]
+
+
 def test_flux2_replaces_stale_faceid_provider_with_native_references():
     settings = {
         "identity_adapter": {
@@ -146,11 +175,15 @@ def test_architecture_without_identity_support_rejects_adapter():
         )
 
 
-def test_persona_ui_exposes_only_the_required_provider_option():
+def test_persona_ui_hides_provider_choice_and_owns_stable_reference_selection():
     source = Path("ui/modules/PersonaIdentityUI.js").read_text(encoding="utf-8")
-    assert "select.replaceChildren(onlyOption)" in source
-    assert "select.disabled = true" in source
-    assert "faceid_sdxl" in source
-    assert "krea2_identity_edit" in source
-    assert "flux2_native" in source
-    assert "Identity Provider (automatic)" in source
+    assert "installHiddenProviderField" in source
+    assert "row.replaceWith(hidden)" in source
+    assert "if (isKrea()) return 1" in source
+    assert "event.stopImmediatePropagation()" in source
+    assert "does not refetch/rebuild the entire reference gallery" in source
+    assert "const showLegacyScales = provider === PROVIDERS.sdxl" in source
+    assert "setPairVisible('ip-adapter-scale', showLegacyScales)" in source
+    assert "setPairVisible('ip-adapter-lora-scale', showLegacyScales)" in source
+    assert "select.replaceChildren(onlyOption)" not in source
+    assert "observer.observe(select" not in source
