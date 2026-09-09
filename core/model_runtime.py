@@ -77,7 +77,8 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
             "grounding_px": 768,
             "fit_mode": "fit",
             "lora_scale": 1.0,
-            "lora_rank": "auto",
+            # Omit lora_rank intentionally. The Krea identity contract picks
+            # r64/r128/full from live GPU VRAM when no explicit rank is supplied.
         }
     if provider == "flux2_native":
         return {
@@ -93,6 +94,18 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
         "lora_scale": 0.60,
         "reference_mode": "primary_only",
     }
+
+
+def _canonicalize_provider_fields(provider: str, cfg: dict[str, Any]) -> None:
+    """Normalize provider-local sentinel values before backend validation."""
+    if provider == "krea2_identity_edit":
+        # The UI/preset schema historically used ``auto`` as the Krea rank
+        # sentinel, while the identity backend expects either an explicit
+        # concrete rank (full/r128/r64) or no field so it can choose based on
+        # detected VRAM. Treat auto/default as absence rather than a rank name.
+        rank = str(cfg.get("lora_rank") or "").strip().lower()
+        if rank in {"", "auto", "default", "gpu", "gpu_auto"}:
+            cfg.pop("lora_rank", None)
 
 
 def _normalize_identity_adapter_for_descriptor(
@@ -123,6 +136,7 @@ def _normalize_identity_adapter_for_descriptor(
         # backends never have to arbitrate between `type` and `provider`.
         cfg["type"] = required
         cfg.pop("provider", None)
+        _canonicalize_provider_fields(required, cfg)
         settings["identity_adapter"] = cfg
         return
 
@@ -132,6 +146,7 @@ def _normalize_identity_adapter_for_descriptor(
     normalized = _identity_reference_fields(cfg)
     normalized["type"] = required
     normalized.update(_provider_defaults(required))
+    _canonicalize_provider_fields(required, normalized)
     settings["identity_adapter"] = normalized
     settings["identity_adapter_provider_corrected"] = {
         "from": current or None,
