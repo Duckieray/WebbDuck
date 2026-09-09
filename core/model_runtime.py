@@ -97,7 +97,24 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
 
 
 def _canonicalize_provider_fields(provider: str, cfg: dict[str, Any]) -> None:
-    """Normalize provider-local sentinel values before backend validation."""
+    """Normalize provider-local sentinels and reference limits."""
+    refs = cfg.get("reference_images")
+    if refs is None:
+        refs = cfg.get("refs")
+    if isinstance(refs, (list, tuple)):
+        deduped: list[Any] = []
+        for value in refs:
+            if value not in deduped:
+                deduped.append(value)
+        if provider == "krea2_identity_edit" and len(deduped) > 1:
+            # Krea2Edit is a one-anchor provider. Keep the final entry because
+            # the UI treats the most recently selected reference as the anchor.
+            deduped = deduped[-1:]
+        elif provider == "flux2_native" and len(deduped) > 5:
+            deduped = deduped[-5:]
+        cfg["reference_images"] = deduped
+        cfg.pop("refs", None)
+
     if provider == "krea2_identity_edit":
         # The UI/preset schema historically used ``auto`` as the Krea rank
         # sentinel, while the identity backend expects either an explicit
@@ -182,8 +199,8 @@ def run_selected_model(settings: dict[str, Any], cancel_event=None, progress_cal
         )
 
     # Provider ownership is architecture-driven and enforced before backend
-    # resolution. The UI also locks the selector, but this is the hard safety
-    # boundary for stale presets and direct API clients.
+    # resolution. The UI also hides provider selection, but this is the hard
+    # safety boundary for stale presets and direct API clients.
     _normalize_identity_adapter_for_descriptor(descriptor, settings)
 
     register_installed_backends()
