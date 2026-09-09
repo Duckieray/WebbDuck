@@ -7,8 +7,11 @@ can become capability-driven without breaking older clients.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 
+from core.backends.krea2_lora import is_krea2_lora_entry
 from models.catalog import descriptor_for_model, public_runtime_catalog, runtime_registry
 from models.registry import LORA_REGISTRY
 
@@ -30,6 +33,11 @@ def list_model_loras(model_name: str):
     therefore cannot see architecture-neutral checkpoints such as standalone
     FLUX GGUF transformers. Resolve the selected checkpoint through the runtime
     catalog instead, then filter the shared LoRA registry by internal arch.
+
+    Krea 2 deserves one extra compatibility probe because older WebbDuck
+    registries predate the Krea architecture and may have labeled native
+    transformer LoRAs as ``flux``/``unknown``. Explicit ``lora/krea2`` namespace,
+    Krea metadata, and original Krea tensor names are authoritative here.
     """
     registry = runtime_registry()
     try:
@@ -59,13 +67,10 @@ def _lora_matches_checkpoint(
     checkpoint_arch: str,
     flux_family: set[str],
 ) -> bool:
-    """Return True if a LoRA entry is compatible with the given checkpoint arch.
+    """Return True if a LoRA entry is compatible with the given checkpoint arch."""
+    if checkpoint_arch == "krea2":
+        return is_krea2_lora_entry(lora_cfg)
 
-    FLUX.1 and FLUX.2 are distinct architectures with incompatible transformer
-    shapes, but the checkpoint is often discovered as generic ``"flux"``.  A
-    generic checkpoint accepts any FLUX-family LoRA; a version-specific
-    checkpoint (``"flux1"`` or ``"flux2"``) only accepts matching LoRAs.
-    """
     lora_arch = str(lora_cfg.get("arch") or "").lower()
     if lora_arch == checkpoint_arch:
         return True
