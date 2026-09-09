@@ -19,6 +19,7 @@ from core.backends.krea2_identity import (
     identity_settings_snapshot,
     resolve_identity_weight,
 )
+from core.backends.krea2_lora import inject_lora_trigger, lora_trigger_phrase, resolve_krea2_loras
 from core.backends.runtime_probe import probe_python_runtime
 from core.exceptions import GenerationCancelledError
 from core.provider_credentials import resolve_provider_token
@@ -343,6 +344,22 @@ class Krea2DiffusersBackend(GenerationBackend):
                 "format is not runnable by the installed Krea backend."
             )
 
+        # Studio's ordinary LoRA stack uses the same name/weight contract for
+        # every architecture. Resolve Krea selections to explicit local paths
+        # before crossing the isolated-runtime boundary and inject any trained
+        # trigger words as plain text for Krea's Qwen prompt encoder.
+        user_loras = resolve_krea2_loras(settings.get("loras"))
+        prompt = inject_lora_trigger(prompt, lora_trigger_phrase(user_loras))
+        if user_loras:
+            settings["krea_loras"] = [
+                {
+                    "name": row["name"],
+                    "weight": row["weight"],
+                    "trigger": row.get("trigger"),
+                }
+                for row in user_loras
+            ]
+
         identity_payload = _identity_worker_payload(settings)
 
         defaults = descriptor.defaults or {}
@@ -372,6 +389,8 @@ class Krea2DiffusersBackend(GenerationBackend):
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
         }
+        if user_loras:
+            payload["loras"] = user_loras
         if identity_payload is not None:
             payload["identity"] = identity_payload
 
