@@ -47,6 +47,28 @@ def _resolve_meta_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+#  Guaranteed architecture modes
+# ---------------------------------------------------------------------------
+
+_ARCH_GUARANTEED_MODES: dict[str, set[str]] = {
+    "flux": {"realistic", "cartoon"},
+    "flux2": {"realistic", "cartoon"},
+    "krea": {"realistic", "hentai", "cartoon"},
+    "krea2": {"realistic", "hentai", "cartoon"},
+    "qwen_image": {"realistic"},
+}
+
+def _guaranteed_modes(arch: str | None, families: list[str] | None = None) -> set[str]:
+    out: set[str] = set()
+    arch_key = str(arch or "").lower()
+    keys = [arch_key]
+    keys.extend(str(f).lower() for f in (families or []))
+    for key in keys:
+        out |= _ARCH_GUARANTEED_MODES.get(key, set())
+    return out
+
+
+# ---------------------------------------------------------------------------
 #  Internal meta dataclasses (deserialised from on-disk JSON)
 # ---------------------------------------------------------------------------
 
@@ -281,15 +303,22 @@ class MetaStore:
 
     def _merge_checkpoint(self, name: str, registry_info: dict | None = None) -> AssetInfo:
         ph = self._checkpoints.get(name)
+        
+        arch = registry_info.get("arch") if registry_info else None
+        families = list(ph.families) if ph else []
+        modes = list(ph.modes) if ph and ph.modes else ([ph.recommended_mode] if ph and ph.recommended_mode else [])
+        modes_set = set(modes)
+        modes_set.update(_guaranteed_modes(arch, families))
+
         return AssetInfo(
             name=name,
             type="checkpoint",
-            arch=registry_info.get("arch") if registry_info else None,
+            arch=arch,
             source=registry_info.get("source") if registry_info else None,
             path=str(registry_info["path"]) if registry_info and "path" in registry_info else None,
             tags=list(ph.tags) if ph else [],
-            families=list(ph.families) if ph else [],
-            modes=list(ph.modes) if ph and ph.modes else ([ph.recommended_mode] if ph and ph.recommended_mode else []),
+            families=families,
+            modes=sorted(modes_set),
             description=ph.description if ph else "",
             url=ph.url if ph else "",
             recommended_mode=ph.recommended_mode if ph else None,
