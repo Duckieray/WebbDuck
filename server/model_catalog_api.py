@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from core.backends.krea2_lora import is_krea2_lora_entry
+from core.backends.krea2_lora import discover_krea2_loras, is_krea2_lora_entry
 from models.catalog import descriptor_for_model, public_runtime_catalog, runtime_registry
 from models.registry import LORA_REGISTRY
 
@@ -34,10 +34,10 @@ def list_model_loras(model_name: str):
     FLUX GGUF transformers. Resolve the selected checkpoint through the runtime
     catalog instead, then filter the shared LoRA registry by internal arch.
 
-    Krea 2 deserves one extra compatibility probe because older WebbDuck
-    registries predate the Krea architecture and may have labeled native
-    transformer LoRAs as ``flux``/``unknown``. Explicit ``lora/krea2`` namespace,
-    Krea metadata, and original Krea tensor names are authoritative here.
+    Krea 2 additionally reconciles the legacy registry with the LoRA filesystem.
+    Older registry detection predates Krea and can mislabel native Krea PEFT
+    adapters as FLUX or omit AI-Toolkit exports. Krea metadata/tensor signatures
+    and an explicit ``lora/krea2`` namespace are therefore authoritative.
     """
     registry = runtime_registry()
     try:
@@ -49,8 +49,18 @@ def list_model_loras(model_name: str):
         return []
 
     checkpoint_arch = str(descriptor.architecture or "").lower()
-    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
+    if checkpoint_arch == "krea2":
+        entries = discover_krea2_loras()
+        return [
+            {
+                "name": name,
+                "description": cfg.get("description", ""),
+                "weight": cfg.get("weight", 1.0),
+            }
+            for name, cfg in sorted(entries.items())
+        ]
 
+    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
     return [
         {
             "name": name,
