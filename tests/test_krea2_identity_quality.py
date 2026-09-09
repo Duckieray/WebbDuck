@@ -6,6 +6,7 @@ import pytest
 import torch
 from PIL import Image
 
+from core.backends import krea2
 from core.backends.krea2_identity_quality import (
     denormalize_krea_latents,
     edit_position_ids_v124,
@@ -68,3 +69,19 @@ def test_position_ids_apply_fractional_source_offset_only_to_reference():
     assert torch.all(tgt[:, 0] == 0)
     assert float(src[:, 2].min()) == pytest.approx(0.5)
     assert float(tgt[:, 2].min()) == pytest.approx(0.0)
+
+
+def test_turbo_identity_recipe_biases_toward_face_detail():
+    assert krea2._identity_recipe_defaults('turbo') == (12, 0.0)
+    assert krea2._identity_recipe_defaults('base') == (20, 3.0)
+
+
+def test_identity_token_budget_uses_live_vram_pressure():
+    # Healthy 16 GB-class card: use the hardware-validated 2688 face-detail tier.
+    assert krea2._recommended_identity_token_budget(15.51, 13.2) == 2688
+    # Moderate pressure: step down without returning to the tiny default immediately.
+    assert krea2._recommended_identity_token_budget(15.51, 10.2) == 2048
+    # Heavy pressure: retain the original conservative escape hatch.
+    assert krea2._recommended_identity_token_budget(15.51, 8.5) == 1792
+    # Missing live-free telemetry stays conservative rather than assuming headroom.
+    assert krea2._recommended_identity_token_budget(15.51, None) == 2048
