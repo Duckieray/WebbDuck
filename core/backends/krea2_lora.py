@@ -5,9 +5,9 @@ registry name + weight, the host resolves that name to a local safetensors file,
 and the isolated Krea worker applies the low-rank residual before any group
 CPU-offload hooks are installed.
 
-The Krea worker can preserve base checkpoint linears as FP8.  Those linears have
+The Krea worker can preserve base checkpoint linears as FP8. Those linears have
 one compact residual slot for the identity-edit adapter; ordinary user LoRAs
-must be able to coexist with it.  ``install_worker_lora_patch`` therefore makes
+must be able to coexist with it. ``install_worker_lora_patch`` therefore makes
 that slot additive: multiple LoRAs targeting the same projection are combined
 into one mathematically-equivalent low-rank residual by concatenating ranks.
 That keeps the existing FP8/native-FP8 execution paths unchanged.
@@ -21,6 +21,7 @@ from typing import Any
 
 
 _KREA_NAMESPACE_NAMES = {"krea", "krea2", "krea-2"}
+_KREA_HIDDEN_SIZE = 6144
 
 
 def _path_has_krea_namespace(path: Path) -> bool:
@@ -30,13 +31,13 @@ def _path_has_krea_namespace(path: Path) -> bool:
 
 
 def _safetensors_looks_krea2(path: Path) -> bool:
-    """Best-effort Krea 2 identification without loading tensor payloads.
+    """Best-effort Krea 2 identification without loading full adapter payloads.
 
     Original Krea/Comfy and AI-Toolkit exports have distinctive ``blocks.*`` +
-    ``attn.wq``/``txtfusion`` names.  Native Diffusers attention-only LoRAs are
-    less distinguishable from other transformer families, so users can always
-    make intent explicit by placing them under ``<LoRA root>/krea2/`` or setting
-    ``arch: krea2`` in loras.json.
+    ``attn.wq``/``txtfusion`` names. Native Diffusers Krea LoRAs share generic
+    ``transformer.transformer_blocks`` names with FLUX, but Krea 2's transformer
+    hidden width is 6144, which cleanly distinguishes the common attention LoRA
+    tensors from FLUX.1 (3072) and FLUX.2 Klein (4096).
     """
     try:
         from safetensors import safe_open
@@ -44,27 +45,45 @@ def _safetensors_looks_krea2(path: Path) -> bool:
         with safe_open(str(path), framework="pt", device="cpu") as handle:
             keys = list(handle.keys())
             metadata = handle.metadata() or {}
+
+            meta_text = " ".join(str(value) for value in metadata.values()).lower()
+            if "krea2" in meta_text or "krea-2" in meta_text or "krea 2" in meta_text:
+                return True
+
+            joined = " ".join(str(key).lower() for key in keys)
+            if "txtfusion" in joined or "text_fusion" in joined:
+                return True
+            if (
+                ("diffusion_model.blocks." in joined or "base_model.model.blocks." in joined)
+                and any(marker in joined for marker in (".attn.wq", ".attn.wk", ".attn.wv", ".attn.wo"))
+            ):
+                return True
+            if "lora_unet_blocks_" in joined and any(
+                marker in joined for marker in ("_attn_wq", "_attn_wk", "_attn_wv", "_attn_wo")
+            ):
+                return True
+            if "time_mod_proj" in joined and ("img_in" in joined or "txt_in" in joined):
+                return True
+
+            # Native Diffusers/PEFT exports are architecture-neutral by key
+            # spelling. Inspect only a small low-rank attention factor's shape;
+            # this avoids materializing a base model or the complete adapter.
+            for key in keys:
+                lowered = key.lower()
+                if (
+                    "transformer_blocks" not in lowered
+                    or ".attn.to_q." not in lowered
+                    or "lora_a" not in lowered
+                ):
+                    continue
+                try:
+                    shape = tuple(int(v) for v in handle.get_slice(key).get_shape())
+                except Exception:
+                    shape = tuple(int(v) for v in handle.get_tensor(key).shape)
+                if _KREA_HIDDEN_SIZE in shape:
+                    return True
     except Exception:
         return False
-
-    meta_text = " ".join(str(value) for value in metadata.values()).lower()
-    if "krea2" in meta_text or "krea-2" in meta_text or "krea 2" in meta_text:
-        return True
-
-    joined = " ".join(str(key).lower() for key in keys)
-    if "txtfusion" in joined or "text_fusion" in joined:
-        return True
-    if (
-        ("diffusion_model.blocks." in joined or "base_model.model.blocks." in joined)
-        and any(marker in joined for marker in (".attn.wq", ".attn.wk", ".attn.wv", ".attn.wo"))
-    ):
-        return True
-    if "lora_unet_blocks_" in joined and any(
-        marker in joined for marker in ("_attn_wq", "_attn_wk", "_attn_wv", "_attn_wo")
-    ):
-        return True
-    if "time_mod_proj" in joined and ("img_in" in joined or "txt_in" in joined):
-        return True
     return False
 
 
@@ -179,7 +198,6 @@ def _unflatten_kohya_module(module: str) -> str:
     if value.startswith("lora_unet_"):
         value = value[len("lora_unet_"):]
     value = value.replace("_", ".")
-    # Reconstitute Krea/Diffusers identifiers that contain underscores.
     replacements = (
         ("transformer.blocks", "transformer_blocks"),
         ("text.fusion", "text_fusion"),
@@ -205,6 +223,22 @@ def _map_krea_module(module: str) -> str:
     value = _strip_known_prefixes(module)
     if value.startswith("lora_unet_"):
         value = _unflatten_kohya_module(value)
+
+    # Match Diffusers' current Krea 2 converter for AI-Toolkit's abbreviated
+    # standalone Sequential/module names.
+    standalone_map = {
+        "first": "img_in",
+        "last.linear": "final_layer.linear",
+        "tmlp.0": "time_embed.linear_1",
+        "tmlp.2": "time_embed.linear_2",
+        "tproj.1": "time_mod_proj",
+        "txtmlp.1": "txt_in.linear_1",
+        "txtmlp.3": "txt_in.linear_2",
+        "txtfusion.projector": "text_fusion.projector",
+    }
+    if value in standalone_map:
+        return standalone_map[value]
+
     if value.startswith("blocks."):
         value = "transformer_blocks." + value[len("blocks."):]
     elif value.startswith("txtfusion."):
@@ -266,8 +300,6 @@ def convert_krea2_lora_state(state_dict: dict[str, Any]) -> dict[str, Any]:
 
         module, suffix = _split_lora_suffix(key)
         if module is None or suffix is None:
-            # Ignore ordinary metadata/non-LoRA tensors. Anything that looks like
-            # an adapter weight is an error rather than a partial silent load.
             if "lora" in lowered and (lowered.endswith("weight") or lowered.endswith(".alpha")):
                 unresolved.append(key)
             continue
