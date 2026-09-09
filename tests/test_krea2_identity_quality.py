@@ -14,6 +14,11 @@ from core.backends.krea2_identity_quality import (
     fit_reference_pixels_v124,
     normalize_krea_latents,
 )
+from core.backends.krea2_identity_reference import (
+    _final_size_upscaler,
+    prepare_identity_reference,
+    reference_max_edge,
+)
 
 
 class _FakeVAE:
@@ -85,3 +90,88 @@ def test_identity_token_budget_uses_live_vram_pressure():
     assert krea2._recommended_identity_token_budget(15.51, 8.5) == 1792
     # Missing live-free telemetry stays conservative rather than assuming headroom.
     assert krea2._recommended_identity_token_budget(15.51, None) == 2048
+
+
+def test_large_identity_reference_is_downscaled_once_preserving_aspect_ratio():
+    source = Image.new('RGB', (4000, 3000), 'white')
+    prepared, meta = prepare_identity_reference(source, max_long_edge=1024)
+
+    assert prepared.size == (1024, 768)
+    assert meta['original_size'] == [4000, 3000]
+    assert meta['prepared_size'] == [1024, 768]
+    assert meta['downscaled'] is True
+    assert meta['scale'] == pytest.approx(0.256)
+
+
+def test_small_identity_reference_is_never_upscaled():
+    source = Image.new('RGB', (640, 960), 'white')
+    prepared, meta = prepare_identity_reference(source, max_long_edge=1024)
+
+    assert prepared.size == (640, 960)
+    assert meta['prepared_size'] == [640, 960]
+    assert meta['downscaled'] is False
+    assert meta['scale'] == 1.0
+
+
+def test_reference_max_edge_defaults_to_1024_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv('WEBBDUCK_KREA2_IDENTITY_MAX_REFERENCE_EDGE', raising=False)
+    assert reference_max_edge({}) == 1024
+    monkeypatch.setenv('WEBBDUCK_KREA2_IDENTITY_MAX_REFERENCE_EDGE', '1536')
+    assert reference_max_edge({}) == 1536
+    monkeypatch.setenv('WEBBDUCK_KREA2_IDENTITY_MAX_REFERENCE_EDGE', 'off')
+    assert reference_max_edge({}) == 0
+
+
+def test_final_identity_artifact_defaults_to_exact_requested_size(monkeypatch):
+    monkeypatch.delenv('WEBBDUCK_KREA2_IDENTITY_UPSCALE', raising=False)
+
+    def should_not_be_called(*_args, **_kwargs):
+        raise AssertionError('Real-ESRGAN path should not be called by the default policy')
+
+    upscale = _final_size_upscaler(should_not_be_called)
+    source = Image.new('RGB', (672, 1008), 'white')
+    result, note = upscale(
+        source,
+        requested=(1024, 1536),
+        effective=(672, 1008),
+    )
+
+    assert result.size == (1024, 1536)
+    assert note['upscaler'] == 'lanczos'
+    assert note['policy'] == 'exact-requested-size'
+    assert note['from'] == [672, 1008]
+    assert note['to'] == [1024, 1536]
+
+
+def test_final_identity_artifact_can_keep_native_size_for_debugging(monkeypatch):
+    monkeypatch.setenv('WEBBDUCK_KREA2_IDENTITY_UPSCALE', '0')
+    upscale = _final_size_upscaler(lambda image, **_kwargs: (image, {'unexpected': True}))
+    source = Image.new('RGB', (672, 1008), 'white')
+    result, note = upscale(
+        source,
+        requested=(1024, 1536),
+        effective=(672, 1008),
+    )
+    assert result.size == (672, 1008)
+    assert note is None
+
+
+def test_final_identity_artifact_can_opt_into_realesrgan(monkeypatch):
+    monkeypatch.setenv('WEBBDUCK_KREA2_IDENTITY_UPSCALE', 'realesrgan')
+    called = {}
+
+    def original(image, *, requested, effective):
+        called['requested'] = requested
+        called['effective'] = effective
+        return image.resize(requested), {'upscaler': 'realesrgan-test'}
+
+    upscale = _final_size_upscaler(original)
+    source = Image.new('RGB', (672, 1008), 'white')
+    result, note = upscale(
+        source,
+        requested=(1024, 1536),
+        effective=(672, 1008),
+    )
+    assert result.size == (1024, 1536)
+    assert note['upscaler'] == 'realesrgan-test'
+    assert called['requested'] == (1024, 1536)
