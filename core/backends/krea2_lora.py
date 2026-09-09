@@ -1,20 +1,17 @@
 """Ordinary Krea 2 LoRA support shared by the host, catalog, and worker.
 
-WebbDuck keeps the public LoRA contract architecture-neutral: Studio submits a
-registry name + weight, the host resolves that name to a local safetensors file,
-and the isolated Krea worker applies the low-rank residual before any group
-CPU-offload hooks are installed.
+Studio submits the same name/weight LoRA contract for every model family. This
+module resolves Krea-compatible files, converts common Krea exporter layouts,
+and applies the low-rank residual before Krea's group-offload hooks are built.
 
-The Krea worker can preserve base checkpoint linears as FP8. Those linears have
-one compact residual slot for the identity-edit adapter; ordinary user LoRAs
-must be able to coexist with it. ``install_worker_lora_patch`` therefore makes
-that slot additive: multiple LoRAs targeting the same projection are combined
-into one mathematically-equivalent low-rank residual by concatenating ranks.
-That keeps the existing FP8/native-FP8 execution paths unchanged.
+The custom Krea worker may keep base linears in FP8. Multiple user LoRAs and the
+Krea Identity adapter therefore share one additive low-rank residual per FP8
+projection, preserving the existing storage/native-FP8 execution paths.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 import math
 from pathlib import Path
 from typing import Any
@@ -25,27 +22,21 @@ _KREA_HIDDEN_SIZE = 6144
 
 
 def _path_has_krea_namespace(path: Path) -> bool:
-    """Treat an explicit ``lora/krea2`` style directory as authoritative."""
     lowered = {part.lower() for part in Path(path).parts}
     return bool(lowered & _KREA_NAMESPACE_NAMES)
 
 
-def _safetensors_looks_krea2(path: Path) -> bool:
-    """Best-effort Krea 2 identification without loading full adapter payloads.
-
-    Original Krea/Comfy and AI-Toolkit exports have distinctive ``blocks.*`` +
-    ``attn.wq``/``txtfusion`` names. Native Diffusers Krea LoRAs share generic
-    ``transformer.transformer_blocks`` names with FLUX, but Krea 2's transformer
-    hidden width is 6144, which cleanly distinguishes the common attention LoRA
-    tensors from FLUX.1 (3072) and FLUX.2 Klein (4096).
-    """
+@lru_cache(maxsize=1024)
+def _cached_krea2_signature(path_text: str, size: int, mtime_ns: int) -> bool:
+    """Inspect one safetensors header; size/mtime make cache invalidation cheap."""
+    del size, mtime_ns  # part of the cache key, not otherwise needed
+    path = Path(path_text)
     try:
         from safetensors import safe_open
 
         with safe_open(str(path), framework="pt", device="cpu") as handle:
             keys = list(handle.keys())
             metadata = handle.metadata() or {}
-
             meta_text = " ".join(str(value) for value in metadata.values()).lower()
             if "krea2" in meta_text or "krea-2" in meta_text or "krea 2" in meta_text:
                 return True
@@ -65,9 +56,9 @@ def _safetensors_looks_krea2(path: Path) -> bool:
             if "time_mod_proj" in joined and ("img_in" in joined or "txt_in" in joined):
                 return True
 
-            # Native Diffusers/PEFT exports are architecture-neutral by key
-            # spelling. Inspect only a small low-rank attention factor's shape;
-            # this avoids materializing a base model or the complete adapter.
+            # Native Diffusers Krea LoRAs share generic transformer key names
+            # with FLUX. The attention A factor exposes Krea's 6144 hidden width
+            # without materializing a base model or the complete adapter.
             for key in keys:
                 lowered = key.lower()
                 if (
@@ -87,19 +78,84 @@ def _safetensors_looks_krea2(path: Path) -> bool:
     return False
 
 
+def _safetensors_looks_krea2(path: Path) -> bool:
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return False
+    return _cached_krea2_signature(str(Path(path).resolve()), int(stat.st_size), int(stat.st_mtime_ns))
+
+
 def is_krea2_lora_entry(entry: dict[str, Any] | None) -> bool:
-    """Return whether a registry row belongs to Krea 2."""
+    """Return whether a registry row belongs to Krea 2.
+
+    Namespace is authoritative. For legacy registry rows, inspect only unknown
+    or transformer-family labels; this avoids touching every SDXL LoRA header
+    each time the Krea LoRA menu opens.
+    """
     if not isinstance(entry, dict):
         return False
     arch = str(entry.get("arch") or "").strip().lower()
     if arch in {"krea", "krea2", "krea-2"}:
         return True
+
     path = Path(str(entry.get("path") or "")).expanduser()
     if not path.is_file():
         return False
     if _path_has_krea_namespace(path):
         return True
+    if arch not in {"", "unknown", "flux", "flux1", "flux2"}:
+        return False
     return _safetensors_looks_krea2(path)
+
+
+def discover_krea2_loras() -> dict[str, dict[str, Any]]:
+    """Discover Krea LoRAs even when the legacy scanner mislabeled/skipped them.
+
+    Older WebbDuck registry detection predates Krea 2 and can call native Krea
+    transformer LoRAs FLUX or omit AI-Toolkit exports entirely. The Krea catalog
+    therefore reconciles the normal registry with safetensors under LORA_ROOT.
+    Header signature checks are cached by path/size/mtime.
+    """
+    from models import registry
+
+    found: dict[str, dict[str, Any]] = {}
+    for name, cfg in registry.LORA_REGISTRY.items():
+        if is_krea2_lora_entry(cfg):
+            row = dict(cfg)
+            row["arch"] = "krea2"
+            found[str(name)] = row
+
+    root = Path(registry.LORA_ROOT).expanduser()
+    if not root.exists():
+        return found
+
+    try:
+        candidates = list(root.rglob("*.safetensors"))
+    except OSError:
+        candidates = []
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if not (_path_has_krea_namespace(path) or _safetensors_looks_krea2(path)):
+            continue
+        name = path.stem
+        if name in found:
+            continue
+        trigger = None
+        try:
+            trigger = registry.detect_lora_trigger(path)
+        except Exception:
+            pass
+        found[name] = {
+            "path": path,
+            "arch": "krea2",
+            "trigger": trigger,
+            "weight": 1.0,
+            "description": "Auto-discovered Krea 2 LoRA",
+            "source": "local",
+        }
+    return found
 
 
 def resolve_krea2_loras(raw_loras: Any) -> list[dict[str, Any]]:
@@ -107,8 +163,7 @@ def resolve_krea2_loras(raw_loras: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_loras, list) or not raw_loras:
         return []
 
-    from models.registry import LORA_REGISTRY
-
+    available = discover_krea2_loras()
     resolved: list[dict[str, Any]] = []
     for index, raw in enumerate(raw_loras):
         if isinstance(raw, str):
@@ -122,20 +177,18 @@ def resolve_krea2_loras(raw_loras: Any) -> list[dict[str, Any]]:
 
         if not name:
             raise ValueError(f"Invalid Krea LoRA entry at index {index}: missing name")
-        registry_entry = LORA_REGISTRY.get(name)
+        registry_entry = available.get(name)
         if registry_entry is None:
-            raise ValueError(f"Unknown LoRA: {name}")
-        if not is_krea2_lora_entry(registry_entry):
-            arch = str(registry_entry.get("arch") or "unknown")
-            raise ValueError(f"LoRA '{name}' targets {arch}, not Krea 2.")
+            raise ValueError(
+                f"LoRA '{name}' is not a recognized Krea 2 adapter. Put Krea adapters under "
+                "the LoRA root's krea2/ folder when exporter metadata is ambiguous."
+            )
 
         path = Path(str(registry_entry.get("path") or "")).expanduser()
         if not path.is_file():
             raise FileNotFoundError(f"Krea LoRA file not found for '{name}': {path}")
 
-        weight_raw = requested_weight
-        if weight_raw is None:
-            weight_raw = registry_entry.get("weight", 1.0)
+        weight_raw = requested_weight if requested_weight is not None else registry_entry.get("weight", 1.0)
         try:
             weight = float(weight_raw)
         except (TypeError, ValueError) as exc:
@@ -155,7 +208,6 @@ def resolve_krea2_loras(raw_loras: Any) -> list[dict[str, Any]]:
 
 
 def lora_trigger_phrase(loras: list[dict[str, Any]]) -> str:
-    """Return unique trigger words as plain text for Krea's Qwen encoder."""
     triggers: list[str] = []
     for entry in loras:
         trigger = str(entry.get("trigger") or "").strip()
@@ -193,7 +245,6 @@ def _strip_known_prefixes(module: str) -> str:
 
 
 def _unflatten_kohya_module(module: str) -> str:
-    """Best-effort musubi/Kohya ``lora_unet_*`` module-name recovery."""
     value = str(module)
     if value.startswith("lora_unet_"):
         value = value[len("lora_unet_"):]
@@ -224,8 +275,8 @@ def _map_krea_module(module: str) -> str:
     if value.startswith("lora_unet_"):
         value = _unflatten_kohya_module(value)
 
-    # Match Diffusers' current Krea 2 converter for AI-Toolkit's abbreviated
-    # standalone Sequential/module names.
+    # Same standalone mapping as Diffusers' current Krea 2 converter for
+    # AI-Toolkit's abbreviated Sequential/module names.
     standalone_map = {
         "first": "img_in",
         "last.linear": "final_layer.linear",
@@ -260,7 +311,6 @@ def _map_krea_module(module: str) -> str:
 
 
 def _split_lora_suffix(key: str) -> tuple[str | None, str | None]:
-    """Split exporter-specific leaf syntax into module + WebbDuck suffix."""
     normalized = str(key).replace(".lora_A.default.weight", ".lora_A.weight")
     normalized = normalized.replace(".lora_B.default.weight", ".lora_B.weight")
     normalized = normalized.replace(".lora_down.default.weight", ".lora_down.weight")
@@ -281,14 +331,7 @@ def _split_lora_suffix(key: str) -> tuple[str | None, str | None]:
 
 
 def convert_krea2_lora_state(state_dict: dict[str, Any]) -> dict[str, Any]:
-    """Normalize common Krea 2 LoRA exports to transformer-relative PEFT keys.
-
-    Supported layouts include native Diffusers/PEFT, original Krea/Comfy
-    ``diffusion_model.*``, Ostris AI-Toolkit ``base_model.model.*``, dotted
-    Kohya suffixes, and best-effort flattened ``lora_unet_*`` (musubi/Kohya)
-    module names. Unknown *LoRA weight* tensors fail loudly so WebbDuck never
-    reports an adapter as loaded when it was silently ignored.
-    """
+    """Normalize common Krea 2 LoRA exports to transformer-relative PEFT keys."""
     converted: dict[str, Any] = {}
     unresolved: list[str] = []
 
@@ -412,13 +455,7 @@ def install_krea2_user_loras(
 
 
 def install_worker_lora_patch(base_module: Any) -> None:
-    """Install ordinary LoRAs immediately after each Krea transformer load.
-
-    This placement is deliberate: both normal execution and the safe OOM retry
-    create transformers through ``_load_pipeline``. Installing here guarantees
-    the same adapters survive retries and, crucially, registers FP8 residual
-    buffers before diffusers group-offload snapshots module params/buffers.
-    """
+    """Install ordinary LoRAs immediately after each Krea transformer load."""
     if bool(getattr(base_module, "_webbduck_user_lora_patch", False)):
         return
 
