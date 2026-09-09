@@ -20,10 +20,13 @@ from core.backends.krea2_identity import (
     WEIGHT_SPECS,
     KreaIdentityError,
     analyze_lora_keys,
+    apply_identity_perf_overrides,
     combined_token_count,
     convert_lora_keys,
     edit_position_ids,
     edit_target_size,
+    edit_transformer_forward,
+    edit_transformer_forward_paired,
     grid_dims,
     grounded_template,
     identity_repo,
@@ -577,3 +580,175 @@ def test_persona_ui_emits_krea_payload_keys_and_single_anchor_ref():
     assert "_ipAdapterRefs = [url];" in app_source
     # FaceID-only fields must not leak into the Krea payload.
     assert "payload.repo = 'h94/IP-Adapter-FaceID'" in app_source
+
+
+# --------------------------------------------------------------------------------------
+# Paired (cond+uncond) streaming forward + A/B performance overrides
+# --------------------------------------------------------------------------------------
+
+class _FakeBlock(torch.nn.Module):
+    """Per-token block that uses temb_mod scalar conditioning; ignores rotary/mask."""
+
+    def __init__(self, hid: int) -> None:
+        super().__init__()
+        self.fc = torch.nn.Linear(hid, hid)
+
+    def forward(self, x, temb_mod, rotary, attention_mask):
+        return torch.tanh(self.fc(x)) * temb_mod
+
+
+class _FakeTimeEmbed(torch.nn.Module):
+    def __init__(self, hid: int) -> None:
+        super().__init__()
+        self.fc = torch.nn.Linear(1, hid)
+
+    def forward(self, timestep, dtype=None):
+        return torch.nn.functional.silu(self.fc(timestep.float().unsqueeze(-1)))
+
+
+class _FakeTextFusion(torch.nn.Module):
+    """Collapses the ``(B, T, num_layers, hid)`` VLM layer axis like the real fusion."""
+
+    def __init__(self, hid: int) -> None:
+        super().__init__()
+        self.fc = torch.nn.Linear(hid, hid)
+
+    def forward(self, prompt_embeds, attention_mask=None):
+        return self.fc(torch.mean(prompt_embeds, dim=2))
+
+
+class _FakeFinalLayer(torch.nn.Module):
+    """``final_layer(hidden, temb)`` like the real Krea output layer."""
+
+    def __init__(self, hid: int) -> None:
+        super().__init__()
+        self.fc = torch.nn.Linear(hid, hid)
+
+    def forward(self, hidden, temb):
+        return self.fc(hidden)
+
+
+class _FakeKreaTransformer(torch.nn.Module):
+    """Mini stand-in for ``Krea2Transformer2DModel`` exposing the same surface.
+
+    Prompt embeddings are ``(B, T, num_layers, hid)``; ``text_fusion`` collapses
+    the layer axis like the real Krea multi-layer fusion. Blocks are streamed
+    like the real model (per-block ``.to()`` in the paired path).
+    """
+
+    def __init__(self, hid: int = 16, num_blocks: int = 3) -> None:
+        super().__init__()
+        self.hid = hid
+        self.time_embed = _FakeTimeEmbed(hid)
+        self.time_mod_proj = torch.nn.Linear(hid, hid)
+        self.text_fusion = _FakeTextFusion(hid)
+        self.txt_in = torch.nn.Linear(hid, hid)
+        self.img_in = torch.nn.Linear(hid, hid)
+        self.rotary_emb = torch.nn.Identity()
+        self.transformer_blocks = torch.nn.ModuleList(
+            [_FakeBlock(hid) for _ in range(num_blocks)]
+        )
+        self.final_layer = _FakeFinalLayer(hid)
+
+
+def _build_toy_inputs(hid: int, text_pos: int, text_neg: int, src_tokens: int, tgt_tokens: int):
+    torch.manual_seed(0)
+    latents = torch.randn(1, tgt_tokens, hid)
+    src = torch.randn(1, src_tokens, hid) * 0.5
+    prompt_pos = torch.randn(1, text_pos, 4, hid) * 0.2
+    prompt_neg = torch.randn(1, text_neg, 4, hid) * 0.2
+    mask_pos = torch.ones(1, text_pos, dtype=torch.bool)
+    mask_neg = torch.ones(1, text_neg, dtype=torch.bool)
+    ids_pos = edit_position_ids(text_pos, 4, src_tokens // 4, 1, "cpu")
+    ids_neg = edit_position_ids(text_neg, 4, src_tokens // 4, 1, "cpu")
+    timestep = torch.tensor([0.5])
+    return dict(
+        latents=latents,
+        src_packed=src,
+        prompt_embeds_pos=prompt_pos,
+        prompt_mask_pos=mask_pos,
+        position_ids_pos=ids_pos,
+        prompt_embeds_neg=prompt_neg,
+        prompt_mask_neg=mask_neg,
+        position_ids_neg=ids_neg,
+        timestep=timestep,
+    )
+
+
+def test_paired_forward_matches_two_single_forwards():
+    m = _FakeKreaTransformer()
+    row = _build_toy_inputs(m.hid, text_pos=11, text_neg=7, src_tokens=8, tgt_tokens=8)
+
+    out_pos_single = edit_transformer_forward(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"],
+        row["timestep"], row["position_ids_pos"], ref_boost=1.5,
+    )
+    out_neg_single = edit_transformer_forward(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"],
+        row["timestep"], row["position_ids_neg"], ref_boost=1.5,
+    )
+    out_pos, out_neg = edit_transformer_forward_paired(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"], row["position_ids_pos"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"], row["position_ids_neg"],
+        row["timestep"], ref_boost=1.5, device="cpu",
+    )
+    assert out_pos.shape == out_pos_single.shape
+    assert out_neg.shape == out_neg_single.shape
+    assert torch.allclose(out_pos, out_pos_single, atol=1e-5)
+    assert torch.allclose(out_neg, out_neg_single, atol=1e-5)
+
+
+def test_paired_forward_maskless_boost_path():
+    m = _FakeKreaTransformer(num_blocks=2)
+    row = _build_toy_inputs(m.hid, text_pos=9, text_neg=5, src_tokens=4, tgt_tokens=4)
+    out_pos, _ = edit_transformer_forward_paired(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"], row["position_ids_pos"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"], row["position_ids_neg"],
+        row["timestep"], ref_boost=1.0, device="cpu",
+    )
+    assert torch.isfinite(out_pos).all()
+
+
+def test_paired_forward_shared_text_length_rows():
+    m = _FakeKreaTransformer()
+    row = _build_toy_inputs(m.hid, text_pos=8, text_neg=8, src_tokens=8, tgt_tokens=8)
+    out_p, out_n = edit_transformer_forward_paired(
+        m, row["latents"], row["src_packed"],
+        row["prompt_embeds_pos"], row["prompt_mask_pos"], row["position_ids_pos"],
+        row["prompt_embeds_neg"], row["prompt_mask_neg"], row["position_ids_neg"],
+        row["timestep"], ref_boost=2.0, device="cpu",
+    )
+    # Identical prompt rows must give identical predictions even in a shared stream.
+    assert torch.allclose(out_p, out_n, atol=1e-5)
+
+
+def test_perf_overrides_noop_without_env(monkeypatch):
+    for key in (
+        "WEBBDUCK_KREA2_IDENTITY_STEPS",
+        "WEBBDUCK_KREA2_IDENTITY_GUIDANCE",
+        "WEBBDUCK_KREA2_IDENTITY_CFG_FREE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    assert apply_identity_perf_overrides(steps=28, guidance=7.5) == (28, 7.5)
+
+
+def test_perf_overrides_steps_and_guidance(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_STEPS", "12")
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_GUIDANCE", "0.5")
+    assert apply_identity_perf_overrides(steps=28, guidance=4.5) == (12, 0.5)
+
+
+def test_perf_overrides_cfg_free(monkeypatch):
+    monkeypatch.delenv("WEBBDUCK_KREA2_IDENTITY_STEPS", raising=False)
+    monkeypatch.delenv("WEBBDUCK_KREA2_IDENTITY_GUIDANCE", raising=False)
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_CFG_FREE", "1")
+    assert apply_identity_perf_overrides(steps=28, guidance=7.5) == (28, 0.0)
+
+
+def test_perf_overrides_cfg_free_edge_value(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_KREA2_IDENTITY_CFG_FREE", "0")
+    assert apply_identity_perf_overrides(steps=28, guidance=7.5) == (28, 7.5)

@@ -74,7 +74,7 @@ Before denoising WebbDuck measures:
 
 `free VRAM >= stored transformer size + activation reserve`
 
-Otherwise CUDA/ROCm uses transformer-only block group offload. CUDA uses streamed single-block prefetch; ROCm currently uses the conservative synchronous path. Dense models can become resident automatically on larger cards when the same headroom rule passes.
+Otherwise CUDA/ROCm uses transformer-only block group offload with **synchronous** transfers. Streamed block prefetch (`use_stream=True`) was abandoned for both FLUX.2 and Krea: after a manual per-block forward the streamed hooks never return the block's weights, so they accumulate ~one block per turn and the job OOMs mid-denoise regardless of resolution. Synchronous block offload returns every block and a 768x768 image completes reliably on 16 GB. Dense models can become resident automatically on larger cards when the same headroom rule passes.
 
 This means two machines with the same nominal GPU capacity may intentionally choose different Krea profiles.
 
@@ -102,6 +102,34 @@ These remain diagnostic escape hatches rather than required user configuration:
 - `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM=0|1`
 
 The normal product path should remain `WEBBDUCK_KREA2_OFFLOAD=auto`.
+
+## Identity edit cost and tuning
+
+Identity edits are the expensive Krea case: every guidance-enabled denoise step
+runs **two** full transformer forwards (CFG positive + negative), and each
+forward streams all blocks CPU<->GPU. A default Raw identity image at 28 steps
+is therefore ~56 forwarded streams on top of the grounded Qwen3-VL encode. Low
+VRAM (~6 GB during identity editing) is by design — only a couple of blocks are
+resident — and does not predict speed.
+
+Identity-specific (no effect on text2img):
+
+- **Paired block streaming** (`WEBBDUCK_KREA2_IDENTITY_PAIRED=0` to disable;
+  default on for CUDA): `edit_transformer_forward_paired` loads each
+  transformer block once per step and runs the CFG-positive and CFG-negative
+  rows through it before offloading — identical math to two separate forwards,
+  half the block-transfer/Python churn. `_configure_execution` reports the
+  `paired-block` mode.
+- `WEBBDUCK_KREA2_IDENTITY_STEPS=<int>` — override identity denoise steps.
+- `WEBBDUCK_KREA2_IDENTITY_GUIDANCE=<float>` — override the request cfg for
+  identity only; `0` (or negative) skips the unconditional forward altogether
+  (single forward per step).
+- `WEBBDUCK_KREA2_IDENTITY_CFG_FREE=1` — shorthand for guidance `0`.
+
+These knobs exist so the two dominant levers (drop CFG for identity; cut
+identity steps) can be A/B'd on live hardware without code changes. Steps and
+CFG affect output character, so validate before promoting any value to a
+default.
 
 ## Measurements
 

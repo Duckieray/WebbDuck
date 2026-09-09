@@ -40,6 +40,33 @@ DEFAULT_REPO = "conradlocke/krea2-identity-edit"
 DEFAULT_WEIGHT_FILE = "krea2_identity_edit_v1_2.safetensors"
 
 
+def apply_identity_perf_overrides(steps: int, guidance: float) -> tuple[int, float]:
+    """Identity-only A/B performance overrides (env-gated; default: no change).
+
+    Each identity run pays for ``steps`` x (CFG rows) full transformer forwards
+    of a ~30B fp8 model streamed over PCIe, so GPU work scales with both knobs.
+    These overrides tune them *without touching the shared text2img path* for
+    side-by-side A/B on live hardware:
+
+    * ``WEBBDUCK_KREA2_IDENTITY_STEPS`` — int override for identity denoise steps;
+    * ``WEBBDUCK_KREA2_IDENTITY_GUIDANCE`` — float override replacing the request
+      cfg; ``<= 0`` skips the negative (uncond) forward entirely;
+    * ``WEBBDUCK_KREA2_IDENTITY_CFG_FREE``=1 — shorthand forcing ``guidance = 0``
+      (single forward per step).
+    """
+    import os
+
+    raw_steps = os.getenv("WEBBDUCK_KREA2_IDENTITY_STEPS")
+    if raw_steps is not None and str(raw_steps).strip():
+        steps = max(1, int(raw_steps))
+    raw_guidance = os.getenv("WEBBDUCK_KREA2_IDENTITY_GUIDANCE")
+    if raw_guidance is not None and str(raw_guidance).strip():
+        guidance = float(raw_guidance)
+    if os.getenv("WEBBDUCK_KREA2_IDENTITY_CFG_FREE") == "1":
+        guidance = 0.0
+    return steps, guidance
+
+
 def _probe_mem(stage: str, **shapes: Any) -> None:
     """Env-gated (``WEBBDUCK_KREA2_DEBUG_PRINT``) CUDA-stage memory probe.
 
@@ -852,6 +879,101 @@ def edit_transformer_forward(
     out = m.final_layer(hidden, temb)
     _probe_mem("final_layer out")
     return out
+
+
+def edit_transformer_forward_paired(
+    transformer: Any,
+    latents: Any,
+    src_packed: Any,
+    prompt_embeds_pos: Any,
+    prompt_mask_pos: Any,
+    position_ids_pos: Any,
+    prompt_embeds_neg: Any,
+    prompt_mask_neg: Any,
+    position_ids_neg: Any,
+    timestep: Any,
+    *,
+    ref_boost: float = 1.0,
+    device: Any = None,
+) -> tuple[Any, Any]:
+    """Run positive + negative identity edits sharing one block stream per step.
+
+    Block-level group offload streams every transformer block CPU->GPU->CPU per
+    forward, so the CFG-positive + CFG-negative pair doubles that churn (28
+    steps x 2 rows = 56 full streams). This variant keeps the two rows in lock
+    step: each block is loaded once per step, applied to the positive row, then
+    the negative row, then offloaded — halving the transfer/Python-dispatch
+    overhead while running both rows as fully independent forwards (identical
+    math to two ``edit_transformer_forward`` calls, no attention coupling).
+
+    Returns ``(out_pos, out_neg)`` velocity predictions, both target-only.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    m = transformer
+    device = torch.device(device if device is not None else latents.device)
+    src = src_packed.to(device)
+    lats = latents.to(device)
+
+    temb = m.time_embed(timestep.to(device), dtype=lats.dtype)
+    temb_mod = m.time_mod_proj(F.gelu(temb, approximate="tanh"))
+
+    def _row(
+        prompt_embeds: Any,
+        prompt_mask: Any,
+        position_ids: Any,
+        combined_img: Any,
+    ) -> tuple[Any, int, Any, Any]:
+        text_attn_mask = (
+            prompt_mask[:, None, None, :] if prompt_mask is not None else None
+        )
+        enc = m.text_fusion(prompt_embeds.to(device), attention_mask=text_attn_mask)
+        enc = m.txt_in(enc)
+        hidden = torch.cat([enc, m.img_in(combined_img)], dim=1)
+        rotary = m.rotary_emb(position_ids.to(device))
+        bias = ref_boost_bias(
+            enc.shape[1],
+            src.shape[1],
+            lats.shape[1],
+            ref_boost,
+            hidden.device,
+            hidden.dtype,
+        )
+        return hidden, enc.shape[1], rotary, bias
+
+    combined_img = torch.cat([src, lats], dim=1)
+    hidden_pos, text_len_pos, rotary_pos, bias_pos = _row(
+        prompt_embeds_pos, prompt_mask_pos, position_ids_pos, combined_img
+    )
+    hidden_neg, text_len_neg, rotary_neg, bias_neg = _row(
+        prompt_embeds_neg, prompt_mask_neg, position_ids_neg, combined_img
+    )
+
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        kernel_ctx = sdpa_kernel(
+            [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
+        )
+    except Exception:
+        kernel_ctx = __import__("contextlib").nullcontext()
+
+    with kernel_ctx:
+        for block in m.transformer_blocks:
+            block = block.to(device)
+            hidden_pos = block(hidden_pos, temb_mod, rotary_pos, bias_pos)
+            hidden_neg = block(hidden_neg, temb_mod, rotary_neg, bias_neg)
+            block = block.to("cpu")
+
+    tgt_len = lats.shape[1]
+    out_pos = m.final_layer(
+        hidden_pos[:, text_len_pos:][:, -tgt_len:], temb
+    )
+    out_neg = m.final_layer(
+        hidden_neg[:, text_len_neg:][:, -tgt_len:], temb
+    )
+    return out_pos, out_neg
 
 
 # Backward-compatible alias used by tests and early wiring.

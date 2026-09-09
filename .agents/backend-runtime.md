@@ -149,6 +149,26 @@ preset default are therefore 2.0. The UI exposes one unified 0..1 Identity
 Strength slider (`adapter_scale = slider` on SDXL/FLUX; `ref_boost = 1 + 10*slider`
 on Krea), and persona presets round-trip the same mapping.
 
+### Cost breakdown and tuning (2026-09-09)
+
+Per-step cost is dominated by **two full transformer forwards** (CFG cond +
+uncond — any `guidance > 0` encodes the negative prompt, and the UI cfg passes
+through) over a ~30B fp8 model whose blocks are streamed CPU<->GPU per forward.
+Low VRAM (~6 GB) is by design, not headroom.
+
+- **Paired streaming (`edit_transformer_forward_paired`):** when both CFG rows
+  run, `_denoise_one_identity` uses the `paired-block` execution mode
+  (`WEBBDUCK_KREA2_IDENTITY_PAIRED`, default on for CUDA). No accelerate hooks:
+  the transformer sits on CPU with outer modules pinned, and each block is
+  loaded once per step and applied to positive then negative hidden streams
+  before offload. Identical math to two separate forwards. Halves transfer +
+  per-block Python dispatch. `paired_oom` falls back to hook-based
+  `transformer-block`.
+- **A/B knobs (env-only, identity path only):** `WEBBDUCK_KREA2_IDENTITY_STEPS`
+  (int), `WEBBDUCK_KREA2_IDENTITY_GUIDANCE` (float; `0`/negative skips the
+  uncond forward), `WEBBDUCK_KREA2_IDENTITY_CFG_FREE=1` (= guidance 0). Applied
+  by `apply_identity_perf_overrides` right after the request defaults resolve.
+
 ## Captioning And Plugins
 
 - `core/captioning_config.py`: plugin search roots and captioner discovery.

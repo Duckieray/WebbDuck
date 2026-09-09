@@ -735,6 +735,17 @@ def _configure_execution(
         return "resident-fp8" if int(load_info.get("preserved_fp8_linears") or 0) else "resident"
 
     onload_device = torch.device(device)
+
+    # Paired-block: no accelerate hooks. The identity worker's own
+    # edit_transformer_forward_paired loads each transformer block once per
+    # step and runs BOTH the CFG-positive and CFG-negative rows through it
+    # before offloading, halving the CPU<->GPU streaming churn of the
+    # cond+uncond pair. Outer modules are pinned; blocks stay on CPU.
+    if mode in {"paired", "paired-block"}:
+        pipe.transformer.to("cpu")
+        _pin_krea_transformer_outer_modules(pipe.transformer, onload_device)
+        return "paired-block"
+
     # Streamed (use_stream=True) block offload does not return GPU blocks after
     # the manual per-block forward — each block's weights stay resident and
     # accumulate (~block_size per transformer block), OOMing mid-denoise. FLUX.2
@@ -1377,6 +1388,7 @@ def _denoise_one_identity(
     index: int,
     total_denoise_steps: int,
     report: Any,
+    paired_block: bool = False,
 ) -> torch.Tensor:
     """Denoise one identity edit with ``[text | source(frame=1) | target(frame=0)]``.
 
@@ -1465,17 +1477,40 @@ def _denoise_one_identity(
                     ref_boost=ref_boost,
                 )
                 if neg_gpu is not None:
-                    neg_pred = edit_transformer_forward(
-                        pipe.transformer,
-                        latents,
-                        src_gpu,
-                        neg_gpu,
-                        neg_mask_gpu,
-                        timestep,
-                        neg_position_ids,
-                        ref_boost=ref_boost,
-                    )
-                    noise_pred = noise_pred + float(guidance) * (noise_pred - neg_pred)
+                    if paired_block:
+                        from core.backends.krea2_identity import (
+                            edit_transformer_forward_paired,
+                        )
+
+                        out_pos, out_neg = edit_transformer_forward_paired(
+                            pipe.transformer,
+                            latents,
+                            src_gpu,
+                            prompt_gpu,
+                            mask_gpu,
+                            position_ids,
+                            neg_gpu,
+                            neg_mask_gpu,
+                            neg_position_ids,
+                            timestep,
+                            ref_boost=ref_boost,
+                            device=device,
+                        )
+                        noise_pred = out_pos + float(guidance) * (out_pos - out_neg)
+                        del out_pos, out_neg
+                    else:
+                        neg_pred = edit_transformer_forward(
+                            pipe.transformer,
+                            latents,
+                            src_gpu,
+                            neg_gpu,
+                            neg_mask_gpu,
+                            timestep,
+                            neg_position_ids,
+                            ref_boost=ref_boost,
+                        )
+                        noise_pred = noise_pred + float(guidance) * (noise_pred - neg_pred)
+                        del neg_pred
 
                 latents = pipe.scheduler.step(
                     noise_pred, t, latents, return_dict=False
@@ -1507,6 +1542,7 @@ def _run_identity(
     instead of silently rendering ordinary text-to-image output.
     """
     from core.backends.krea2_identity import (
+        apply_identity_perf_overrides,
         edit_target_size,
         resolve_reference_path,
     )
@@ -1522,6 +1558,7 @@ def _run_identity(
     prompt = str(request["prompt"])
     steps = max(1, int(request.get("steps") or 10))
     guidance = float(request.get("guidance") if request.get("guidance") is not None else 0.0)
+    steps, guidance = apply_identity_perf_overrides(steps, guidance)
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") or 0)
     ref_boost = float(identity.get("ref_boost") if identity.get("ref_boost") is not None else 2.0)
@@ -1636,11 +1673,20 @@ def _run_identity(
 
     report("Selecting Krea GPU profile", 0.52)
     setup_started = time.perf_counter()
+    # Paired-block streams each transformer block once per step for BOTH CFG
+    # rows (identity default when hardware is CUDA); WEBBDUCK_KREA2_IDENTITY_PAIRED=0
+    # reverts to the hook-based transformer-block streaming.
+    paired_block = bool(
+        device == "cuda"
+        and str(os.getenv("WEBBDUCK_KREA2_IDENTITY_PAIRED", "1")).strip().lower()
+        not in {"0", "false", "off", "no"}
+    )
     execution_mode = configure_krea_identity_transformer(
         pipe,
         load_info=load_info,
         transformer_storage_gb=transformer_storage_gb,
         reserve_gb=reserve_gb,
+        mode_override="paired-block" if paired_block else None,
     )
     initial_execution_mode = execution_mode
     fallback_reason: str | None = None
@@ -1694,10 +1740,15 @@ def _run_identity(
                 index=index,
                 total_denoise_steps=total_denoise_steps,
                 report=report,
+                paired_block=paired_block,
             )
         except Exception as exc:
-            if device == "cuda" and execution_mode.startswith("resident") and _is_cuda_oom(exc):
-                fallback_reason = "resident_oom"
+            if (
+                device == "cuda"
+                and _is_cuda_oom(exc)
+                and (execution_mode.startswith("resident") or execution_mode.startswith("paired"))
+            ):
+                fallback_reason = "resident_oom" if execution_mode.startswith("resident") else "paired_oom"
                 report("VRAM changed; retrying Krea identity with safe offload", 0.57)
                 execution_mode = configure_krea_identity_transformer(
                     pipe,
@@ -1706,6 +1757,7 @@ def _run_identity(
                     reserve_gb=reserve_gb,
                     mode_override="transformer-block",
                 )
+                paired_block = False
                 latent = _denoise_one_identity(
                     pipe,
                     prompt_embeds=prompt_embeds,
