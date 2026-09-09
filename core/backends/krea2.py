@@ -40,35 +40,47 @@ def _host_total_vram_gb() -> float | None:
 def _recommended_identity_token_budget(
     total_vram_gb: float | None,
     free_vram_gb: float | None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> int | None:
-    """Bias Krea identity toward enough native pixels for coherent faces.
+    """Choose a native Krea identity target-token budget from live headroom.
 
-    The old halved text2img budget was intentionally ultra-conservative and can
-    collapse a 16 GB identity render to roughly 0.4-0.5 MP even when the card has
-    ample live headroom. Real 5070 Ti testing already showed 2688 target tokens
-    completes without OOM, so use that tier on healthy ~16 GB cards, then fall
-    back to 2048/1792 as live VRAM pressure increases.
+    Healthy ~16 GB cards now get a 3072-token high-detail tier for square /
+    portrait-oriented identity work, where facial anatomy benefits most from
+    native pixels.  The previously validated 2688 tier remains the normal
+    healthy-card fallback, then 2048/1792 as desktop VRAM pressure rises.
 
-    Explicit request-level ``identity.token_budget`` and the
-    ``WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`` env override still win; this helper
-    is only the automatic default.
+    Explicit request-level ``identity.token_budget`` and
+    ``WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`` still win.
     """
     if total_vram_gb is None or total_vram_gb <= 0:
         return None
 
     if free_vram_gb is None or free_vram_gb <= 0:
-        # Without a live-free reading, avoid assuming a desktop 16 GB card is
-        # empty enough for the aggressive tier.
         if total_vram_gb >= 15.0:
             return 2048
         return 1792 if total_vram_gb < 12.0 else 2048
 
     occupied_gb = max(0.0, total_vram_gb - free_vram_gb)
     free_fraction = free_vram_gb / total_vram_gb
+    try:
+        req_w = int(width or 0)
+        req_h = int(height or 0)
+    except (TypeError, ValueError):
+        req_w = req_h = 0
+    # Square and vertical outputs are the common portrait/persona compositions.
+    portraitish = req_w > 0 and req_h > 0 and req_h >= int(req_w * 0.90)
 
     if total_vram_gb >= 15.0:
-        # Mirrors the existing adaptive planner's notion of healthy desktop
-        # headroom rather than relying on total card capacity alone.
+        # 3072 is intentionally gated more tightly than 2688 because the edit
+        # sequence includes both source and target image tokens.
+        if (
+            portraitish
+            and free_vram_gb >= 12.5
+            and occupied_gb < 2.75
+            and free_fraction >= 0.80
+        ):
+            return 3072
         if free_vram_gb >= 11.5 and occupied_gb < 3.0 and free_fraction >= 0.74:
             return 2688
         if free_vram_gb >= 9.5 and occupied_gb < 5.5 and free_fraction >= 0.60:
@@ -91,11 +103,13 @@ def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any]
     if snapshot is None:
         return None
 
+    adapter = adapter_cfg if isinstance(adapter_cfg, dict) else {}
+
     # The branch previously shipped 2.0 as its Krea default; the current v1.2
     # reference baseline is ~4. Preserve genuinely custom values, but migrate
     # old/default-looking requests automatically.
     try:
-        raw_boost = float((adapter_cfg or {}).get("ref_boost"))
+        raw_boost = float(adapter.get("ref_boost"))
     except (TypeError, ValueError):
         raw_boost = None
     if raw_boost is None or abs(raw_boost - 2.0) < 1e-9:
@@ -106,15 +120,13 @@ def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any]
     }:
         snapshot.lora_rank = "full"
 
-    # Request-level token_budget is already in the snapshot. Preserve an
-    # explicit environment override too; otherwise choose a face-fidelity tier
-    # from live host VRAM so healthy 16 GB cards no longer default to the
-    # ultra-conservative ~1792-token envelope.
     env_budget = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET") or "").strip().lower()
     if snapshot.token_budget is None and env_budget in {"", "auto", "-1"}:
         snapshot.token_budget = _recommended_identity_token_budget(
             total_vram_gb,
             free_vram_gb,
+            width=int(settings.get("width") or 0),
+            height=int(settings.get("height") or 0),
         )
 
     token, _source = _impl._huggingface_token()
@@ -148,14 +160,21 @@ def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any]
         "max_megapixels": snapshot.max_megapixels,
         "face_crop": snapshot.face_crop,
         "token_budget": snapshot.token_budget,
-        "quality_recipe": "krea2edit-v1.2.4",
+        # Face-aware Krea settings are intentionally provider-specific but stay
+        # optional so old callers need no changes.
+        "reference_max_edge": adapter.get("reference_max_edge"),
+        "auto_face_crop": adapter.get("auto_face_crop"),
+        "face_focus": adapter.get("face_focus"),
+        "face_ref_boost": adapter.get("face_ref_boost"),
+        "background_ref_boost": adapter.get("background_ref_boost"),
+        "quality_recipe": "krea2edit-v1.2.4-face-aware",
         "grounded_required": True,
     }
 
 
 def _identity_recipe_defaults(variant: str) -> tuple[int, float]:
-    # Krea2Edit's Turbo range is roughly 8-12 steps. WebbDuck now biases the
-    # default to the face-detail end of that range rather than the speed end.
+    # Krea2Edit's Turbo range is roughly 8-12 steps. WebbDuck biases the default
+    # to the face-detail end of that range rather than the speed end.
     return (12, 0.0) if str(variant).lower() == "turbo" else (20, 3.0)
 
 
@@ -185,9 +204,6 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
                 current_steps is None
                 or default_steps is not None
                 and current_steps_int == int(default_steps)
-                # 10 was the previous WebbDuck Krea2Edit Turbo auto-default.
-                # Treat it as legacy-default-looking so existing sessions move
-                # to the new 12-step face-fidelity baseline automatically.
                 or variant == "turbo"
                 and current_steps_int == 10
             )
@@ -210,22 +226,24 @@ def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kw
             settings["cfg"] = recommended_cfg
 
         settings["krea_identity_recipe"] = {
-            "source": "krea2edit-v1.2-face-fidelity",
+            "source": "krea2edit-v1.2-face-aware",
             "variant": variant,
             "steps": int(settings.get("steps") or recommended_steps),
             "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else recommended_cfg),
             "ref_boost_default": 4.0,
+            "face_ref_boost_default": 6.0,
+            "background_ref_boost_default": 2.0,
             "grounding_px_default": 768,
             "reference_max_edge_default": 1024,
+            "auto_face_crop_default": True,
             "final_size_policy": "exact-requested-size",
         }
 
     result = _original_generate(self, descriptor, settings, **kwargs)
 
-    # The adaptive worker records the native denoise dimensions separately. For
-    # identity runs the returned artifact may be restored to the user's requested
-    # size after decode, so saved metadata should describe the artifact rather
-    # than incorrectly claiming the smaller native grid as the final image size.
+    # The adaptive worker records native denoise dimensions separately.  The
+    # returned identity artifact is restored to requested dimensions after
+    # decode, so saved metadata should describe both native and final sizes.
     if identity_active and isinstance(result, tuple) and len(result) == 2:
         images, _seed = result
         runtime = settings.get("krea_runtime")
