@@ -52,7 +52,7 @@ def test_unknown_diffusers_model_stays_unknown(tmp_path):
     assert arch == "unknown"
 
 
-def test_krea_public_descriptor_is_runnable_and_hides_routing_metadata(tmp_path):
+def test_krea_public_descriptor_is_runnable_and_exposes_lora_ui(tmp_path):
     descriptor = describe_registry_model(
         "Krea-2-Turbo",
         {
@@ -66,7 +66,7 @@ def test_krea_public_descriptor_is_runnable_and_hides_routing_metadata(tmp_path)
     assert payload["name"] == "Krea-2-Turbo"
     assert payload["capabilities"]["text2img"] is True
     assert payload["capabilities"]["img2img"] is False
-    assert payload["capabilities"]["lora"] is False
+    assert payload["capabilities"]["lora"] is True
     assert payload["defaults"]["steps"] == 8
     assert payload["defaults"]["cfg"] == 0.0
     assert payload["supported"] is True
