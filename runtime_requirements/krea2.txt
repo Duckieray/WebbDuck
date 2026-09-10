@@ -12,3 +12,6 @@ sentencepiece>=0.2.0
 protobuf>=5.29.0
 pillow>=11.0.0
 numpy>=2.0.0
+# CPU-only Haar detection for Krea identity face-focus/crop preprocessing.
+# Headless avoids pulling GUI/X11 dependencies into the isolated runtime.
+opencv-python-headless>=4.10.0,<5

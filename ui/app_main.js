@@ -979,7 +979,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-type', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-type', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale', 'ip-adapter-grounding-px', 'ip-adapter-lora-rank'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -1034,6 +1034,14 @@ function setupFormHandlers() {
     };
     updateSliderDisplay('ip-adapter-scale', 'ip-adapter-scale-value');
     updateSliderDisplay('ip-adapter-lora-scale', 'ip-adapter-lora-scale-value');
+
+    const groundingPx = byId('ip-adapter-grounding-px');
+    const groundingPxValue = byId('ip-adapter-grounding-px-value');
+    if (groundingPx && groundingPxValue) {
+        const update = () => { groundingPxValue.textContent = groundingPx.value; };
+        listen(groundingPx, 'input', update);
+        update();
+    }
 
     const promptEl = byId('prompt');
     if (promptEl) {
@@ -1254,19 +1262,30 @@ function collectFormData() {
             const payload = {
                 enabled: true,
                 type: adapterType,
-                repo: 'h94/IP-Adapter-FaceID',
-                adapter_weight: 'ip-adapter-faceid_sdxl.bin',
-                embedder: 'buffalo_l',
-                adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
-                lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
                 reference_images: refs,
-                reference_mode: 'primary_only',
                 preset_name: presetName,
             };
             if (adapterType === 'flux2_native') {
+                payload.adapter_scale = parseFloat(byId('ip-adapter-scale')?.value || 1.0);
+                payload.lora_scale = parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60);
                 payload.face_crop = byId('ip-adapter-face-crop')?.value || 'auto';
                 payload.flux2_anchor_dup = Boolean(byId('ip-adapter-anchor-dup')?.checked);
                 payload.face_focus = Boolean(byId('ip-adapter-face-focus')?.checked);
+            } else if (adapterType === 'krea2_identity_edit') {
+                const strength = parseFloat(byId('ip-adapter-scale')?.value || 0.1);
+                payload.ref_boost = Math.min(10, +(1 + 10 * strength).toFixed(2));
+                payload.grounding_px = parseInt(byId('ip-adapter-grounding-px')?.value || '768', 10);
+                payload.fit_mode = 'fit';
+                payload.lora_scale = parseFloat(byId('ip-adapter-lora-scale')?.value || 1.0);
+                const rank = byId('ip-adapter-lora-rank')?.value;
+                if (rank && rank !== 'auto') payload.lora_rank = rank;
+            } else {
+                payload.repo = 'h94/IP-Adapter-FaceID';
+                payload.adapter_weight = 'ip-adapter-faceid_sdxl.bin';
+                payload.embedder = 'buffalo_l';
+                payload.adapter_scale = parseFloat(byId('ip-adapter-scale')?.value || 1.0);
+                payload.lora_scale = parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60);
+                payload.reference_mode = 'primary_only';
             }
             formData.append('identity_adapter', JSON.stringify(payload));
         }
@@ -2803,6 +2822,18 @@ async function refreshQueuePanel() {
 let _ipAdapterRefs = [];
 let _ipAdapterPresets = {};
 
+function kreaIdentityActive() {
+    return byId('ip-adapter-type')?.value === 'krea2_identity_edit';
+}
+
+function addRefUrl(url) {
+    if (kreaIdentityActive()) {
+        _ipAdapterRefs = [url];
+    } else if (!_ipAdapterRefs.includes(url)) {
+        _ipAdapterRefs.push(url);
+    }
+}
+
 function setupIpAdapterManager() {
     const grid = byId('ip-adapter-refs-grid');
     const uploadInput = byId('ip-adapter-refs-upload-input');
@@ -2843,7 +2874,7 @@ function setupIpAdapterManager() {
                     if (idx >= 0) {
                         _ipAdapterRefs.splice(idx, 1);
                     } else {
-                        _ipAdapterRefs.push(url);
+                        addRefUrl(url);
                     }
                     syncRefsState();
                     renderGrid();
@@ -2913,7 +2944,7 @@ function setupIpAdapterManager() {
                 }
                 const data = await res.json();
                 if (data.url) {
-                    _ipAdapterRefs.push(data.url);
+                    addRefUrl(data.url);
                     uploaded++;
                 }
             } catch (err) {
@@ -2957,9 +2988,20 @@ function setupIpAdapterManager() {
         _ipAdapterRefs = Array.isArray(preset.refs) ? [...preset.refs] : [];
         syncRefsState();
         renderGrid();
-        if (preset.adapter_scale != null) {
-            byId('ip-adapter-scale').value = preset.adapter_scale;
-            byId('ip-adapter-scale-value').textContent = preset.adapter_scale;
+        if (preset.type) {
+            byId('ip-adapter-type').value = preset.type;
+        }
+        if (preset.type === 'krea2_identity_edit') {
+            // Slider holds ref_boost on a 0..1 Identity Strength scale: 0 -> 1.0, 1 -> 10.
+            if (preset.ref_boost != null) {
+                const sv = Math.min(1, Math.max(0, (+preset.ref_boost - 1) / 10));
+                byId('ip-adapter-scale').value = String(sv);
+                byId('ip-adapter-scale-value').textContent = sv.toFixed(2);
+            }
+        } else if (preset.adapter_scale != null) {
+            const sv = Math.min(1, Math.max(0, +preset.adapter_scale));
+            byId('ip-adapter-scale').value = String(sv);
+            byId('ip-adapter-scale-value').textContent = sv.toFixed(2);
         }
         if (preset.lora_scale != null) {
             byId('ip-adapter-lora-scale').value = preset.lora_scale;
@@ -2970,6 +3012,13 @@ function setupIpAdapterManager() {
         }
         if (preset.face_crop) {
             byId('ip-adapter-face-crop').value = preset.face_crop;
+        }
+        if (preset.grounding_px != null) {
+            byId('ip-adapter-grounding-px').value = preset.grounding_px;
+            byId('ip-adapter-grounding-px-value').textContent = preset.grounding_px;
+        }
+        if (preset.lora_rank) {
+            byId('ip-adapter-lora-rank').value = preset.lora_rank;
         }
         byId('ip-adapter-anchor-dup').checked = Boolean(preset.flux2_anchor_dup);
         byId('ip-adapter-face-focus').checked = Boolean(preset.face_focus);
@@ -2984,15 +3033,22 @@ function setupIpAdapterManager() {
     confirmSave.addEventListener('click', async () => {
         const name = nameInput.value.trim();
         if (!name) return;
+        const adapterType = byId('ip-adapter-type')?.value || 'faceid_sdxl';
+        const isKrea = adapterType === 'krea2_identity_edit';
+        const strength = parseFloat(byId('ip-adapter-scale')?.value || (isKrea ? 0.1 : 1.0));
         const payload = {
             name,
-            type: byId('ip-adapter-type')?.value || 'faceid_sdxl',
+            type: adapterType,
             refs: _ipAdapterRefs,
-            adapter_scale: parseFloat(byId('ip-adapter-scale')?.value || 1.0),
+            adapter_scale: Number(strength.toFixed(2)),
             lora_scale: parseFloat(byId('ip-adapter-lora-scale')?.value || 0.60),
             face_crop: byId('ip-adapter-face-crop')?.value || 'auto',
             flux2_anchor_dup: Boolean(byId('ip-adapter-anchor-dup')?.checked),
             face_focus: Boolean(byId('ip-adapter-face-focus')?.checked),
+            ref_boost: isKrea ? Math.min(10, +(1 + 10 * strength).toFixed(2)) : Number(strength.toFixed(2)),
+            grounding_px: parseInt(byId('ip-adapter-grounding-px')?.value || '768', 10),
+            fit_mode: 'fit',
+            lora_rank: byId('ip-adapter-lora-rank')?.value || 'auto',
         };
         try {
             const res = await fetch('/ip-adapter/presets', {

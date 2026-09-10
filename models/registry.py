@@ -113,14 +113,27 @@ def detect_arch(path: Path) -> str | None:
 
 
 def _lora_namespace_arch(lora_path: Path) -> str | None:
-    """Reserve explicit LoRA subdirectories for non-image model families."""
-    try:
-        relative = lora_path.resolve().relative_to(LORA_ROOT.resolve())
-    except (OSError, ValueError):
-        return None
-    if not relative.parts:
+    """Reserve explicit LoRA subdirectories for non-image model families.
+
+    Subdirectory names win over safetensors-key heuristics for adapters whose
+    key layout is ambiguous (e.g. Krea and LTX LoRAs). The relative path is
+    computed against the *unresolved* path first so that arch namespaces that
+    are symlinked outside ``LORA_ROOT`` (e.g. a shared ``ltx`` drive) are still
+    recognized; ``resolve()`` is used only as a fallback for callers that pass
+    paths that are not literally under the root.
+    """
+    root = LORA_ROOT.resolve()
+    relative = None
+    for candidate in (lora_path, lora_path.resolve()):
+        try:
+            relative = candidate.relative_to(root)
+            break
+        except (OSError, ValueError):
+            continue
+    if relative is None or not relative.parts:
         return None
     return {
+        "krea": "krea2",
         "ltx": "ltx25",
     }.get(relative.parts[0].lower())
 

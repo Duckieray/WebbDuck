@@ -1,420 +1,285 @@
-"""Krea 2 image backend executed in an isolated Python runtime."""
-
+"""Krea backend entry module with identity-quality defaults layered in."""
 from __future__ import annotations
 
-import json
 import os
-import subprocess
-import tempfile
-import time
-from pathlib import Path
+import sys
 from typing import Any
 
-from PIL import Image
+from core.backends import krea2_host_impl as _impl
+from core.backends import krea2_identity as _identity
 
-from core.backends.base import GenerationBackend, backend_resolver
-from core.backends.runtime_probe import probe_python_runtime
-from core.exceptions import GenerationCancelledError
-from core.provider_credentials import resolve_provider_token
-from models.model_descriptor import ModelDescriptor
-
-
-def _runtime_python() -> str:
-    configured = str(os.getenv("WEBBDUCK_KREA2_PYTHON") or "").strip()
-    if configured:
-        return configured
-    runtime_home = Path(
-        os.getenv("WEBBDUCK_RUNTIME_HOME", "~/.local/share/webbduck/runtimes")
-    ).expanduser()
-    suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
-    return str(runtime_home / "krea2" / suffix)
+# Current upstream v1.2 likeness baseline. Functions defined in krea2_identity
+# resolve this module global at call time, so changing it here fixes API/default
+# requests without duplicating the full identity contract module.
+_identity.DEFAULT_REF_BOOST = 4.0
 
 
-def _component_source(variant: str) -> str:
-    explicit = str(os.getenv("WEBBDUCK_KREA2_COMPONENT_MODEL") or "").strip()
-    if explicit:
-        return explicit
-    if variant == "turbo":
-        return str(os.getenv("WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL") or "krea/Krea-2-Turbo")
-    return str(os.getenv("WEBBDUCK_KREA2_BASE_COMPONENT_MODEL") or "krea/Krea-2-Raw")
-
-
-def _huggingface_token() -> tuple[str, str | None]:
-    """Resolve WebbDuck Settings/env credentials, then honor normal HF CLI auth."""
-    token, source = resolve_provider_token("huggingface")
-    if token:
-        return token, source
+def _host_vram_gb() -> tuple[float | None, float | None]:
+    """Return (total, free) CUDA VRAM in GiB when the host can query it."""
     try:
-        from huggingface_hub import get_token
+        import torch
 
-        token = str(get_token() or "").strip()
-    except Exception:
-        token = ""
-    return (token, "huggingface-cli") if token else ("", None)
-
-
-def _worker_environment() -> dict[str, str]:
-    env = dict(os.environ)
-    token, _source = _huggingface_token()
-    if token:
-        env["HF_TOKEN"] = token
-    return env
-
-
-def _component_access_error(
-    component_source: str,
-    exc: Exception,
-    *,
-    token_configured: bool,
-) -> RuntimeError:
-    text = str(exc or exc.__class__.__name__)
-    lowered = text.lower()
-    repo_url = f"https://huggingface.co/{component_source}"
-
-    if "403" in lowered or "gated" in lowered or "restricted" in lowered:
-        if token_configured:
-            return RuntimeError(
-                f"Krea 2 support components are gated on Hugging Face and the configured token is not "
-                f"authorized for {component_source}. Accept the Krea 2 Community License for that model "
-                f"at {repo_url}, then retry. The selected local checkpoint does not need to be re-downloaded."
-            )
-        return RuntimeError(
-            f"Krea 2 support components are gated on Hugging Face. Accept the Krea 2 Community License "
-            f"for {component_source} at {repo_url}, then configure a Hugging Face token in WebbDuck "
-            "Settings. The selected local checkpoint does not need to be re-downloaded."
-        )
-
-    if "401" in lowered or "unauthorized" in lowered or "invalid token" in lowered:
-        return RuntimeError(
-            f"Hugging Face rejected the credentials needed for Krea 2 support components ({component_source}). "
-            "Replace the Hugging Face token in WebbDuck Settings and make sure the Krea 2 Community License "
-            f"has been accepted at {repo_url}."
-        )
-
-    if "offline" in lowered or "localentrynotfound" in lowered or "local entry" in lowered:
-        return RuntimeError(
-            f"Krea 2 needs support components from {component_source}, but they are not available in the "
-            "local Hugging Face cache while offline. Cache the licensed support-component repository first "
-            "or set WEBBDUCK_KREA2_COMPONENT_MODEL to a complete local Diffusers component directory."
-        )
-
-    return RuntimeError(
-        f"Unable to verify Krea 2 support components from {component_source}: {text}"
-    )
-
-
-def _preflight_component_access(component_source: str) -> None:
-    """Verify a single-file Krea checkpoint can obtain its non-transformer assets.
-
-    This intentionally downloads at most tiny JSON configuration files. It does
-    not fetch model weights. The purpose is to detect gated/license/token failures
-    before the expensive Krea transformer scaffold/overlay path starts.
-    """
-    local = Path(component_source).expanduser()
-    if local.exists():
-        if not local.is_dir():
-            raise RuntimeError(
-                "WEBBDUCK_KREA2_COMPONENT_MODEL must point to a complete local Diffusers directory, "
-                f"not a file: {local}"
-            )
-        required = (
-            local / "model_index.json",
-            local / "transformer" / "config.json",
-        )
-        missing = [str(path) for path in required if not path.is_file()]
-        if missing:
-            raise RuntimeError(
-                "The configured local Krea 2 component directory is incomplete. Missing: "
-                + ", ".join(missing)
-            )
-        return
-
-    token, _source = _huggingface_token()
-    try:
-        from huggingface_hub import hf_hub_download
-
-        for filename in ("model_index.json", "transformer/config.json"):
-            hf_hub_download(
-                repo_id=component_source,
-                filename=filename,
-                token=token or None,
-            )
-    except Exception as exc:
-        raise _component_access_error(
-            component_source,
-            exc,
-            token_configured=bool(token),
-        ) from exc
-
-
-def _worker_error(
-    result: dict[str, Any],
-    log_lines: list[str],
-    returncode: int | None,
-) -> RuntimeError:
-    detail = str(result.get("error") or "Krea 2 runtime failed")
-    worker_trace = str(result.get("traceback") or "").strip()
-    logs = "\n".join(log_lines[-20:]).strip()
-    combined = "\n".join(part for part in (detail, worker_trace, logs) if part)
-    lowered = combined.lower()
-
-    if (
-        "krea/krea-2-" in lowered
-        and (
-            "not a valid model identifier" in lowered
-            or "gated repo" in lowered
-            or "restricted" in lowered
-            or "401" in lowered
-            or "403" in lowered
-        )
-    ):
-        detail = (
-            "Krea 2 support components are gated on Hugging Face. Accept the Krea 2 Community License "
-            "for the selected Raw/Turbo support model and configure an authorized Hugging Face token in "
-            "WebbDuck Settings. The selected local checkpoint does not need to be re-downloaded."
-        )
-    else:
-        detail = combined
-
-    if returncode not in (None, 0):
-        detail = f"Krea 2 runtime exited with code {returncode}.\n{detail}"
-    return RuntimeError(detail.strip())
-
-
-def _report_progress(
-    callback: Any,
-    stage: str,
-    progress: float,
-    step: int = 0,
-    total_steps: int = 0,
-) -> None:
-    if not callable(callback):
-        return
-    try:
-        callback(stage, progress, step, total_steps)
+        if torch.cuda.is_available():
+            total = float(torch.cuda.get_device_properties(0).total_memory) / (1024.0**3)
+            free: float | None = None
+            try:
+                free_bytes, _total_bytes = torch.cuda.mem_get_info()
+                free = float(free_bytes) / (1024.0**3)
+            except Exception:
+                pass
+            return total, free
     except Exception:
         pass
+    return None, None
 
 
-def _forward_worker_progress(
-    progress_path: Path,
-    callback: Any,
-    previous: str | None,
-) -> str | None:
-    if not callable(callback) or not progress_path.exists():
-        return previous
+def _host_total_vram_gb() -> float | None:
+    return _host_vram_gb()[0]
+
+
+def _recommended_identity_token_budget(
+    total_vram_gb: float | None,
+    free_vram_gb: float | None,
+    width: int | None = None,
+    height: int | None = None,
+) -> int | None:
+    """Choose a native Krea identity target-token budget from live headroom.
+
+    Healthy ~16 GB cards now get a 3072-token high-detail tier for square /
+    portrait-oriented identity work, where facial anatomy benefits most from
+    native pixels.  The previously validated 2688 tier remains the normal
+    healthy-card fallback, then 2048/1792 as desktop VRAM pressure rises.
+
+    Explicit request-level ``identity.token_budget`` and
+    ``WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`` still win.
+    """
+    if total_vram_gb is None or total_vram_gb <= 0:
+        return None
+
+    if free_vram_gb is None or free_vram_gb <= 0:
+        if total_vram_gb >= 15.0:
+            return 2048
+        return 1792 if total_vram_gb < 12.0 else 2048
+
+    occupied_gb = max(0.0, total_vram_gb - free_vram_gb)
+    free_fraction = free_vram_gb / total_vram_gb
     try:
-        raw = progress_path.read_text(encoding="utf-8").strip()
-        if not raw or raw == previous:
-            return previous
-        event = json.loads(raw)
-        _report_progress(
-            callback,
-            str(event.get("stage") or "Generating with Krea 2"),
-            float(event.get("progress") or 0.0),
-            int(event.get("step") or 0),
-            int(event.get("total_steps") or 0),
-        )
-        return raw
-    except Exception:
-        return previous
+        req_w = int(width or 0)
+        req_h = int(height or 0)
+    except (TypeError, ValueError):
+        req_w = req_h = 0
+    # Square and vertical outputs are the common portrait/persona compositions.
+    portraitish = req_w > 0 and req_h > 0 and req_h >= int(req_w * 0.90)
+
+    if total_vram_gb >= 15.0:
+        # 3072 is intentionally gated more tightly than 2688 because the edit
+        # sequence includes both source and target image tokens.
+        if (
+            portraitish
+            and free_vram_gb >= 12.5
+            and occupied_gb < 2.75
+            and free_fraction >= 0.80
+        ):
+            return 3072
+        if free_vram_gb >= 11.5 and occupied_gb < 3.0 and free_fraction >= 0.74:
+            return 2688
+        if free_vram_gb >= 9.5 and occupied_gb < 5.5 and free_fraction >= 0.60:
+            return 2048
+        return 1792
+
+    if total_vram_gb >= 12.0:
+        return 2048 if free_vram_gb >= 8.0 else 1792
+
+    return 1792
 
 
-def _apply_effective_request_settings(
-    settings: dict[str, Any],
-    runtime: dict[str, Any],
-) -> None:
-    """Persist actual generation dimensions while retaining requested values."""
-    plan = runtime.get("adaptive_request")
-    if not isinstance(plan, dict):
-        return
-
-    for requested_key in ("width", "height", "steps"):
-        value = plan.get(f"requested_{requested_key}")
-        if value is not None:
-            settings[f"requested_{requested_key}"] = value
-
-    for effective_key in ("width", "height", "steps"):
-        value = plan.get(f"effective_{effective_key}")
-        if value is not None:
-            settings[effective_key] = value
-
-    settings["krea_request_adapted"] = bool(
-        plan.get("resolution_scaled") or plan.get("steps_tuned")
+def _quality_identity_worker_payload(settings: dict[str, Any]) -> dict[str, Any] | None:
+    adapter_cfg = settings.get("identity_adapter")
+    total_vram_gb, free_vram_gb = _host_vram_gb()
+    snapshot = _identity.identity_settings_snapshot(
+        adapter_cfg,
+        total_vram_gb=total_vram_gb,
     )
+    if snapshot is None:
+        return None
 
+    adapter = adapter_cfg if isinstance(adapter_cfg, dict) else {}
 
-class Krea2DiffusersBackend(GenerationBackend):
-    backend_id = "krea2_diffusers"
+    # The branch previously shipped 2.0 as its Krea default; the current v1.2
+    # reference baseline is ~4. Preserve genuinely custom values, but migrate
+    # old/default-looking requests automatically.
+    try:
+        raw_boost = float(adapter.get("ref_boost"))
+    except (TypeError, ValueError):
+        raw_boost = None
+    if raw_boost is None or abs(raw_boost - 2.0) < 1e-9:
+        snapshot.ref_boost = 4.0
 
-    def can_handle(self, descriptor: ModelDescriptor) -> bool:
-        return descriptor.backend == self.backend_id and descriptor.architecture == "krea2"
+    if str(os.getenv("WEBBDUCK_KREA2_IDENTITY_QUALITY_BASELINE") or "").lower() in {
+        "1", "true", "yes", "on"
+    }:
+        snapshot.lora_rank = "full"
 
-    def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
-        if not self.can_handle(descriptor):
-            return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        payload = probe_python_runtime(
-            _runtime_python(),
-            (
-                ("diffusers", "Krea2Pipeline"),
-                ("diffusers", "Krea2Transformer2DModel"),
-                ("accelerate", "init_empty_weights"),
-            ),
+    env_budget = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET") or "").strip().lower()
+    if snapshot.token_budget is None and env_budget in {"", "auto", "-1"}:
+        snapshot.token_budget = _recommended_identity_token_budget(
+            total_vram_gb,
+            free_vram_gb,
+            width=int(settings.get("width") or 0),
+            height=int(settings.get("height") or 0),
         )
-        if not payload.get("ready"):
-            payload["repair_hint"] = (
-                "Repair/update this isolated runtime with "
-                "`python tools/prepare_model_runtimes.py krea2`, then restart WebbDuck."
-            )
-        return payload
 
-    def generate(
-        self,
-        descriptor: ModelDescriptor,
-        settings: dict[str, Any],
-        **kwargs: Any,
-    ) -> tuple[list[Image.Image], int]:
-        cancel_event = kwargs.get("cancel_event")
-        progress_callback = kwargs.get("progress_callback")
-        if cancel_event is not None and cancel_event.is_set():
-            raise GenerationCancelledError("Generation cancelled before Krea 2 runtime start")
+    token, _source = _impl._huggingface_token()
 
-        prompt = str(settings.get("prompt") or "").strip()
-        if not prompt:
-            raise ValueError("Prompt is required.")
-        if not descriptor.supported:
-            quant = str(descriptor.detection.get("quantization") or "unknown")
-            raise RuntimeError(
-                f"Krea checkpoint '{descriptor.name}' is recognized but its {quant} single-file "
-                "format is not runnable by the installed Krea backend."
-            )
+    def _download(repo_id: str, filename: str):
+        from huggingface_hub import hf_hub_download
 
-        defaults = descriptor.defaults or {}
-        raw_seed = settings.get("seed")
-        seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
+        return hf_hub_download(repo_id=repo_id, filename=filename, token=token or None)
+
+    try:
+        weight = _identity.resolve_identity_weight(
+            rank=snapshot.lora_rank,
+            hf_hub_download=_download,
+        )
+    except _identity.KreaIdentityError as exc:
+        raise _identity.KreaIdentityError(
+            f"Krea identity persona for the current request could not be resolved: {exc}"
+        ) from exc
+
+    return {
+        "provider": "krea2_identity_edit",
+        "weight_path": weight.path,
+        "weight_source": weight.source,
+        "reference_image": snapshot.reference_image,
+        "reference_count_used": snapshot.reference_count_used,
+        "ref_boost": snapshot.ref_boost,
+        "grounding_px": snapshot.grounding_px,
+        "fit_mode": snapshot.fit_mode,
+        "lora_scale": snapshot.lora_scale,
+        "lora_rank": snapshot.lora_rank,
+        "max_megapixels": snapshot.max_megapixels,
+        "face_crop": snapshot.face_crop,
+        "token_budget": snapshot.token_budget,
+        # Face-aware Krea settings are intentionally provider-specific but stay
+        # optional so old callers need no changes.
+        "reference_max_edge": adapter.get("reference_max_edge"),
+        "auto_face_crop": adapter.get("auto_face_crop"),
+        "face_focus": adapter.get("face_focus"),
+        "face_ref_boost": adapter.get("face_ref_boost"),
+        "background_ref_boost": adapter.get("background_ref_boost"),
+        "quality_recipe": "krea2edit-v1.2.4-face-aware",
+        "grounded_required": True,
+    }
+
+
+def _identity_recipe_defaults(variant: str) -> tuple[int, float]:
+    # Krea2Edit's Turbo range is roughly 8-12 steps. WebbDuck biases the default
+    # to the face-detail end of that range rather than the speed end.
+    return (12, 0.0) if str(variant).lower() == "turbo" else (20, 3.0)
+
+
+def _identity_enabled(settings: dict[str, Any]) -> bool:
+    cfg = settings.get("identity_adapter")
+    if not isinstance(cfg, dict) or not cfg or cfg.get("enabled") is False:
+        return False
+    provider = str(cfg.get("type") or cfg.get("provider") or "").strip()
+    return provider in {"", "krea2_identity_edit"}
+
+
+_original_generate = _impl.Krea2DiffusersBackend.generate
+
+
+def _quality_generate(self: Any, descriptor: Any, settings: dict[str, Any], **kwargs: Any):
+    identity_active = _identity_enabled(settings)
+    if identity_active:
         variant = str(descriptor.detection.get("variant") or "base").lower()
-        component_source = _component_source(variant)
-        if descriptor.format == "single":
-            _report_progress(progress_callback, "Checking Krea components", 0.03)
-            _preflight_component_access(component_source)
+        recommended_steps, recommended_cfg = _identity_recipe_defaults(variant)
+        defaults = descriptor.defaults or {}
 
-        payload = {
-            "model_path": descriptor.path,
-            "model_format": descriptor.format,
+        current_steps = settings.get("steps")
+        default_steps = defaults.get("steps")
+        try:
+            current_steps_int = int(current_steps) if current_steps is not None else None
+            default_like_steps = (
+                current_steps is None
+                or default_steps is not None
+                and current_steps_int == int(default_steps)
+                or variant == "turbo"
+                and current_steps_int == 10
+            )
+        except (TypeError, ValueError):
+            default_like_steps = True
+        if default_like_steps:
+            settings["steps"] = recommended_steps
+
+        current_cfg = settings.get("cfg")
+        default_cfg = defaults.get("cfg")
+        try:
+            default_like_cfg = (
+                current_cfg is None
+                or default_cfg is not None
+                and abs(float(current_cfg) - float(default_cfg)) < 1e-9
+            )
+        except (TypeError, ValueError):
+            default_like_cfg = True
+        if default_like_cfg:
+            settings["cfg"] = recommended_cfg
+
+        settings["krea_identity_recipe"] = {
+            "source": "krea2edit-v1.2-face-aware",
             "variant": variant,
-            "quantization": descriptor.detection.get("quantization"),
-            "component_source": component_source,
-            "prompt": prompt,
-            "width": int(settings.get("width") or defaults.get("width") or 1024),
-            "height": int(settings.get("height") or defaults.get("height") or 1024),
-            "steps": int(settings.get("steps") or defaults.get("steps") or 28),
-            "guidance": float(
-                settings.get("cfg")
-                if settings.get("cfg") is not None
-                else defaults.get("cfg", 4.5)
-            ),
-            "num_images": max(1, int(settings.get("num_images") or 1)),
-            "seed": seed,
+            "steps": int(settings.get("steps") or recommended_steps),
+            "guidance": float(settings.get("cfg") if settings.get("cfg") is not None else recommended_cfg),
+            "ref_boost_default": 4.0,
+            "face_ref_boost_default": 6.0,
+            "background_ref_boost_default": 2.0,
+            "grounding_px_default": 768,
+            "reference_max_edge_default": 1024,
+            "auto_face_crop_default": True,
+            "final_size_policy": "exact-requested-size",
         }
 
-        python_exe = _runtime_python()
-        worker = Path(__file__).with_name("krea2_worker_adaptive.py")
-        timeout_seconds = max(
-            30.0,
-            float(os.getenv("WEBBDUCK_KREA2_TIMEOUT_SECONDS", "1800")),
-        )
+    result = _original_generate(self, descriptor, settings, **kwargs)
 
-        with tempfile.TemporaryDirectory(prefix="webbduck_krea2_") as tmp_raw:
-            tmp = Path(tmp_raw)
-            request_path = tmp / "request.json"
-            result_path = tmp / "result.json"
-            progress_path = tmp / "progress.json"
-            log_path = tmp / "worker.log"
-            request_path.write_text(json.dumps(payload), encoding="utf-8")
+    # The adaptive worker records native denoise dimensions separately.  The
+    # returned identity artifact is restored to requested dimensions after
+    # decode, so saved metadata should describe both native and final sizes.
+    if identity_active and isinstance(result, tuple) and len(result) == 2:
+        images, _seed = result
+        runtime = settings.get("krea_runtime")
+        if isinstance(runtime, dict):
+            identity_runtime = runtime.get("identity")
+            if isinstance(identity_runtime, dict):
+                try:
+                    eff_w = int(identity_runtime.get("effective_width") or 0)
+                    eff_h = int(identity_runtime.get("effective_height") or 0)
+                except (TypeError, ValueError):
+                    eff_w = eff_h = 0
+                if eff_w > 0 and eff_h > 0:
+                    settings["krea_effective_width"] = eff_w
+                    settings["krea_effective_height"] = eff_h
+        if images:
+            try:
+                final_w, final_h = images[0].size
+                settings["width"] = int(final_w)
+                settings["height"] = int(final_h)
+                settings["krea_final_width"] = int(final_w)
+                settings["krea_final_height"] = int(final_h)
+                eff_w = int(settings.get("krea_effective_width") or final_w)
+                eff_h = int(settings.get("krea_effective_height") or final_h)
+                settings["krea_final_upscaled"] = (eff_w, eff_h) != (final_w, final_h)
+            except Exception:
+                pass
 
-            _report_progress(progress_callback, "Starting Krea runtime", 0.05)
-            with log_path.open("w", encoding="utf-8") as log_file:
-                proc = subprocess.Popen(
-                    [
-                        python_exe,
-                        str(worker),
-                        "--request",
-                        str(request_path),
-                        "--result",
-                        str(result_path),
-                        "--output-dir",
-                        str(tmp),
-                        "--progress",
-                        str(progress_path),
-                    ],
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=_worker_environment(),
-                )
-                started = time.monotonic()
-                last_progress: str | None = None
-                while proc.poll() is None:
-                    last_progress = _forward_worker_progress(
-                        progress_path,
-                        progress_callback,
-                        last_progress,
-                    )
-                    if cancel_event is not None and cancel_event.is_set():
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                        raise GenerationCancelledError("Krea 2 generation cancelled")
-                    if time.monotonic() - started > timeout_seconds:
-                        proc.kill()
-                        raise RuntimeError(
-                            f"Krea 2 runtime timed out after {int(timeout_seconds)} seconds"
-                        )
-                    time.sleep(0.2)
-                _forward_worker_progress(progress_path, progress_callback, last_progress)
-
-            logs = (
-                log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
-                if log_path.exists()
-                else []
-            )
-            if not result_path.exists():
-                raise _worker_error({}, logs, proc.returncode)
-
-            result = json.loads(result_path.read_text(encoding="utf-8"))
-            if not result.get("ok"):
-                raise _worker_error(result, logs, proc.returncode)
-
-            timing = result.get("timing")
-            if isinstance(timing, dict):
-                perf = settings.setdefault("performance_timing", {})
-                if isinstance(perf, dict):
-                    for key, value in timing.items():
-                        try:
-                            perf[f"krea_{key}"] = round(float(value), 6)
-                        except (TypeError, ValueError):
-                            continue
-
-            runtime = result.get("runtime")
-            if isinstance(runtime, dict):
-                settings["krea_runtime"] = runtime
-                _apply_effective_request_settings(settings, runtime)
-
-            images: list[Image.Image] = []
-            for raw_path in result.get("images") or []:
-                with Image.open(raw_path) as image:
-                    images.append(image.convert("RGB").copy())
-            if not images:
-                raise RuntimeError("Krea 2 runtime returned no images")
-            return images, int(result.get("seed", seed))
+    return result
 
 
-_backend = Krea2DiffusersBackend()
+_impl._identity_worker_payload = _quality_identity_worker_payload
+_impl._identity_recipe_defaults = _identity_recipe_defaults
+_impl._recommended_identity_token_budget = _recommended_identity_token_budget
+_impl._host_vram_gb = _host_vram_gb
+_impl.Krea2DiffusersBackend.generate = _quality_generate
 
-
-def ensure_registered() -> Krea2DiffusersBackend:
-    if _backend.backend_id not in backend_resolver.ids():
-        backend_resolver.register(_backend)
-    return _backend
+# Keep monkeypatch paths and function globals coherent for the existing test
+# suite: imports of core.backends.krea2 resolve to the patched baseline module.
+sys.modules[__name__] = _impl

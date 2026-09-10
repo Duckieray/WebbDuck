@@ -46,6 +46,12 @@ def test_runner_requires_explicit_execute_for_generation():
     source = (ROOT / "tools" / "run_hardware_smoke.py").read_text(encoding="utf-8")
     assert 'parser.add_argument("--execute", action="store_true"' in source
     assert "if not args.execute:" in source
-    assert '"/runtime-readiness"' in source
+    assert 'f"{base_url}/runtime-readiness"' in source
     assert '"/generate"' in source
     assert '"/models/unload_all"' in source
+
+
+def test_runner_readiness_timeout_is_configurable():
+    source = (ROOT / "tools" / "run_hardware_smoke.py").read_text(encoding="utf-8")
+    assert '"--readiness-timeout"' in source
+    assert "timeout=args.readiness_timeout" in source

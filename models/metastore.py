@@ -47,6 +47,49 @@ def _resolve_meta_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+#  Guaranteed architecture modes
+# ---------------------------------------------------------------------------
+
+_ARCH_GUARANTEED_MODES: dict[str, set[str]] = {
+    "flux": {"realistic", "cartoon"},
+    "flux2": {"realistic", "cartoon"},
+    "krea": {"realistic", "hentai", "cartoon"},
+    "krea2": {"realistic", "hentai", "cartoon"},
+    "qwen_image": {"realistic"},
+}
+
+def _guaranteed_modes(arch: str | None, families: list[str] | None = None) -> set[str]:
+    out: set[str] = set()
+    arch_key = str(arch or "").lower()
+    keys = [arch_key]
+    keys.extend(str(f).lower() for f in (families or []))
+    for key in keys:
+        out |= _ARCH_GUARANTEED_MODES.get(key, set())
+    return out
+
+
+def _lora_arch_compatible(lora_arch: str | None, checkpoint_arch: str | None) -> bool:
+    """Whether a LoRA arch works with a checkpoint arch.
+
+    Checkpoint archs describe the *family* (``flux``, ``krea2``, ``ltx25``),
+    while detected LoRA archs often carry a version suffix (``flux1``,
+    ``flux2``). Exact equality is preferred, but a version-prefixed LoRA arch
+    whose family root equals the checkpoint arch is also compatible, and vice
+    versa. FLUX.1/FLUX.2 LoRAs stay separate once a checkpoint exposes a
+    versioned arch, while unversioned checkpoints such as ``flux`` still match
+    every LoRA in the family.
+    """
+    if not lora_arch or not checkpoint_arch:
+        return False
+    la = str(lora_arch).lower()
+    ca = str(checkpoint_arch).lower()
+    if la == ca:
+        return True
+    family = lambda a: a.rstrip("0123456789")
+    return family(la) == ca or family(ca) == la
+
+
+# ---------------------------------------------------------------------------
 #  Internal meta dataclasses (deserialised from on-disk JSON)
 # ---------------------------------------------------------------------------
 
@@ -281,15 +324,22 @@ class MetaStore:
 
     def _merge_checkpoint(self, name: str, registry_info: dict | None = None) -> AssetInfo:
         ph = self._checkpoints.get(name)
+        
+        arch = registry_info.get("arch") if registry_info else None
+        families = list(ph.families) if ph else []
+        modes = list(ph.modes) if ph and ph.modes else ([ph.recommended_mode] if ph and ph.recommended_mode else [])
+        modes_set = set(modes)
+        modes_set.update(_guaranteed_modes(arch, families))
+
         return AssetInfo(
             name=name,
             type="checkpoint",
-            arch=registry_info.get("arch") if registry_info else None,
+            arch=arch,
             source=registry_info.get("source") if registry_info else None,
             path=str(registry_info["path"]) if registry_info and "path" in registry_info else None,
             tags=list(ph.tags) if ph else [],
-            families=list(ph.families) if ph else [],
-            modes=list(ph.modes) if ph and ph.modes else ([ph.recommended_mode] if ph and ph.recommended_mode else []),
+            families=families,
+            modes=sorted(modes_set),
             description=ph.description if ph else "",
             url=ph.url if ph else "",
             recommended_mode=ph.recommended_mode if ph else None,
@@ -338,8 +388,8 @@ class MetaStore:
         return self.checkpoints() + self.loras() + self.embeddings()
 
     def checkpoints(self) -> list[AssetInfo]:
-        from models.registry import MODEL_REGISTRY
-        return [self._merge_checkpoint(name, info) for name, info in MODEL_REGISTRY.items()]
+        from models.catalog import runtime_registry
+        return [self._merge_checkpoint(name, info) for name, info in runtime_registry().items()]
 
     def loras(self) -> list[AssetInfo]:
         from models.registry import LORA_REGISTRY
@@ -352,9 +402,10 @@ class MetaStore:
     def get(self, name: str, asset_type: str | None = None) -> AssetInfo | None:
         """Look up a single asset by name, optionally scoped to a type."""
         if asset_type is None or asset_type == "checkpoint":
-            from models.registry import MODEL_REGISTRY
-            if name in MODEL_REGISTRY:
-                return self._merge_checkpoint(name, MODEL_REGISTRY[name])
+            from models.catalog import runtime_registry
+            registry = runtime_registry()
+            if name in registry:
+                return self._merge_checkpoint(name, registry[name])
         if asset_type is None or asset_type == "lora":
             from models.registry import LORA_REGISTRY
             if name in LORA_REGISTRY:
@@ -440,7 +491,7 @@ class MetaStore:
                     a for a in result
                     if a.type in ("lora", "embedding")
                     and (
-                        (arch and a.arch == arch)
+                        (arch and _lora_arch_compatible(a.arch, arch))
                         or (cpf and cpf & {ff.lower() for ff in a.families})
                     )
                 ]
@@ -460,7 +511,7 @@ class MetaStore:
         compatible_embeddings: list[AssetInfo] = []
 
         for lora in self.loras():
-            if arch and lora.arch == arch:
+            if _lora_arch_compatible(lora.arch, arch):
                 compatible_loras.append(lora)
             elif families and families & {ff.lower() for ff in lora.families}:
                 compatible_loras.append(lora)
@@ -489,10 +540,14 @@ class MetaStore:
         # Score LoRAs
         lora_results: list[dict] = []
         for lora in self.loras():
-            if lora.arch and cp.arch and lora.arch != cp.arch:
+            if lora.arch and cp.arch and not _lora_arch_compatible(lora.arch, cp.arch):
                 continue
             score = 0.0
             reasons: list[str] = []
+
+            if cp.arch and _lora_arch_compatible(lora.arch, cp.arch):
+                score += 1.0
+                reasons.append(f"arch: {cp.arch}")
 
             meta_tags = {t.lower() for t in lora.tags}
             overlap = meta_tags & tags

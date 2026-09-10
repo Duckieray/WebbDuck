@@ -7,10 +7,14 @@ can become capability-driven without breaking older clients.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 
+from core.backends.krea2_lora import is_krea2_lora_entry
 from models.catalog import descriptor_for_model, public_runtime_catalog, runtime_registry
-from models.registry import LORA_REGISTRY
+from models.registry import LORA_REGISTRY, LORA_ROOT
 
 
 router = APIRouter()
@@ -22,15 +26,44 @@ def list_model_catalog():
     return public_runtime_catalog()
 
 
+def _krea_ui_loras() -> dict[str, dict[str, Any]]:
+    """Return Krea LoRAs without a full filesystem header scan on every UI load.
+
+    Most files are already in LORA_REGISTRY; compatibility checking only opens
+    ambiguous transformer-family headers. For adapters the legacy scanner could
+    not classify at all (notably some AI-Toolkit exports), the explicit
+    ``lora/krea2`` namespace is the fast and authoritative discovery path.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for name, cfg in LORA_REGISTRY.items():
+        if is_krea2_lora_entry(cfg):
+            found[str(name)] = dict(cfg)
+
+    root = Path(LORA_ROOT).expanduser()
+    for dirname in ("krea2", "krea", "krea-2"):
+        folder = root / dirname
+        if not folder.exists():
+            continue
+        try:
+            candidates = folder.rglob("*.safetensors")
+        except OSError:
+            continue
+        for path in candidates:
+            if not path.is_file() or path.stem in found:
+                continue
+            found[path.stem] = {
+                "path": path,
+                "arch": "krea2",
+                "weight": 1.0,
+                "description": "Krea 2 LoRA",
+                "source": "local",
+            }
+    return found
+
+
 @router.get("/model-catalog/{model_name:path}/loras")
 def list_model_loras(model_name: str):
-    """Return LoRAs compatible with a runtime-catalog checkpoint.
-
-    The legacy ``/models/{name}/loras`` endpoint is backed by MODEL_REGISTRY and
-    therefore cannot see architecture-neutral checkpoints such as standalone
-    FLUX GGUF transformers. Resolve the selected checkpoint through the runtime
-    catalog instead, then filter the shared LoRA registry by internal arch.
-    """
+    """Return LoRAs compatible with a runtime-catalog checkpoint."""
     registry = runtime_registry()
     try:
         descriptor = descriptor_for_model(model_name, registry)
@@ -41,8 +74,18 @@ def list_model_loras(model_name: str):
         return []
 
     checkpoint_arch = str(descriptor.architecture or "").lower()
-    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
+    if checkpoint_arch == "krea2":
+        entries = _krea_ui_loras()
+        return [
+            {
+                "name": name,
+                "description": cfg.get("description", ""),
+                "weight": cfg.get("weight", 1.0),
+            }
+            for name, cfg in sorted(entries.items())
+        ]
 
+    _FLUX_FAMILY = {"flux", "flux1", "flux2"}
     return [
         {
             "name": name,
@@ -59,13 +102,10 @@ def _lora_matches_checkpoint(
     checkpoint_arch: str,
     flux_family: set[str],
 ) -> bool:
-    """Return True if a LoRA entry is compatible with the given checkpoint arch.
+    """Return True if a LoRA entry is compatible with the given checkpoint arch."""
+    if checkpoint_arch == "krea2":
+        return is_krea2_lora_entry(lora_cfg)
 
-    FLUX.1 and FLUX.2 are distinct architectures with incompatible transformer
-    shapes, but the checkpoint is often discovered as generic ``"flux"``.  A
-    generic checkpoint accepts any FLUX-family LoRA; a version-specific
-    checkpoint (``"flux1"`` or ``"flux2"``) only accepts matching LoRAs.
-    """
     lora_arch = str(lora_cfg.get("arch") or "").lower()
     if lora_arch == checkpoint_arch:
         return True

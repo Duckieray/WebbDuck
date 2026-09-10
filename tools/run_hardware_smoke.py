@@ -266,11 +266,17 @@ def main() -> int:
     parser.add_argument("--lora", help="Known-good SDXL LoRA name for the optional asset row.")
     parser.add_argument("--refiner", help="Known-good SDXL second-pass/refiner model name for the optional asset row.")
     parser.add_argument("--timeout", type=float, default=7200.0)
+    parser.add_argument(
+        "--readiness-timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds for the /runtime-readiness preflight probe.",
+    )
     parser.add_argument("--report-dir", type=Path, default=Path("smoke_reports"))
     args = parser.parse_args()
     base_url = args.base_url.rstrip("/")
 
-    readiness = _request_json(f"{base_url}/runtime-readiness", timeout=60)
+    readiness = _request_json(f"{base_url}/runtime-readiness", timeout=args.readiness_timeout)
     items = list(readiness.get("items") or [])
     if not items:
         raise SystemExit("No models were returned by /runtime-readiness.")

@@ -185,6 +185,11 @@ def _fresh_denoiser(
 def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     worker_started = time.perf_counter()
 
+    # Identity edits use the phased identity run (grounded encode, reference
+    # latent, edit forward) with their own resident->block OOM ladder.
+    if request.get("identity"):
+        return base._run_identity(request, output_dir, progress_path)
+
     prompt = str(request["prompt"])
     width = base._snap(int(request.get("width") or 1024))
     height = base._snap(int(request.get("height") or 1024))

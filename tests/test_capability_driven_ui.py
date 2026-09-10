@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 API = (ROOT / "ui" / "core" / "api.js").read_text(encoding="utf-8")
 CAPS = (ROOT / "ui" / "core" / "modelCapabilities.js").read_text(encoding="utf-8")
+PERSONA = (ROOT / "ui" / "modules" / "PersonaIdentityUI.js").read_text(encoding="utf-8")
+MAIN = (ROOT / "ui" / "app_main.js").read_text(encoding="utf-8")
 
 
 def test_model_catalog_is_the_only_model_loading_contract():
@@ -74,3 +76,32 @@ def test_model_selection_refreshes_its_profile_instead_of_relying_on_catalog_tim
     assert "fetch(`/model-catalog/${encodeURIComponent(name)}`" in CAPS
     assert "cache: 'no-store'" in CAPS
     assert "select.addEventListener('change'" in CAPS
+
+
+def test_identity_adapter_capability_gates_the_whole_identity_section():
+    assert (
+        "setSectionVisible('section-ip-adapter', capabilityAllowed(caps, 'identity_adapter'))"
+        in CAPS
+    )
+
+
+def test_capability_controller_never_owns_identity_tuning_keys():
+    # Identity tuning keys belong to the persona presentation + form layers, not
+    # the architecture-agnostic capability contract.
+    for token in ("ref_boost", "grounding_px", "fit_mode", "lora_rank", "lora_scale"):
+        assert token not in CAPS
+
+
+def test_identity_provider_presentation_lives_only_in_persona_module():
+    assert "krea2_identity_edit" not in CAPS
+    assert "krea2_identity_edit" in PERSONA
+    assert "selectedModelLooksKrea" in PERSONA
+    assert "setKreaOnlyControlsVisible" in PERSONA
+    assert "setScaleSliderDefaults('krea2_identity_edit')" in PERSONA
+    assert "select.value = 'krea2_identity_edit'" in PERSONA
+
+
+def test_krea_identity_form_payload_is_user_facing_subset_of_worker_contract():
+    assert "'krea2_identity_edit'" in MAIN
+    for field in ("ref_boost", "grounding_px", "fit_mode", "lora_scale", "lora_rank"):
+        assert f"payload.{field}" in MAIN

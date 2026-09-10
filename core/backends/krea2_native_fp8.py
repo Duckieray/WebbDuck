@@ -220,9 +220,26 @@ def _native_forward(self: Any, x: torch.Tensor) -> torch.Tensor:
         if bias is not None:
             output = output + bias.to(device=x.device, dtype=x.dtype).reshape(1, -1)
 
+        output = output.reshape(*original_shape[:-1], int(self.out_features))
+
+        # Apply the identity-edit LoRA residual on top of the FP8 base when one
+        # has been installed (y = BaseFP8(x) + coef * B(A(x))). The native kernel
+        # must not silently drop the adapter.
+        if int(getattr(self, "lora_rank", 0) or 0) > 0 and getattr(self, "lora_a", None) is not None:
+            from core.backends.krea2_worker import _linear_lora_coefficient
+            import torch.nn.functional as F
+
+            coef = _linear_lora_coefficient(
+                self.lora_rank, self.lora_alpha, float(getattr(self, "lora_scale", 1.0))
+            )
+            if coef != 0.0:
+                down = F.linear(x, self.lora_a.to(device=x.device, dtype=x.dtype))
+                up = F.linear(down, self.lora_b.to(device=x.device, dtype=x.dtype))
+                output = output + coef * up
+
         _NATIVE_CALLS += 1
         _NATIVE_MODULES.add(id(self))
-        return output.reshape(*original_shape[:-1], int(self.out_features))
+        return output
     except Exception as exc:
         if _is_cuda_oom(exc):
             raise
