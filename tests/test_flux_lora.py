@@ -188,8 +188,9 @@ def test_detect_lora_arch_recognizes_modern_flux_key_layouts(monkeypatch):
     from models import registry as asset_registry
 
     class FakeSafeOpen:
-        def __init__(self, keys):
+        def __init__(self, keys, metadata=None):
             self._keys = keys
+            self._metadata = metadata or {}
 
         def __enter__(self):
             return self
@@ -200,10 +201,14 @@ def test_detect_lora_arch_recognizes_modern_flux_key_layouts(monkeypatch):
         def keys(self):
             return self._keys
 
-    # FLUX.1 key patterns (Kohya / Comfy exports)
+        def metadata(self):
+            return self._metadata
+
+    # FLUX.1 key patterns (Kohya / Comfy exports) — block geometry beyond
+    # Klein's 24-single/8-double counts only fits FLUX.1
     flux1_key_sets = [
-        ["lora_unet_double_blocks_0_img_attn_q.lora_down.weight"],
-        ["diffusion_model.single_blocks.1.linear1.lora_A.weight"],
+        ["lora_unet_double_blocks_10_img_attn_qkv.lora_down.weight"],
+        ["diffusion_model.single_blocks.30.linear1.lora_A.weight"],
     ]
     for keys in flux1_key_sets:
         monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
@@ -223,8 +228,9 @@ def test_detect_lora_arch_distinguishes_flux2_by_key_patterns(monkeypatch):
     from models import registry as asset_registry
 
     class FakeSafeOpen:
-        def __init__(self, keys):
+        def __init__(self, keys, metadata=None):
             self._keys = keys
+            self._metadata = metadata or {}
 
         def __enter__(self):
             return self
@@ -235,14 +241,140 @@ def test_detect_lora_arch_distinguishes_flux2_by_key_patterns(monkeypatch):
         def keys(self):
             return self._keys
 
+        def metadata(self):
+            return self._metadata
+
     # FLUX.2 exclusive keys
     flux2_key_sets = [
-        ["guidance_in.in_layer.lora_A.weight", "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight"],
         ["transformer.single_transformer_blocks.0.attn.to_qkv_mlp_proj.lora_A.weight"],
+        ["transformer.time_guidance_embed.guidance_embedder.lin.1.lora_A.weight"],
+        ["diffusion_model.double_blocks.7.img_attn.proj.lora_A.weight",
+         "diffusion_model.single_blocks.23.img_attn.proj.lora_A.weight",
+         "diffusion_model.double_blocks.0.img_attn.to_qkv_mlp_proj.lora_A.weight"],
     ]
     for keys in flux2_key_sets:
         monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
         assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == "flux2"
+
+
+def test_detect_lora_arch_never_registers_fluxdev_guidance_as_flux2(monkeypatch):
+    """A FLUX.1-dev LoRA carrying guidance_in/time_text_embed must be flux1, never flux2."""
+    from models import registry as asset_registry
+
+    class FakeSafeOpen:
+        def __init__(self, keys, metadata=None):
+            self._keys = keys
+            self._metadata = metadata or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def keys(self):
+            return self._keys
+
+        def metadata(self):
+            return self._metadata
+
+    flux1_key_sets = [
+        ["guidance_in.in_layer.lora_A.weight", "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight"],
+        ["transformer.guidance_in.in_layer.lora_A.weight"],
+        ["transformer.time_text_embed.guidance_embedder.lin.1.lora_A.weight"],
+    ]
+    for keys in flux1_key_sets:
+        monkeypatch.setattr(asset_registry, "safe_open", lambda *_a, _keys=keys, **_k: FakeSafeOpen(_keys))
+        assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == "flux1"
+
+
+def test_detect_lora_arch_uses_ss_base_model_version_metadata(monkeypatch):
+    from models import registry as asset_registry
+
+    class FakeSafeOpen:
+        def __init__(self, keys, metadata=None):
+            self._keys = keys
+            self._metadata = metadata or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def keys(self):
+            return self._keys
+
+        def metadata(self):
+            return self._metadata
+
+    cases = [
+        ({"ss_base_model_version": "flux2_klein_9b"}, "flux2", ["diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight"]),
+        ({"ss_base_model_version": "flux_2_klein_9b"}, "flux2", ["lora_unet_double_blocks_0_img_attn_qkv.lora_down.weight"]),
+        ({"ss_base_model_version": "FLUX_KLEIN_9B"}, "flux2", ["lora_unet_double_blocks_0_img_attn_proj.lora_down.weight"]),
+        ({"ss_base_model_version": "flux2"}, "flux2", ["diffusion_model.single_blocks.5.img_attn.proj.lora_A.weight"]),
+        ({"ss_base_model_version": "flux1-dev"}, "flux1", ["diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight"]),
+        ({"ss_base_model_version": "flux1-schnell"}, "flux1", ["diffusion_model.single_blocks.2.img_attn.proj.lora_A.weight"]),
+        # Bare "flux" token with no version string delegates to key/shape analysis
+        ({"ss_base_model_version": "flux"}, "flux1", ["diffusion_model.single_blocks.30.linear1.lora_A.weight"]),
+        ({"ss_base_model_version": "flux"}, "flux", ["diffusion_model.single_blocks.5.img_attn.proj.lora_A.weight"]),
+    ]
+    for metadata, expected, keys in cases:
+        monkeypatch.setattr(
+            asset_registry, "safe_open",
+            lambda *_a, _keys=keys, _meta=metadata, **_k: FakeSafeOpen(_keys, _meta),
+        )
+        assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == expected
+
+
+def test_detect_lora_arch_disambiguates_flux_versions_by_hidden_size(monkeypatch):
+    from models import registry as asset_registry
+
+    class FakeSafeOpen:
+        def __init__(self, keys, metadata=None, shapes=None):
+            self._keys = keys
+            self._metadata = metadata or {}
+            self._shapes = shapes or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def keys(self):
+            return self._keys
+
+        def metadata(self):
+            return self._metadata
+
+        def get_tensor(self, key):
+            if key not in self._shapes:
+                raise KeyError(key)
+            import torch
+
+            return torch.zeros(*self._shapes[key])
+
+    to_q = "transformer.transformer_blocks.0.attn.to_q.lora_A.weight"
+    cases = [
+        # FLUX.1 hidden_size 3072
+        ({to_q: (64, 3072)}, "flux1"),
+        # FLUX.2 hidden_size 4096
+        ({to_q: (64, 4096)}, "flux2"),
+        # Kohya double-block output projection carries hidden_size too
+        ({"diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight": (64, 4096)}, "flux2"),
+        ({"diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight": (64, 3072)}, "flux1"),
+        # Fused qkv / mlp-gate dims are 3x hidden — must NOT feed the classifier
+        ({"diffusion_model.double_blocks.0.img_attn.qkv.lora_A.weight": (64, 4096)}, "flux"),
+        ({"diffusion_model.double_blocks.0.img_mlp.0.lora_A.weight": (64, 4096), "diffusion_model.double_blocks.0.img_mlp.2.lora_A.weight": (64, 12288)}, "flux2"),
+    ]
+    for shapes, expected in cases:
+        keys = list(shapes)
+        monkeypatch.setattr(
+            asset_registry, "safe_open",
+            lambda *_a, _keys=keys, _shapes=shapes, **_k: FakeSafeOpen(_keys, shapes=_shapes),
+        )
+        assert asset_registry.detect_lora_arch(Path("adapter.safetensors")) == expected
 
 
 def test_runtime_catalog_lora_endpoint_supports_gguf_models(monkeypatch):

@@ -37,7 +37,7 @@ conda run -n webbduck pytest -v -m "not slow"
 | `tests/test_metastore.py` | metastore tests |
 | `tests/test_identity_adapter.py` | identity adapter tests |
 | `tests/test_flux_backend.py` | FLUX backend payloads and worker environment |
-| `tests/test_flux_lora.py` | FLUX LoRA resolution and adapter loading |
+| `tests/test_flux_lora.py` | FLUX LoRA resolution, adapter loading, and FLUX.1 vs FLUX.2 arch detection |
 | `tests/test_flux_memory_metadata.py` | FLUX.2 9B detection and OOM demotion tiers |
 | `tests/test_flux_identity_personas.py` | FLUX.2 native identity/reference resolution |
 | `tests/test_flux_identity_prep.py` | FLUX.2 persona preprocessing: face crop, anchor weighting, prompt |

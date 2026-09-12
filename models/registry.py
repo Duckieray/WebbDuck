@@ -138,40 +138,97 @@ def _lora_namespace_arch(lora_path: Path) -> str | None:
     }.get(relative.parts[0].lower())
 
 
+_FLUX2_KLEIN_SINGLE_BLOCKS = 24
+_FLUX2_KLEIN_DOUBLE_BLOCKS = 8
+
+
 def _detect_flux_lora_version(lora_path: Path, keys: list[str]) -> str:
     """Distinguish FLUX.1 from FLUX.2 LoRA by key patterns and tensor shapes.
 
-    FLUX.1 LoRAs (Kohya/Comfy exports) use ``diffusion_model.*`` or
-    ``lora_unet_*`` key prefixes. FLUX.2 LoRAs carry ``guidance_in`` or
-    ``to_qkv_mlp_proj`` keys unique to the Klein/Dev architecture. When the
-    keys use the generic ``transformer.*`` Diffusers/PEFT namespace the two
-    versions are indistinguishable by name alone, so fall back to tensor shapes:
-    FLUX.1 dev/schnell has hidden_size 3072 while FLUX.2 klein 9B uses 4096.
+    ``lora_unet_*`` / ``diffusion_model.*`` prefixes are Kohya/Comfy exports and
+    do NOT pin the version — FLUX.1-dev and FLUX.2 Klein both use them, so a
+    prefix alone must never decide the architecture.
+
+    Structural module names are authoritative:
+
+    * ``to_qkv_mlp_proj`` (fused single-block attention) and
+      ``time_guidance_embed`` (the dedicated Klein time+guidance embedder) only
+      exist in FLUX.2.
+    * ``guidance_in`` (older exports) and ``time_text_embed`` (current exports)
+      carry FLUX.1-dev's guidance embeddings inside the text+time embedder —
+      they are FLUX.1 signals, NOT FLUX.2 markers. This is the key guard so a
+      FLUX.1-dev LoRA can never register as FLUX.2.
+
+    Block geometry disambiguates Kohya exports: FLUX.1 has 38 single + 19 double
+    blocks, FLUX.2 Klein only 24 single + 8 double, so block indexes above the
+    Klein counts prove the LoRA targets FLUX.1.
+
+    Same-geometry names finally fall back to tensor shapes: FLUX.1 dev/schnell
+    uses hidden_size 3072 while FLUX.2 Klein 9B uses 4096.
     """
     joined = " ".join(keys).lower()
 
-    # --- FLUX.1 key patterns (Kohya / Comfy exports) ---
-    if any(marker in joined for marker in ("diffusion_model.", "lora_unet_")):
+    # --- FLUX.2 exclusive structural module names ---
+    if "to_qkv_mlp_proj" in joined or "time_guidance_embed" in joined:
+        return "flux2"
+
+    # --- FLUX.1 guidance module names (guidance is embedded inside FLUX.1's
+    #     time/text embedder; absent from FLUX.2 which has a dedicated module) ---
+    if "guidance_in" in joined or "time_text_embed" in joined:
         return "flux1"
 
-    # --- FLUX.2 exclusive keys ---
-    if "guidance_in" in joined:
-        return "flux2"
-    if "to_qkv_mlp_proj" in joined:
-        return "flux2"
+    # --- Block geometry: indexes beyond Klein's 24 single / 8 double blocks
+    #     can only fit a FLUX.1 architecture ---
+    max_single = max_double = -1
+    for key in keys:
+        m = re.search(r"single_transformer_blocks[._](\d+)", key)
+        if not m:
+            m = re.search(r"single_blocks[._](\d+)", key)
+        if m:
+            max_single = max(max_single, int(m.group(1)))
+            continue
+        m = re.search(r"(?:transformer_blocks|double_blocks)[._](\d+)", key)
+        if m:
+            max_double = max(max_double, int(m.group(1)))
+    if (
+        max_single >= _FLUX2_KLEIN_SINGLE_BLOCKS
+        or max_double >= _FLUX2_KLEIN_DOUBLE_BLOCKS
+    ):
+        return "flux1"
 
-    # --- Generic transformer.* namespace — disambiguate by tensor shapes ---
+    # --- Generic names — disambiguate by hidden_size tensor shapes ---
     try:
         with safe_open(str(lora_path), framework="pt", device="cpu") as sf:
             for key in keys:
                 lowered = key.lower()
-                if ".to_q." in lowered and "lora_a" in lowered:
-                    tensor = sf.get_tensor(key)
-                    if tensor.ndim == 2:
-                        hidden = max(int(tensor.shape[0]), int(tensor.shape[1]))
-                        if hidden <= 3072:
-                            return "flux1"
-                        return "flux2"
+                if not (
+                    lowered.endswith("lora_a.weight")
+                    or lowered.endswith("lora_down.weight")
+                ):
+                    continue
+                # Hidden-size sources only: qkv/fused proj/MLP-gate keys carry
+                # 3x/expanded dims and must not feed the classifier. Both the
+                # dot naming (img_mlp.0, img_attn.proj) and the lora_unet
+                # underscore naming (img_mlp_0) are covered.
+                if not any(
+                    marker in lowered
+                    for marker in (
+                        ".to_q.",
+                        "proj_in.",
+                        ".proj.",
+                        "mlp_0.",
+                        "mlp.0.",
+                        ".to_out.0.",
+                    )
+                ):
+                    continue
+                tensor = sf.get_tensor(key)
+                if tensor.ndim != 2:
+                    continue
+                hidden = max(int(tensor.shape[0]), int(tensor.shape[1]))
+                if hidden > 3072:
+                    return "flux2"
+                return "flux1"
     except Exception:
         pass
 
@@ -208,8 +265,15 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         return "sdxl"
     if "sd_1_5" in base_version or "sd15" in base_version or "sd_1.5" in base_version:
         return "sd15"
-    if "flux" in base_version:
-        # Pass to the shape detector to distinguish flux1 vs flux2 if possible
+    if "flux" in base_version or "klein" in base_version:
+        # Kohya/ai-toolkit record the base model explicitly (flux1-dev,
+        # flux1-schnell, flux2_klein_9b, flux_2_klein_9b). Favor the declared
+        # version — it is authoritative — and only fall back to the shape/key
+        # detector for a bare "flux" token.
+        if any(v in base_version for v in ("flux2", "flux_2", "flux.2", "klein")):
+            return "flux2"
+        if any(v in base_version for v in ("flux1", "flux_1", "flux.1")):
+            return "flux1"
         return _detect_flux_lora_version(lora_path, keys)
 
     joined = " ".join(keys).lower()
@@ -223,6 +287,11 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         "transformer.single_blocks",
         "transformer.transformer_blocks",
         "transformer.single_transformer_blocks",
+        # FLUX text/time/guidance embedders — route them into the version
+        # detector even when no block-attention keys are present.
+        "time_guidance_embed",
+        "time_text_embed",
+        "guidance_in",
     )
     if any(marker in joined for marker in flux_markers):
         return _detect_flux_lora_version(lora_path, keys)
