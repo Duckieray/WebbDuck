@@ -154,7 +154,25 @@ window while it runs. When it finishes, you will see your prompt again.
 mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
 ```
 
-### Step 9: Start WebbDuck
+### Step 9: Install WebbDuck's generation engine
+
+WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen) inside its own private mini-environment,
+so one engine can never break the others. Even your first SDXL image needs this step.
+
+```
+python tools\prepare_model_runtimes.py sdxl
+```
+
+- It **auto-detects your graphics card** and installs the matching AI libraries. First run downloads
+  a few GB, so it can take a while — do not close the window.
+- When it finishes you will see `Add these to the WebbDuck launch environment:`. For SDXL you can
+  ignore that part — WebbDuck finds the engine automatically.
+
+> **Only want SDXL for now?** Then you are done here. Later, to enable FLUX, Krea 2, and Qwen model
+> engines too (big downloads), run the same command with `all` instead of `sdxl`:
+> `python tools\prepare_model_runtimes.py all`.
+
+### Step 10: Start WebbDuck
 
 ```
 python .\run.py --output .\outputs\ --port 8010
@@ -163,7 +181,7 @@ python .\run.py --output .\outputs\ --port 8010
 Wait until you see something like `Uvicorn running on http://0.0.0.0:8010`. Do not close this
 window — WebbDuck runs inside it.
 
-### Step 10: Open WebbDuck in your browser
+### Step 11: Open WebbDuck in your browser
 
 1. Open **Chrome**, **Edge**, or **Firefox**.
 2. Go to: **http://localhost:8010**
@@ -287,7 +305,25 @@ This can take 5–15 minutes. When it finishes, your prompt returns.
 mkdir -p checkpoint/sdxl lora embeddings outputs weights
 ```
 
-### Step 9: Start WebbDuck
+### Step 9: Install WebbDuck's generation engine
+
+WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen) inside its own private mini-environment,
+so one engine can never break the others. Even your first SDXL image needs this step.
+
+```
+python tools/prepare_model_runtimes.py sdxl
+```
+
+- It **auto-detects your graphics card** and installs the matching AI libraries. First run
+  downloads a few GB, so it can take a while — do not close the terminal.
+- When it finishes you will see `Add these to the WebbDuck launch environment:`. For SDXL you can
+  ignore that part — WebbDuck finds the engine automatically.
+
+> **Only want SDXL for now?** Then you are done here. Later, to enable FLUX, Krea 2, and Qwen model
+> engines too (big downloads), run the same command with `all` instead of `sdxl`:
+> `python tools/prepare_model_runtimes.py all`.
+
+### Step 10: Start WebbDuck
 
 ```
 python run.py --output ./outputs --port 8010
@@ -295,7 +331,7 @@ python run.py --output ./outputs --port 8010
 
 Wait until you see `Uvicorn running on http://0.0.0.0:8010`. Keep this terminal window open.
 
-### Step 10: Open WebbDuck in your browser
+### Step 11: Open WebbDuck in your browser
 
 Open your browser and go to: **http://localhost:8010**
 
@@ -305,8 +341,9 @@ Open your browser and go to: **http://localhost:8010**
 
 ## After it runs: your first image needs a model
 
-WebbDuck is the "paint shop"; it still needs a **model** (the brain that draws). Until you add
-one, the model list will be empty.
+WebbDuck is the "paint shop"; it also needs a **model** (the brain that draws) — you installed the
+engine in Step 9, but models are the individual "artists" that ship separately. Until you add one,
+the model list will be empty.
 
 1. Get an **SDXL** model file (a `.safetensors` file, several GB).
    - You can download a free one from sites like Hugging Face (`civitai.com` and
@@ -348,7 +385,7 @@ WebbDuck updates are released as new zip downloads (following git isn't required
    - `lora/` and `embeddings/` (your add-ons)
    - `outputs/` (your generated images)
    - `weights/` (upscaler weights)
-3. Install and run the new folder following steps 5–10 of Part A or Part B. Your images and
+3. Install and run the new folder following steps 5–11 of Part A or Part B. Your images and
    models carry over; you do not lose anything.
 
 ---
@@ -363,6 +400,7 @@ WebbDuck updates are released as new zip downloads (following git isn't required
 | `no kernel image is available for execution on the device` | PyTorch build doesn't match your GPU | Reinstall torch using the CPU wheel line, or update your GPU driver (Windows Step 6) |
 | `Address already in use` / port 8010 busy | Another program uses that port | Use a different port: `python run.py --port 8020`, then go to `http://localhost:8020` |
 | The model list is empty | No model file is in `checkpoint/sdxl/` yet | Add an SDXL `.safetensors` file there and refresh (see "After it runs") |
+| Generation fails with a message about a missing runtime engine (hint: `prepare_model_runtimes.py`) | The engine was never installed | Run Step 9 (`python tools\prepare_model_runtimes.py sdxl` on Windows, or `python tools/prepare_model_runtimes.py sdxl` on Linux), then restart WebbDuck |
 | Generation is very slow | No NVIDIA GPU, or the app fell back to CPU | Nothing is broken; CPU generation is just slow. A dedicated NVIDIA GPU makes it fast |
 | A long Hugging Face symlink warning on Windows | Windows-safe file-linking notice | Often non-fatal; if generation works, ignore it |
 

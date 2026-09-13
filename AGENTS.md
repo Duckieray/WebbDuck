@@ -197,6 +197,8 @@ conda activate webbduck
 pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision torchaudio
 pip install -r requirements.txt
 mkdir -p checkpoint/sdxl lora embeddings outputs weights
+# Install the isolated image engine(s). Use `all` for FLUX/Krea 2/Qwen too.
+python tools/prepare_model_runtimes.py sdxl
 ```
 
 ### Run (scripted)
@@ -233,6 +235,8 @@ conda activate webbduck
 pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 pip install -r requirements.windows.txt
 mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
+# Install the isolated image engine(s). Use `all` for FLUX/Krea 2/Qwen too.
+python tools\prepare_model_runtimes.py sdxl
 ```
 
 ### Run
