@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """WebbDuck - local image generation interface."""
 
-import resource
 import sys
 from pathlib import Path
 
@@ -27,9 +26,10 @@ import os
 if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-try:
-    RLIMIT_AS_GB = int(os.getenv("WEBBDUCK_RLIMIT_AS_GB", "0"))
-    if RLIMIT_AS_GB > 0:
+RLIMIT_AS_GB = int(os.getenv("WEBBDUCK_RLIMIT_AS_GB", "0"))
+if RLIMIT_AS_GB > 0:
+    try:
+        import resource
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         limit_bytes = RLIMIT_AS_GB * 1024 ** 3
         if hard == resource.RLIM_INFINITY or limit_bytes < hard:
@@ -37,10 +37,15 @@ try:
             logging.info("Applied RLIMIT_AS = %d GB (set via WEBBDUCK_RLIMIT_AS_GB)", RLIMIT_AS_GB)
         else:
             logging.info("Hard RLIMIT_AS (%d GB) is lower than requested %d GB; keeping existing limit", hard // 1024**3, RLIMIT_AS_GB)
-    else:
-        logging.info("RLIMIT_AS protection disabled (set WEBBDUCK_RLIMIT_AS_GB to a positive value to enable)")
-except Exception as exc:
-    logging.warning("Could not set RLIMIT_AS: %s", exc)
+    except ImportError:
+        logging.warning(
+            "WEBBDUCK_RLIMIT_AS_GB is set but the resource module is not available on this platform; "
+            "skipping RLIMIT_AS protection"
+        )
+    except Exception as exc:
+        logging.warning("Could not set RLIMIT_AS: %s", exc)
+else:
+    logging.info("RLIMIT_AS protection disabled (set WEBBDUCK_RLIMIT_AS_GB to a positive value to enable)")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebbDuck Server")
