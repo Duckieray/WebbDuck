@@ -1,4 +1,6 @@
 # Start WebbDuck from this repository directory (Windows / PowerShell).
+# Uses .\venv\Scripts\python.exe if present, otherwise conda activation
+# (or the Python already on PATH with -NoConda).
 # Usage: .\startup.ps1 [-EnvName webbduck] [-OutputDir ...] [-Port 8010] [-NoConda] [-- <extra run.py args>]
 param(
     [string]$EnvName = $env:WEBBDUCK_CONDA_ENV,
@@ -52,19 +54,26 @@ if (Test-Path $envFile) {
     Info "No runtime env file at $envFile (install engines with tools\prepare_model_runtimes.py)"
 }
 
-if (-not $NoConda) {
-    $condaFound = Get-Command conda -ErrorAction SilentlyContinue
-    if ($null -eq $condaFound) { Fail "Conda is not available in PATH (use -NoConda to skip activation)" }
-    conda activate $EnvName
-    if ($LASTEXITCODE -ne 0) { Fail "Failed to activate conda env: $EnvName" }
-}
-
-if ($null -eq (Get-Command python -ErrorAction SilentlyContinue)) {
-    Fail "python not found after environment setup"
+$venvPython = Join-Path $Root ".venv\Scripts\python.exe"
+$pythonExe = ""
+if (Test-Path $venvPython) {
+    $pythonExe = $venvPython
+    Info "Using repository virtual environment: $pythonExe"
+} else {
+    if (-not $NoConda) {
+        $condaFound = Get-Command conda -ErrorAction SilentlyContinue
+        if ($null -eq $condaFound) { Fail "Conda is not available in PATH (use -NoConda to run with the Python already on PATH or create a .venv first)" }
+        conda activate $EnvName
+        if ($LASTEXITCODE -ne 0) { Fail "Failed to activate conda env: $EnvName" }
+    }
+    $pythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if ([string]::IsNullOrEmpty($pythonExe)) {
+        Fail "python not found after environment setup"
+    }
 }
 
 Info "Repository: $Root"
-Info "Conda env: $EnvName"
+Info "Python: $pythonExe"
 Info "Output: $OutputDir"
 if ($ModelsDir) { Info "Models root: $ModelsDir" }
 if ($HfCacheDir) { Info "HF cache root: $HfCacheDir" }
@@ -75,5 +84,5 @@ if ($ModelsDir) { $runArgs += @("--models", $ModelsDir) }
 if ($HfCacheDir) { $runArgs += @("--hf-cache", $HfCacheDir) }
 $runArgs += $ExtraArgs
 
-& python run.py @runArgs
+& $pythonExe run.py @runArgs
 exit $LASTEXITCODE

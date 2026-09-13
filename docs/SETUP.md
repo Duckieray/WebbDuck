@@ -80,7 +80,7 @@ Check that you are in the right place:
 dir
 ```
 
-You should see files named `run.py`, `README.md`, `startup.sh`, and folders like `server/` and `ui/`.
+You should see files named `run.py`, `README.md`, `startup.ps1`, and folders like `server/` and `ui/`.
 If you see that, you are in the right folder.
 
 ### Step 4: Check that Python is installed

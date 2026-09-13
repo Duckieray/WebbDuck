@@ -255,7 +255,8 @@ python tools\prepare_model_runtimes.py sdxl
 `startup.ps1` (like `startup.sh`) sources
 `%USERPROFILE%\.local\share\webbduck\runtimes\webbduck_runtime.env.ps1` when present,
 so the persisted `WEBBDUCK_*_PYTHON` paths from `tools/prepare_model_runtimes.py`
-apply automatically.
+apply automatically. It prefers a repository `.venv` (`.\venv\Scripts\python.exe`)
+when present; otherwise it falls back to conda activation (skippable with `-NoConda`).
 
 Direct run:
 
