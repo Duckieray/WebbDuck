@@ -5,7 +5,7 @@ Use it as the first-stop reference for architecture, workflows, project rules, a
 
 ## 1. Project Snapshot
 
-- App type: local-first SDXL image generation studio.
+- App type: local-first image generation studio (SDXL, FLUX, Krea 2, and Qwen image backends).
 - Backend: FastAPI + Uvicorn.
 - Frontend: vanilla JavaScript (ES modules), no Node build pipeline.
 - Execution model: queue-first GPU worker (single worker path for GPU-heavy work).
@@ -48,8 +48,9 @@ If repo layout or ownership changes, update `docs/ARCHITECTURE.md` and the affec
 Key folders:
 
 - `server/` API + websocket + gallery/thumb serving
-- `core/` worker, generation orchestration, pipeline lifecycle
-- `models/` registry/discovery for models, LoRAs, embeddings; includes `metastore.py` — the canonical rich-metadata store
+- `core/` worker, generation orchestration, runtime routing, pipeline lifecycle
+- `core/backends/` architecture-specific generation backends (SDXL, FLUX, Krea 2, Qwen) behind `base.py`
+- `models/` registry/discovery/descriptor for models, LoRAs, embeddings; includes `metastore.py` — the canonical rich-metadata store
 - `modes/` txt2img, img2img, inpaint, outpaint, two-pass mode logic
 - `prompt/` SDXL conditioning + long-prompt chunking
 - `plugins/` bundled optional plugin examples and manifests
@@ -164,6 +165,25 @@ Key folders:
 - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default: `180`; fail fast if GPU lease is stuck)
 - `WEBBDUCK_USE_IPC_COLLECT=1` (optional; enables aggressive CUDA IPC cleanup)
 
+Isolated backend runtimes (see `runtime_requirements/*.txt` and `docs/DEVELOPMENT.md`):
+
+- `WEBBDUCK_FLUX`, `WEBBDUCK_FLUX_PYTHON`, `WEBBDUCK_FLUX_OFFLOAD`, `WEBBDUCK_FLUX_TIMEOUT_SECONDS`, `WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH`, `WEBBDUCK_FLUX_IDENTITY_CACHE_DIR`
+- `WEBBDUCK_SDXL_WORKER`, `WEBBDUCK_SDXL_PYTHON`, `WEBBDUCK_SDXL_TIMEOUT_SECONDS`, `WEBBDUCK_SDXL_TOKENIZE_TIMEOUT_SECONDS`
+- `WEBBDUCK_QWEN_IMAGE_PYTHON`, `WEBBDUCK_QWEN_IMAGE_OFFLOAD`, `WEBBDUCK_QWEN_IMAGE_TIMEOUT_SECONDS`
+- `WEBBDUCK_KREA`, `WEBBDUCK_KREA2_COMPONENT_MODEL`, `WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL`, `WEBBDUCK_KREA2_BASE_COMPONENT_MODEL`, `WEBBDUCK_KREA2_OFFLOAD`, `WEBBDUCK_KREA2_BLOCKS_PER_GROUP`, `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM`
+- Krea identity:
+
+  - `WEBBDUCK_KREA2_IDENTITY_WEIGHT` (local `krea2-identity-edit` LoRA safetensors override)
+  - `WEBBDUCK_KREA2_IDENTITY_REPO`, `WEBBDUCK_KREA2_IDENTITY_PROCESSOR`, `WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`, `WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS`
+  - `WEBBDUCK_KREA2_IDENTITY_STEPS`, `WEBBDUCK_KREA2_IDENTITY_GUIDANCE`, `WEBBDUCK_KREA2_IDENTITY_CFG_FREE=1`, `WEBBDUCK_KREA2_IDENTITY_PAIRED`
+  - `WEBBDUCK_KREA2_IDENTITY_UPSCALE=0` (disable Real-ESRGAN upscale-back)
+  - `WEBBDUCK_KREA2_IDENTITY_MULTIREF`, `WEBBDUCK_KREA2_IDENTITY_MAX_REFERENCE_EDGE`, `WEBBDUCK_KREA2_IDENTITY_AUTO_FACE_CROP`, `WEBBDUCK_KREA2_IDENTITY_FACE_FOCUS`, `WEBBDUCK_KREA2_IDENTITY_SUBJECT_EDGE`, `WEBBDUCK_KREA2_IDENTITY_SUBJECT_REF_BOOST`
+  - `WEBBDUCK_KREA2_IDENTITY_QUALITY_BASELINE`, `WEBBDUCK_KREA2_IDENTITY_ALLOW_TEXT_ONLY`, `WEBBDUCK_KREA2_DEBUG_PRINT`
+
+Other:
+
+- `WEBBDUCK_RUNTIME_HOME`, `WEBBDUCK_CREDENTIALS_FILE`, `WEBBDUCK_HF_CONFIG_DIR`, `WEBBDUCK_LEASE_IDLE_TIMEOUT`, `WEBBDUCK_RLIMIT_AS_GB` (disabled by default)
+
 ## 7. WSL/Linux Commands
 
 Recommended environment name: `webbduck`.
@@ -211,7 +231,7 @@ cd <path-to-webbduck-repo>
 conda create -n webbduck python=3.10 -y
 conda activate webbduck
 pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
-pip install -r requirements.txt
+pip install -r requirements.windows.txt
 mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
 ```
 
@@ -254,7 +274,7 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Update endpoint form fields in `server/app.py`.
 - Thread value into settings payload.
 - Apply setting in `core/generation.py` / relevant mode.
-- Add UI control in `ui/index.html` + wiring in `ui/app.js` + state persistence.
+- Add UI control in `ui/index.html` + wiring in `ui/app.js` (`ui/app_main.js`) + state persistence.
 - Add tests.
 
 2. Add model/asset type discovery
@@ -275,10 +295,17 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - Keep infinite scroll + search + selection interactions compatible.
 - Validate lightbox actions and metadata rendering.
 
-4. Integrate/update optional web plugins
+5. Integrate/update optional web plugins
 - Follow plugin search precedence: `WEBBDUCK_PLUGINS_DIR` -> `<repo>/plugins` -> `~/.webbduck/plugins`.
 - If an external plugin repo ships its own installer, target the WebbDuck repo root when running it.
 - Keep plugin integration optional and non-blocking for core generation flow.
+
+6. Add a new generation backend
+- Implement a backend adapter under `core/backends/` following the contract in `core/backends/base.py`; route by model descriptor, never by hardcoded architecture names (see `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md`).
+- Wire model detection/descriptors through `models/discovery.py`, `models/catalog.py`, and `models/model_descriptor.py`.
+- Add runtime routing in `core/model_runtime.py` and a runtime requirements file in `runtime_requirements/` for isolated backends.
+- Surface capabilities through `/model-catalog` (`server/model_catalog_api.py`) and gate UI controls via `ui/core/modelCapabilities.js`.
+- Add a focused test file under `tests/test_<backend>_*.py`.
 
 ## 11. Troubleshooting Quick Reference
 
@@ -339,11 +366,17 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 - `.agents/frontend.md`
 - `.agents/plugins-tests-docs.md`
 - `docs/ARCHITECTURE.md`
+- `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md`
 - `docs/DEVELOPMENT.md`
+- `docs/SETUP.md`
 - `docs/WINDOWS_TESTING.md`
 - `docs/USER_GUIDE.md`
 - `docs/SIMPLE_GUIDE.md`
 - `docs/PLUGINS.md`
+- `docs/PROVIDER_CREDENTIALS.md`
+- `docs/KREA2_PERFORMANCE.md`
+- `docs/KREA2_IDENTITY_QUALITY_FIX.md`
+- `docs/HARDWARE_SMOKE_MATRIX.md`
 - `plugins/README.md`
 - `tests/README.md`
 - `ui/README.md`
@@ -357,9 +390,13 @@ Doc ownership notes:
 - Update `README.md` for install/startup/top-level capability changes.
 - Update `.agents/*.md` when repo navigation guidance, subsystem ownership, or agent workflow details change.
 - Update `docs/ARCHITECTURE.md` when folder ownership or file responsibilities change.
+- Update `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` when the model-first design/migration rules change.
 - Update `docs/DEVELOPMENT.md` when contributor workflows or common recipes change.
+- Update `docs/SETUP.md` when install/run steps or supported platform instructions change.
 - Update `docs/USER_GUIDE.md` or `docs/SIMPLE_GUIDE.md` when user-visible workflows change.
 - Update `docs/PLUGINS.md` and `plugins/README.md` when plugin contracts or install steps change.
+- Update `docs/KREA2_PERFORMANCE.md` when Krea 2 backend performance/tuning behavior changes.
+- Update `docs/PROVIDER_CREDENTIALS.md` when the provider credential contract changes.
 - Update `ui/README.md` and `tests/README.md` when frontend or validation structure changes.
 
 ## 14. PR Expectations

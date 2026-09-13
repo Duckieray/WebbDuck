@@ -9,9 +9,13 @@ ui/
 |- index.html
 |- app.js
 |- app_main.js
+|- manifest.json
+|- lib/
+|  `- photoswipe esm + css
 |- core/
 |  |- api.js
 |  |- events.js
+|  |- modelCapabilities.js
 |  |- state.js
 |  `- utils.js
 |- modules/
@@ -20,6 +24,8 @@ ui/
 |  |- LightboxManager.js
 |  |- LoraManager.js
 |  |- MaskEditor.js
+|  |- PersonaIdentityUI.js
+|  |- PersonaIdentityUI_impl.js
 |  |- ProgressManager.js
 |  `- ProviderCredentialsSettings.js
 |- styles/
@@ -30,7 +36,6 @@ ui/
 |  |- theme-nova.css
 |  |- components/
 |  `- layouts/
-`- planning/
 ```
 
 ## File Responsibilities
@@ -38,9 +43,12 @@ ui/
 - `ui/index.html`: app shell markup, controls, modals, and mount points.
 - `ui/app.js`: stable browser composition entrypoint; imports the main app plus small host-level extensions.
 - `ui/app_main.js`: Studio, Queue, Gallery, Settings, help modal, and plugin-tab orchestration.
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation over the shared reference + preset manager. Includes the FLUX.2-only persona tuning controls (reference face crop, anchor boost, face-focus framing) and the Krea Identity (`krea2_identity_edit`) branch, which forces the Krea provider on Krea models (no silent `faceid_sdxl` fallback), exposes one unified 0-1 **Identity Strength** slider for every provider (`adapter_scale = slider` on SDXL/FLUX; `ref_boost = 1 + 10*slider` on Krea, default slider 0.1), shows Grounding Res (`grounding_px`) and Identity LoRA Rank, and caps references to a single anchor.
+- `ui/modules/PersonaIdentityUI_impl.js`: implementation details for the Identity / Persona UI.
 - `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into the existing Settings modal. Token values are never persisted in browser state.
 - `ui/core/api.js`: fetch helpers for backend endpoints.
 - `ui/core/events.js`: local event bus fed by the WebSocket stream.
+- `ui/core/modelCapabilities.js`: capability-driven model profile layer; gates sections/controls from `/model-catalog` capabilities.
 - `ui/core/state.js`: persisted Studio state and DOM sync.
 - `ui/core/utils.js`: DOM, toast, async, and form-data helpers used across the app.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, and thumbnail sizing.
@@ -90,7 +98,6 @@ Provider credentials are deliberately excluded from this state. They are stored 
 - Update `ui/styles/design-tokens.css` for reusable colors, spacing, or typography tokens.
 - Update `ui/styles/theme-nova.css` for WebbDuck-specific theming and component presentation.
 - Update files in `ui/styles/components/` or `ui/styles/layouts/` for reusable CSS organization.
-- `ui/planning/` is available for tracked planning notes, but it is currently empty.
 
 ### Change API contracts
 

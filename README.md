@@ -14,6 +14,9 @@ WebbDuck is a local-first SDXL image generation studio built for fast iteration,
 
 ## Quick Start
 
+New to this? Follow `docs/SETUP.md` for a step-by-step, copy-paste install on Windows or Linux —
+no GitHub account required.
+
 ### Linux / WSL
 
 ```bash
@@ -80,8 +83,12 @@ For a more detailed file-by-file map, read `docs/ARCHITECTURE.md`.
 
 ## Documentation Guide
 
+New here? Start with `docs/SETUP.md` — a step-by-step, copy-paste install and run guide for
+Windows and Linux that does not require a GitHub account.
+
 - `.agents/README.md`: agent-specific reference index for the committed repo guide set.
 - `docs/ARCHITECTURE.md`: where everything is and which file owns what.
+- `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md`: target model-first generation architecture and migration plan.
 - `docs/DEVELOPMENT.md`: how to add features, run tests, and keep frontend/backend changes aligned.
 - `docs/USER_GUIDE.md`: end-user features and workflows.
 - `docs/SIMPLE_GUIDE.md`: short in-app help guide served by `/docs/simple-guide`.

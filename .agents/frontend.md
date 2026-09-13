@@ -5,7 +5,8 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 ## Main Files
 
 - `ui/index.html`: app shell, Studio controls, Gallery, modals, lightbox mounts, and plugin view containers.
-- `ui/app.js`: top-level orchestration for generation, queue UI, settings, remote plugins, smart extend, uploads, preview state, and gallery/lightbox interactions.
+- `ui/app.js`: stable browser composition entrypoint.
+- `ui/app_main.js`: top-level orchestration for generation, queue UI, settings, remote plugins, smart extend, uploads, preview state, and gallery/lightbox interactions.
 
 ## Core Modules
 
@@ -23,7 +24,9 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 - `ui/modules/EmbeddingManager.js`: embedding loading, selection, token editing, and restore-from-state behavior.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, favorites, selection mode, and batch delete.
 - `ui/modules/LightboxManager.js`: PhotoSwipe integration, metadata panel, compare mode, HD toggle, and image actions.
-- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section.
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section (IP-Adapter FaceID is the SDXL `faceid_sdxl` provider).
+- `ui/modules/PersonaIdentityUI_impl.js`: implementation details behind `PersonaIdentityUI.js`.
+- `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into Settings; token values are never persisted in browser state.
 
 ## Styles
 
@@ -38,14 +41,15 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 ## UI Data Flow
 
 1. `ui/index.html` provides the DOM structure.
-2. `ui/app.js` reads from and writes to `ui/core/state.js`.
+2. `ui/app_main.js` (via `ui/app.js`) reads from and writes to `ui/core/state.js`.
 3. Requests go through `ui/core/api.js`.
 4. Realtime updates arrive through `ui/core/events.js` from `/ws`.
 5. Feature managers subscribe to events and update focused regions of the page.
 
 ## Frontend Change Rules
 
-- When adding a control, update `ui/index.html`, `ui/app.js`, and `ui/core/state.js` together.
+- When adding a control, update `ui/index.html`, `ui/app_main.js`, and `ui/core/state.js` together.
 - If the backend consumes the value, also update `ui/core/api.js` and `server/app.py`.
-- Keep mobile behavior working; `ui/styles/theme-nova.css` and `ui/index.html` contain responsive UI assumptions.
+- Keep `ui/app.js` small; put page orchestration in `ui/app_main.js` and feature logic in `ui/modules/`.
+- Keep mobile behavior working; `ui/styles/layouts/responsive.css`, `ui/styles/theme-nova.css`, and `ui/index.html` contain responsive UI assumptions.
 - Prefer existing modal patterns over browser dialogs.

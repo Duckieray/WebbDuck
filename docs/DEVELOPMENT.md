@@ -63,6 +63,9 @@ python run.py --output ./outputs --port 8010
 - `server/state.py`: shared runtime status snapshot.
 - `server/storage.py`: output metadata and gallery manifest.
 - `server/thumbnails.py`: thumbnail generation.
+- `server/model_catalog_api.py`: architecture-free model profile API (capabilities/defaults).
+- `server/provider_credentials_api.py`: provider credential configuration endpoints.
+- `server/runtime_readiness_api.py`: non-loading runtime readiness surface.
 
 ### Runtime and Generation
 
@@ -75,27 +78,35 @@ python run.py --output ./outputs --port 8010
 - `embeddings/embeddings.json` (EMBEDDING_FILE)
 
 - `core/worker.py`: queued execution.
-- `core/generation.py`: normalized generation flow and mode selection.
+- `core/generation.py`: normalized generation flow, runtime routing, and mode selection.
+- `core/model_runtime.py`: checkpoint-driven runtime routing.
 - `core/pipeline.py`: Diffusers lifecycle, model load/unload, LoRA application.
 - `core/runtime.py`: runtime profile and device helpers.
 - `core/gpu_lease.py`: in-process GPU arbitration.
+- `core/backends/`: architecture-specific backends (SDXL, FLUX, Krea 2, Qwen image) behind the contract in `core/backends/base.py`.
 - `modes/*.py`: per-mode generation logic.
 - `prompt/*.py`: prompt conditioning and long-prompt behavior.
 
 ### Models and Assets
 
 - `models/registry.py`: checkpoint, LoRA, embedding, and asset discovery.
+- `models/discovery.py` and `models/catalog.py`: architecture-neutral checkpoint discovery and catalog used by runtime routing.
+- `models/model_descriptor.py`: normalized descriptor with capabilities, constraints, defaults, and runtime hints.
+- `models/quantization.py`: checkpoint quantization metadata helpers.
+- `models/single_file_inspection.py`: structural inspection of single-file checkpoints via safetensors headers.
 - `models/upscaler.py`: upscaler helpers.
 
 ### Frontend
 
 - `ui/index.html`: markup for Studio, Gallery, dialogs, and controls.
-- `ui/app.js`: main page wiring and screen-level behaviors.
+- `ui/app.js`: stable browser composition entrypoint.
+- `ui/app_main.js`: main page wiring and screen-level behaviors.
 - `ui/core/api.js`: client request wrappers.
 - `ui/core/utils.js`: shared DOM, download, form-data, and toast helpers.
 - `ui/core/state.js`: persisted Studio state.
 - `ui/core/events.js`: local event bus.
-- `ui/modules/*.js`: feature modules like Gallery, Lightbox, LoRAs, embeddings, masks, and progress.
+- `ui/core/modelCapabilities.js`: capability-driven gating from `/model-catalog`.
+- `ui/modules/*.js`: feature modules like Gallery, Lightbox, LoRAs, embeddings, masks, progress, Identity/Persona, and provider credentials.
 - `ui/styles/`: tokens, layout, components, and theme styles.
 
 ## Common Update Recipes
@@ -163,24 +174,93 @@ Use `tests/README.md` to pick the narrowest suite that still covers your change.
 
 ## Environment Variables
 
+### Core
+
 - `WEBBDUCK_OUTPUT_DIR`
 - `WEBBDUCK_PORT`
 - `WEBBDUCK_MODELS_DIR`
 - `WEBBDUCK_CHECKPOINT_DIR`
 - `WEBBDUCK_HF_CACHE_DIR`
+- `WEBBDUCK_HF_CONFIG_DIR`
 - `WEBBDUCK_WEIGHTS_DIR`
 - `WEBBDUCK_PLUGINS_DIR`
 - `WEBBDUCK_LORA_DIR`
 - `WEBBDUCK_EMBEDDING_DIR`
 - `WEBBDUCK_META_DIR` (default: `webbduck_meta/` in project root)
-- `WEBBDUCK_CATALOG_POLL_SECONDS`
+- `WEBBDUCK_CREDENTIALS_FILE` (default: `~/.webbduck/provider_credentials.json`)
+- `WEBBDUCK_RUNTIME_HOME`
+- `WEBBDUCK_RLIMIT_AS_GB` (`run.py`; address-space cap, disabled by default)
+
+### Catalog and runtime behavior
+
+- `WEBBDUCK_CATALOG_POLL_SECONDS` (default `3.0`)
 - `WEBBDUCK_IDLE_UNLOAD_SECONDS` (default `300.0`, min `30.0`)
-- `WEBBDUCK_THUMB_CONCURRENCY`
+- `WEBBDUCK_THUMB_CONCURRENCY` (default `2`)
 - `WEBBDUCK_DEVICE`
 - `WEBBDUCK_DTYPE`
 - `WEBBDUCK_STRICT_DEVICE`
-- `WEBBDUCK_GPU_LEASE_WAIT_SECONDS`
+- `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default `180`)
+- `WEBBDUCK_LEASE_IDLE_TIMEOUT`
 - `WEBBDUCK_USE_IPC_COLLECT`
+- `WEBBDUCK_SMART_EXTEND_DEBUG`
+- `WEBBDUCK_SMART_EXTEND_DEBUG_DIR`
+
+### Isolated backend runtimes
+
+FLUX:
+
+- `WEBBDUCK_FLUX`
+- `WEBBDUCK_FLUX_PYTHON`
+- `WEBBDUCK_FLUX_OFFLOAD`
+- `WEBBDUCK_FLUX_TIMEOUT_SECONDS`
+- `WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH`
+- `WEBBDUCK_FLUX_IDENTITY_CACHE_DIR`
+
+SDXL:
+
+- `WEBBDUCK_SDXL_WORKER`
+- `WEBBDUCK_SDXL_PYTHON`
+- `WEBBDUCK_SDXL_TIMEOUT_SECONDS`
+- `WEBBDUCK_SDXL_TOKENIZE_TIMEOUT_SECONDS`
+
+Qwen image:
+
+- `WEBBDUCK_QWEN_IMAGE_PYTHON`
+- `WEBBDUCK_QWEN_IMAGE_OFFLOAD`
+- `WEBBDUCK_QWEN_IMAGE_TIMEOUT_SECONDS`
+
+Krea 2 (see `docs/KREA2_PERFORMANCE.md`):
+
+- `WEBBDUCK_KREA`
+- `WEBBDUCK_KREA2_COMPONENT_MODEL`
+- `WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL`
+- `WEBBDUCK_KREA2_BASE_COMPONENT_MODEL`
+- `WEBBDUCK_KREA2_OFFLOAD`
+- `WEBBDUCK_KREA2_BLOCKS_PER_GROUP`
+- `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM`
+- `WEBBDUCK_KREA2_IDENTITY_WEIGHT`
+- `WEBBDUCK_KREA2_IDENTITY_REPO`
+- `WEBBDUCK_KREA2_IDENTITY_PROCESSOR`
+- `WEBBDUCK_KREA2_IDENTITY_TOKEN_BUDGET`
+- `WEBBDUCK_KREA2_IDENTITY_RESIDENT_BLOCKS`
+- `WEBBDUCK_KREA2_IDENTITY_STEPS`
+- `WEBBDUCK_KREA2_IDENTITY_GUIDANCE`
+- `WEBBDUCK_KREA2_IDENTITY_CFG_FREE`
+- `WEBBDUCK_KREA2_IDENTITY_PAIRED`
+- `WEBBDUCK_KREA2_IDENTITY_UPSCALE`
+- `WEBBDUCK_KREA2_IDENTITY_MULTIREF`
+- `WEBBDUCK_KREA2_IDENTITY_MAX_REFERENCE_EDGE`
+- `WEBBDUCK_KREA2_IDENTITY_AUTO_FACE_CROP`
+- `WEBBDUCK_KREA2_IDENTITY_FACE_FOCUS`
+- `WEBBDUCK_KREA2_IDENTITY_SUBJECT_EDGE`
+- `WEBBDUCK_KREA2_IDENTITY_SUBJECT_REF_BOOST`
+- `WEBBDUCK_KREA2_IDENTITY_QUALITY_BASELINE`
+- `WEBBDUCK_KREA2_IDENTITY_ALLOW_TEXT_ONLY`
+- `WEBBDUCK_KREA2_DEBUG_PRINT`
+
+## Runtime Requirements Files
+
+Optional per-backend dependency lists live in `runtime_requirements/` (`flux.txt`, `krea2.txt`, `qwen_image.txt`, `sdxl.txt`) for isolated runtimes whose dependencies may differ from WebbDuck's stable environment. Tools under `tools/` (`prepare_model_runtimes.py`, `run_hardware_smoke.py`) help set up and probe those environments; results are tracked in `docs/HARDWARE_SMOKE_MATRIX.md`.
 
 ## Documentation Update Checklist
 

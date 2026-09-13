@@ -96,6 +96,7 @@ Optional fields:
 - `GET /plugins/web/remote`: currently connected remote plugins
 - `POST /plugins/web/remote/connect`: connect a remote plugin by URL
 - `DELETE /plugins/web/remote/<id>`: disconnect a remote plugin
+- `POST /plugins/web/<id>/reload`: reload a local plugin module
 - `/plugins/web/<id>/ui/<entry>`: mounted plugin UI
 - `/plugins/web/<id>/api/*`: mounted plugin backend routes when `backend.py` exports `get_router(...)`
 
