@@ -1610,6 +1610,25 @@ function setupHelpModals() {
                   <li><strong>Best:</strong> <code>1-2</code> for stability. Use <code>3-4</code> only if your system has headroom.</li>
                 </ul>
             `
+        },
+        ip_adapter: {
+            title: 'Identity / Persona Help',
+            html: `
+                <h4>Identity / Persona</h4>
+                <p>Use one or more reference photos to keep a consistent face or character across your images.</p>
+                <ul>
+                  <li><strong>Upload references</strong> once, then save them as a <strong>named persona</strong> to reuse that identity in future generations.</li>
+                  <li><strong>Use reference identity</strong> must be checked for the persona to apply.</li>
+                  <li>The identity method is chosen automatically from your selected model:
+                    <ul>
+                      <li><strong>SDXL:</strong> FaceID adapter uses every selected reference photo.</li>
+                      <li><strong>FLUX.2:</strong> native multi-reference conditioning, up to <code>5</code> selected references.</li>
+                      <li><strong>Krea 2:</strong> a single anchor reference with the krea2-identity-edit LoRA; the last image you select becomes the anchor.</li>
+                    </ul>
+                  </li>
+                  <li><strong>Identity Strength (0-1):</strong> how strongly the reference likeness is applied. Lower = weaker likeness, higher = stronger (can lock the reference composition). The balanced default is <code>0.30</code> (Krea), <code>1.00</code> for the SDXL/FLUX.2 LoRA scale.</li>
+                </ul>
+            `
         }
     };
 
