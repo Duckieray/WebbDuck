@@ -21,20 +21,14 @@ from core.backends.krea2_identity import (
 )
 from core.backends.krea2_lora import inject_lora_trigger, lora_trigger_phrase, resolve_krea2_loras
 from core.backends.runtime_probe import probe_python_runtime
+from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
 from core.provider_credentials import resolve_provider_token
 from models.model_descriptor import ModelDescriptor
 
 
 def _runtime_python() -> str:
-    configured = str(os.getenv("WEBBDUCK_KREA2_PYTHON") or "").strip()
-    if configured:
-        return configured
-    runtime_home = Path(
-        os.getenv("WEBBDUCK_RUNTIME_HOME", "~/.local/share/webbduck/runtimes")
-    ).expanduser()
-    suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
-    return str(runtime_home / "krea2" / suffix)
+    return resolve_runtime_python("krea2", "WEBBDUCK_KREA2_PYTHON")
 
 
 def _component_source(variant: str) -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -15,6 +14,7 @@ from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
 from core.backends.runtime_probe import probe_python_runtime
+from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
 from models.model_descriptor import ModelDescriptor
 
@@ -28,7 +28,7 @@ class QwenImageDiffusersBackend(GenerationBackend):
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        python_exe = os.getenv("WEBBDUCK_QWEN_IMAGE_PYTHON") or sys.executable
+        python_exe = resolve_runtime_python("qwen_image", "WEBBDUCK_QWEN_IMAGE_PYTHON")
         return probe_python_runtime(
             python_exe,
             (("diffusers", "QwenImagePipeline"),),
@@ -67,7 +67,7 @@ class QwenImageDiffusersBackend(GenerationBackend):
             "seed": seed,
         }
 
-        python_exe = os.getenv("WEBBDUCK_QWEN_IMAGE_PYTHON") or sys.executable
+        python_exe = resolve_runtime_python("qwen_image", "WEBBDUCK_QWEN_IMAGE_PYTHON")
         worker = Path(__file__).with_name("qwen_image_worker.py")
         timeout_seconds = max(60.0, float(os.getenv("WEBBDUCK_QWEN_IMAGE_TIMEOUT_SECONDS", "3600")))
 

@@ -165,8 +165,9 @@ python tools\prepare_model_runtimes.py sdxl
 
 - It **auto-detects your graphics card** and installs the matching AI libraries. First run downloads
   a few GB, so it can take a while — do not close the window.
-- When it finishes you will see `Add these to the WebbDuck launch environment:`. For SDXL you can
-  ignore that part — WebbDuck finds the engine automatically.
+- When it finishes it **remembers where the engine lives** (it writes a small file, `webbduck_runtime.env`,
+  in the WebbDuck runtimes folder). The launcher below reads that file automatically, so you never have
+  to type `export` lines yourself.
 
 > **Only want SDXL for now?** Then you are done here. Later, to enable FLUX, Krea 2, and Qwen model
 > engines too (big downloads), run the same command with `all` instead of `sdxl`:
@@ -174,12 +175,20 @@ python tools\prepare_model_runtimes.py sdxl
 
 ### Step 10: Start WebbDuck
 
+**Easy way — the one-call launcher:**
+
 ```
-python .\run.py --output .\outputs\ --port 8010
+.\startup.ps1
 ```
 
 Wait until you see something like `Uvicorn running on http://0.0.0.0:8010`. Do not close this
 window — WebbDuck runs inside it.
+
+**Or start it directly** (same command as you would have typed by hand):
+
+```
+python .\run.py --output .\outputs\ --port 8010
+```
 
 ### Step 11: Open WebbDuck in your browser
 
@@ -316,8 +325,9 @@ python tools/prepare_model_runtimes.py sdxl
 
 - It **auto-detects your graphics card** and installs the matching AI libraries. First run
   downloads a few GB, so it can take a while — do not close the terminal.
-- When it finishes you will see `Add these to the WebbDuck launch environment:`. For SDXL you can
-  ignore that part — WebbDuck finds the engine automatically.
+- When it finishes it **remembers where the engine lives** (it writes a small file, `webbduck_runtime.env`,
+  in the WebbDuck runtimes folder). The launcher below reads that file automatically, so you never have
+  to type `export` lines yourself.
 
 > **Only want SDXL for now?** Then you are done here. Later, to enable FLUX, Krea 2, and Qwen model
 > engines too (big downloads), run the same command with `all` instead of `sdxl`:
@@ -325,11 +335,19 @@ python tools/prepare_model_runtimes.py sdxl
 
 ### Step 10: Start WebbDuck
 
+**Easy way — the one-call launcher:**
+
 ```
-python run.py --output ./outputs --port 8010
+./startup.sh
 ```
 
 Wait until you see `Uvicorn running on http://0.0.0.0:8010`. Keep this terminal window open.
+
+**Or start it directly** (same command as you would have typed by hand):
+
+```
+python run.py --output ./outputs --port 8010
+```
 
 ### Step 11: Open WebbDuck in your browser
 
@@ -365,15 +383,15 @@ For a full tour of the Studio, prompts, and tools, read `docs/USER_GUIDE.md` and
 - Windows: open PowerShell, then:
   ```
   cd C:\webbduck
-  .\.venv\Scripts\Activate.ps1
-  python .\run.py --output .\outputs\ --port 8010
+  .\startup.ps1
   ```
+  (or the by-hand version: `.\.venv\Scripts\Activate.ps1` then `python .\run.py --output .\outputs\ --port 8010`)
 - Linux: open a terminal, then:
   ```
   cd ~/webbduck
-  source .venv/bin/activate
-  python run.py --output ./outputs --port 8010
+  ./startup.sh
   ```
+  (or the by-hand version: `source .venv/bin/activate` then `python run.py --output ./outputs --port 8010`)
 
 **Update to a newer version:**
 
@@ -401,6 +419,7 @@ WebbDuck updates are released as new zip downloads (following git isn't required
 | `Address already in use` / port 8010 busy | Another program uses that port | Use a different port: `python run.py --port 8020`, then go to `http://localhost:8020` |
 | The model list is empty | No model file is in `checkpoint/sdxl/` yet | Add an SDXL `.safetensors` file there and refresh (see "After it runs") |
 | Generation fails with a message about a missing runtime engine (hint: `prepare_model_runtimes.py`) | The engine was never installed | Run Step 9 (`python tools\prepare_model_runtimes.py sdxl` on Windows, or `python tools/prepare_model_runtimes.py sdxl` on Linux), then restart WebbDuck |
+| Startup says there is no runtime env file | You skipped Step 9 (the engine installer) | Run Step 9 once so the engine and its `webbduck_runtime.env` file are created, then launch again |
 | Generation is very slow | No NVIDIA GPU, or the app fell back to CPU | Nothing is broken; CPU generation is just slow. A dedicated NVIDIA GPU makes it fast |
 | A long Hugging Face symlink warning on Windows | Windows-safe file-linking notice | Often non-fatal; if generation works, ignore it |
 

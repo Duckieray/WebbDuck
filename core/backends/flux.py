@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -17,6 +16,7 @@ from core.backends.base import GenerationBackend, backend_resolver
 from core.backends.flux_identity import augment_identity_prompt, prepare_flux_references
 from core.backends.flux_lora import inject_lora_trigger, lora_trigger_phrase, resolve_flux_loras
 from core.backends.runtime_probe import probe_python_runtime
+from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
 from core.provider_credentials import resolve_provider_token
 from models.model_descriptor import ModelDescriptor
@@ -318,7 +318,7 @@ class FluxDiffusersBackend(GenerationBackend):
     def readiness(self, descriptor: ModelDescriptor) -> dict[str, Any]:
         if not self.can_handle(descriptor):
             return {"ready": False, "reason": "Checkpoint is not handled by this backend."}
-        python_exe = os.getenv("WEBBDUCK_FLUX_PYTHON") or sys.executable
+        python_exe = resolve_runtime_python("flux", "WEBBDUCK_FLUX_PYTHON")
         required = [
             ("diffusers", "Flux2KleinPipeline"),
             ("peft", "LoraConfig"),
@@ -431,7 +431,7 @@ class FluxDiffusersBackend(GenerationBackend):
             "seed": seed,
         }
 
-        python_exe = os.getenv("WEBBDUCK_FLUX_PYTHON") or sys.executable
+        python_exe = resolve_runtime_python("flux", "WEBBDUCK_FLUX_PYTHON")
         worker = Path(__file__).with_name("flux_worker.py")
         timeout_seconds = max(30.0, float(os.getenv("WEBBDUCK_FLUX_TIMEOUT_SECONDS", "1800")))
 

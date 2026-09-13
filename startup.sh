@@ -116,6 +116,18 @@ mkdir -p "$OUTPUT_DIR"
 export HF_HUB_DISABLE_PROGRESS_BARS
 export TQDM_DISABLE
 
+# Source runtime locations persisted by tools/prepare_model_runtimes.py.
+# This makes WEBBDUCK_*_PYTHON available to run.py without manual exports.
+RUNTIME_HOME="${WEBBDUCK_RUNTIME_HOME:-$HOME/.local/share/webbduck/runtimes}"
+ENV_FILE="$RUNTIME_HOME/webbduck_runtime.env"
+if [[ -f "$ENV_FILE" ]]; then
+  info "Sourcing runtime env: $ENV_FILE"
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+else
+  info "No runtime env file at $ENV_FILE (install engines with tools/prepare_model_runtimes.py)"
+fi
+
 if (( USE_CONDA )); then
   command -v conda >/dev/null 2>&1 || fail "Conda is not available in PATH"
 

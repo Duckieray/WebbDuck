@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
+import subprocess
 
 from runtime_hardware import HostHardwareProfile, memory_tier
-from tools.prepare_model_runtimes import _profile_requirements, _torch_install_command
+from tools.prepare_model_runtimes import (
+    ENV_FILE_NAME,
+    ENV_FILE_PS1_NAME,
+    _profile_requirements,
+    _torch_install_command,
+    write_env_files,
+)
 
 
 def test_pytorch_channel_tracks_accelerator_and_nvidia_generation():
@@ -62,3 +70,40 @@ def test_profile_dependency_overlay_is_convention_based(monkeypatch, tmp_path):
 
     profile = HostHardwareProfile("cuda", "nvidia", "Test GPU")
     assert _profile_requirements("krea2", profile) == [cuda_overlay, vendor_overlay]
+
+
+def test_write_env_files_persists_bash_and_powershell_export_files(tmp_path):
+    exports = [
+        ("WEBBDUCK_SDXL_PYTHON", tmp_path / "sdxl/bin/python"),
+        ("WEBBDUCK_FLUX_PYTHON", tmp_path / "flux/bin/python"),
+    ]
+
+    written = write_env_files(tmp_path, exports)
+
+    for name in (ENV_FILE_NAME, ENV_FILE_PS1_NAME):
+        assert any(path.name == name for path in written)
+
+    bash_text = (tmp_path / ENV_FILE_NAME).read_text(encoding="utf-8")
+    assert "export WEBBDUCK_SDXL_PYTHON=" in bash_text
+    assert "export WEBBDUCK_FLUX_PYTHON=" in bash_text
+    assert "/sdxl/bin/python" in bash_text
+    ps1_text = (tmp_path / ENV_FILE_PS1_NAME).read_text(encoding="utf-8")
+    assert "$env:WEBBDUCK_SDXL_PYTHON = " in ps1_text
+    assert "$env:WEBBDUCK_FLUX_PYTHON = " in ps1_text
+
+
+def test_write_env_files_is_bash_sourceable(tmp_path):
+    exports = [
+        ("WEBBDUCK_SDXL_PYTHON", tmp_path / "sdxl/bin/python"),
+        ("WEBBDUCK_FLUX_PYTHON", tmp_path / "flux/bin/python"),
+    ]
+    write_env_files(tmp_path, exports)
+
+    result = subprocess.run(
+        ["bash", "-c", f"source {shlex.quote(str(tmp_path / ENV_FILE_NAME))}; echo $WEBBDUCK_SDXL_PYTHON"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(tmp_path / "sdxl/bin/python")

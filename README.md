@@ -40,7 +40,8 @@ python .\run.py
 
 Open `http://localhost:8010`.
 
-If you prefer the repo's conda-based workflow, use `startup.sh` on Linux/WSL or the commands in `docs/WINDOWS_TESTING.md` on Windows.
+If you prefer the repo's conda-based workflow, use `startup.sh` on Linux/WSL or `startup.ps1` on Windows.
+Both launchers auto-source the runtime locations persisted by `tools/prepare_model_runtimes.py`.
 
 ## Common Run Commands
 
@@ -49,6 +50,7 @@ python run.py --port 8020
 python run.py --output ./outputs --models /path/to/models
 python run.py --hf-cache /path/to/huggingface-cache
 ./startup.sh --env webbduck --output ./outputs --port 8010
+.\startup.ps1 --Port 8020   # Windows / PowerShell
 ```
 
 ## Key Runtime Settings

@@ -10,6 +10,8 @@ conda activate webbduck
 export WEBBDUCK_MODELS_DIR="/run/media/duckie/Leia/models"
 export WEBBDUCK_HF_CACHE_DIR="/run/media/duckie/Leia/huggingface"
 export WEBBDUCK_OUTPUT_DIR="/home/duckie/git/WebbDuck/outputs"
+ENV_FILE="${WEBBDUCK_RUNTIME_HOME:-$HOME/.local/share/webbduck/runtimes}/webbduck_runtime.env"
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
 nohup python run.py --output /home/duckie/git/WebbDuck/outputs --port 8010 --models /run/media/duckie/Leia/models --hf-cache /run/media/duckie/Leia/huggingface > /tmp/webbduck_server.log 2>&1 &
 ' >/dev/null 2>&1 &
 

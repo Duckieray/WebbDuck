@@ -209,6 +209,12 @@ python tools/prepare_model_runtimes.py sdxl
 ./startup.sh --env webbduck --output ./outputs --port 8010
 ```
 
+`startup.sh` auto-sources `~/.local/share/webbduck/runtimes/webbduck_runtime.env`
+(written by `tools/prepare_model_runtimes.py`), which persists the per-runtime
+`WEBBDUCK_*_PYTHON` exports. FLUX/Qwen/Krea/SDXL backends also auto-resolve their
+interpreter from `WEBBDUCK_RUNTIME_HOME` when no env var is set, so the launcher
+works even before the env file exists.
+
 ### Run (direct)
 
 ```bash
@@ -240,6 +246,18 @@ python tools\prepare_model_runtimes.py sdxl
 ```
 
 ### Run
+
+```powershell
+.\startup.ps1
+.\startup.ps1 -Port 8020
+```
+
+`startup.ps1` (like `startup.sh`) sources
+`%USERPROFILE%\.local\share\webbduck\runtimes\webbduck_runtime.env.ps1` when present,
+so the persisted `WEBBDUCK_*_PYTHON` paths from `tools/prepare_model_runtimes.py`
+apply automatically.
+
+Direct run:
 
 ```powershell
 conda activate webbduck

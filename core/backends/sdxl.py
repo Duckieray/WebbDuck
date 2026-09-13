@@ -14,6 +14,7 @@ from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
 from core.backends.runtime_probe import probe_python_runtime
+from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
 from models.model_descriptor import ModelDescriptor
 
@@ -45,14 +46,7 @@ def _hydrate_execution_registry() -> None:
 
 
 def _runtime_python() -> str:
-    configured = str(os.getenv("WEBBDUCK_SDXL_PYTHON") or "").strip()
-    if configured:
-        return configured
-    runtime_home = Path(
-        os.getenv("WEBBDUCK_RUNTIME_HOME", "~/.local/share/webbduck/runtimes")
-    ).expanduser()
-    suffix = Path("Scripts/python.exe") if os.name == "nt" else Path("bin/python")
-    return str(runtime_home / "sdxl" / suffix)
+    return resolve_runtime_python("sdxl", "WEBBDUCK_SDXL_PYTHON")
 
 
 def _apply_progress_file(path: Path) -> None:
