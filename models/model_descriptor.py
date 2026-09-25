@@ -76,6 +76,7 @@ class ModelDescriptor:
         return {
             "name": self.name,
             "type": self.format,
+            "arch": self.architecture,
             "defaults": dict(self.defaults),
             "capabilities": self.capabilities.to_dict(),
             "constraints": dict(self.constraints),

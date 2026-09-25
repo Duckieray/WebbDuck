@@ -66,6 +66,29 @@ export async function postForm(url, formData) {
     });
 }
 
+// Architecture groups for the checkpoint dropdown. Order defines both the
+// dropdown group order and the within-catalog sort preference.
+const ARCH_ORDER = ['sdxl', 'flux', 'flux1', 'flux2', 'krea2', 'qwen_image'];
+const ARCH_LABELS = {
+    sdxl: 'SDXL',
+    flux: 'FLUX',
+    flux1: 'FLUX',
+    flux2: 'FLUX',
+    krea2: 'Krea 2',
+    qwen_image: 'Qwen Image',
+};
+
+function architectureGroup(item) {
+    const key = String(item?.arch || '').toLowerCase();
+    return ARCH_LABELS[key] || 'Other';
+}
+
+function architectureRank(item) {
+    const key = String(item?.arch || '').toLowerCase();
+    const rank = ARCH_ORDER.indexOf(key);
+    return rank < 0 ? Number.MAX_SAFE_INTEGER : rank;
+}
+
 function normalizeCatalog(catalog) {
     if (!Array.isArray(catalog)) return [];
     return catalog
@@ -76,7 +99,13 @@ function normalizeCatalog(catalog) {
             label: item.supported === false
                 ? `${item.name} — runtime unavailable`
                 : item.name,
-        }));
+            group: architectureGroup(item),
+        }))
+        .sort((a, b) => {
+            const rankDelta = architectureRank(a) - architectureRank(b);
+            if (rankDelta !== 0) return rankDelta;
+            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        });
 }
 
 function cachedProfile(modelName) {

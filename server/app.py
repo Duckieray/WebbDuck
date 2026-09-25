@@ -1490,12 +1490,6 @@ def _lora_title(name: str) -> str:
     return meta.title if meta and meta.title else ""
 
 
-def _embedding_title(name: str) -> str:
-    """Canonical display name for an embedding (fallback: file-stem 'name')."""
-    meta = meta_store.get(name, asset_type="embedding")
-    return meta.title if meta and meta.title else ""
-
-
 def _lora_matches_arch(
     lora_arch: str, checkpoint_arch: str, flux_family: set[str]
 ) -> bool:
@@ -1526,6 +1520,12 @@ def list_model_embeddings(base_model: str):
         for name, cfg in EMBEDDING_REGISTRY.items()
         if cfg.get("arch") == model_arch
     ]
+
+
+def _embedding_title(name: str) -> str:
+    """Canonical display name for an embedding (fallback: file-stem 'name')."""
+    meta = meta_store.get(name, asset_type="embedding")
+    return meta.title if meta and meta.title else ""
 
 
 # ---------------------------------------------------------------------------

@@ -169,7 +169,10 @@ export function downloadFile(url, filename) {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Populate a select element with options
+ * Populate a select element with options.
+ * Options that carry a `group` label are nested under an `<optgroup>` label
+ * so they can be organized (e.g. checkpoint dropdown grouped by architecture).
+ * Plain strings and ungrouped objects render as flat options.
  */
 export function populateSelect(selectId, options, includeNone = false) {
     const select = byId(selectId);
@@ -177,16 +180,30 @@ export function populateSelect(selectId, options, includeNone = false) {
 
     select.innerHTML = includeNone ? '<option value="None">None</option>' : '';
 
+    const groups = new Map();
     options.forEach(option => {
         const opt = document.createElement('option');
         if (typeof option === 'string') {
             opt.value = option;
             opt.textContent = option;
-        } else {
-            opt.value = option.value || option.name;
-            opt.textContent = option.label || option.name || option.value;
+            select.appendChild(opt);
+            return;
         }
-        select.appendChild(opt);
+        opt.value = option.value || option.name;
+        opt.textContent = option.label || option.name || option.value;
+        const group = option.group;
+        if (group) {
+            let optgroup = groups.get(group);
+            if (!optgroup) {
+                optgroup = document.createElement('optgroup');
+                optgroup.label = group;
+                groups.set(group, optgroup);
+                select.appendChild(optgroup);
+            }
+            optgroup.appendChild(opt);
+        } else {
+            select.appendChild(opt);
+        }
     });
 }
 

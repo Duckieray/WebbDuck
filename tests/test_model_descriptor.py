@@ -64,6 +64,7 @@ def test_krea_public_descriptor_is_runnable_and_exposes_lora_ui(tmp_path):
     )
     payload = descriptor.to_public_dict()
     assert payload["name"] == "Krea-2-Turbo"
+    assert payload["arch"] == "krea2"
     assert payload["capabilities"]["text2img"] is True
     assert payload["capabilities"]["img2img"] is False
     assert payload["capabilities"]["lora"] is True

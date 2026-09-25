@@ -47,7 +47,7 @@ ui/
 - `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation over the shared reference + preset manager. Includes the FLUX.2-only persona tuning controls (reference face crop, anchor boost, face-focus framing) and the Krea Identity (`krea2_identity_edit`) branch, which forces the Krea provider on Krea models (no silent `faceid_sdxl` fallback), exposes one unified 0-1 **Identity Strength** slider for every provider (`adapter_scale = slider` on SDXL/FLUX; `ref_boost = 1 + 10*slider` on Krea, default slider 0.1), shows Grounding Res (`grounding_px`) and Identity LoRA Rank, and caps references to a single anchor.
 - `ui/modules/PersonaIdentityUI_impl.js`: implementation details for the Identity / Persona UI.
 - `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into the existing Settings modal. Token values are never persisted in browser state.
-- `ui/core/api.js`: fetch helpers for backend endpoints.
+- `ui/core/api.js`: fetch helpers for backend endpoints. `normalizeCatalog` tags each checkpoint catalog entry with a display-only `group` (architecture label) and sorts entries group-first so `populateSelect` can render the Checkpoints dropdown grouped by arch type.
 - `ui/core/events.js`: local event bus fed by the WebSocket stream.
 - `ui/core/modelCapabilities.js`: capability-driven model profile layer; gates sections/controls from `/model-catalog` capabilities.
 - `ui/core/state.js`: persisted Studio state and DOM sync.

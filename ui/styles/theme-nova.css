@@ -410,6 +410,14 @@ body::before {
   color-scheme: dark;
 }
 
+.select optgroup {
+  background: #0c1526;
+  color: #8692aa;
+  font-weight: 600;
+  font-size: 12.5px;
+  color-scheme: dark;
+}
+
 .preset-chips {
   display: flex;
   flex-wrap: wrap;

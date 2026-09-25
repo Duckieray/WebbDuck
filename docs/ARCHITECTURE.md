@@ -57,7 +57,7 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `server/storage.py` | output persistence, metadata files, gallery manifest management |
 | `server/thumbnails.py` | thumbnail generation and caching |
 | `server/image_edit.py` | non-destructive storage for gallery edits: path containment, `<stem>_edit[_N].png` allocation, manifest lineage (the browser does the pixel work) |
-| `server/model_catalog_api.py` | architecture-free model profile API from the runtime catalog (capabilities/defaults) |
+| `server/model_catalog_api.py` | architecture-free model profile API from the runtime catalog (capabilities/defaults; the payload also exposes a display-only `arch` hint so the checkpoint dropdown can group entries by architecture type) |
 | `server/provider_credentials_api.py` | Hugging Face/Civitai provider credential configuration endpoints |
 | `server/runtime_readiness_api.py` | non-loading runtime readiness surface for checkpoint-driven generation |
 | `core/worker.py` | queued execution of GPU-heavy jobs |
