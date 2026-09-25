@@ -106,6 +106,7 @@ class _CheckpointMeta:
 
 @dataclass
 class _LoraMeta:
+    title: str = ""
     tags: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
@@ -116,6 +117,7 @@ class _LoraMeta:
 
 @dataclass
 class _EmbeddingMeta:
+    title: str = ""
     tags: list[str] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
     families: list[str] = field(default_factory=list)
@@ -144,6 +146,7 @@ class AssetInfo:
     path: str | None = None
 
     # Rich metadata (WebbDuck-owned)
+    title: str = ""
     tags: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
@@ -258,6 +261,7 @@ class MetaStore:
         result: dict[str, _LoraMeta] = {}
         for name, meta in items.items():
             result[name] = _LoraMeta(
+                title=meta.get("title", ""),
                 tags=list(meta.get("tags", []) or []),
                 aliases=list(meta.get("aliases", []) or []),
                 modes=list(meta.get("modes", []) or []),
@@ -272,6 +276,7 @@ class MetaStore:
         result: dict[str, _EmbeddingMeta] = {}
         for name, meta in data.items():
             result[name] = _EmbeddingMeta(
+                title=meta.get("title", ""),
                 tags=list(meta.get("tags", []) or []),
                 modes=list(meta.get("modes", []) or []),
                 families=list(meta.get("families", []) or []),
@@ -354,6 +359,7 @@ class MetaStore:
             arch=registry_info.get("arch") if registry_info else None,
             source=registry_info.get("source") if registry_info else None,
             path=str(registry_info["path"]) if registry_info and "path" in registry_info else None,
+            title=ph.title if ph else "",
             tags=list(ph.tags) if ph else [],
             aliases=list(ph.aliases) if ph else [],
             modes=list(ph.modes) if ph else [],
@@ -371,6 +377,7 @@ class MetaStore:
             arch=registry_info.get("arch") if registry_info else None,
             source=registry_info.get("source") if registry_info else None,
             path=str(registry_info["path"]) if registry_info and "path" in registry_info else None,
+            title=ph.title if ph else "",
             tags=list(ph.tags) if ph else [],
             modes=list(ph.modes) if ph else [],
             families=list(ph.families) if ph else [],
@@ -461,6 +468,7 @@ class MetaStore:
             result = [
                 a for a in result
                 if q in a.name.lower()
+                or q in a.title.lower()
                 or q in a.description.lower()
                 or any(q in alias.lower() for alias in a.aliases)
                 or any(q in t.lower() for t in a.tags)
@@ -698,16 +706,18 @@ class MetaStore:
         """Create or update rich metadata for a checkpoint.
 
         Accepts the same fields as ``_CheckpointMeta``: ``tags``, ``families``,
-        ``recommended_mode``, ``url``, ``description``.
+        ``modes``, ``recommended_mode``, ``url``, ``description``.
         Returns True if something changed.
         """
         existing = self._checkpoints.get(name)
         new_tags = list(kwargs.get("tags", existing.tags if existing else []))
         new_families = list(kwargs.get("families", existing.families if existing else []))
+        new_modes = list(kwargs.get("modes", existing.modes if existing else []))
         changed = (
             existing is None
             or new_tags != existing.tags
             or new_families != existing.families
+            or new_modes != existing.modes
             or kwargs.get("recommended_mode", existing.recommended_mode) != existing.recommended_mode
             or kwargs.get("url", existing.url) != existing.url
             or kwargs.get("description", existing.description) != existing.description
@@ -716,6 +726,7 @@ class MetaStore:
             self._checkpoints[name] = _CheckpointMeta(
                 tags=new_tags,
                 families=new_families,
+                modes=new_modes,
                 recommended_mode=kwargs.get("recommended_mode", existing.recommended_mode if existing else None),
                 url=kwargs.get("url", existing.url if existing else ""),
                 description=kwargs.get("description", existing.description if existing else ""),
@@ -729,6 +740,7 @@ class MetaStore:
         new_tags = list(kwargs.get("tags", existing.tags if existing else []))
         changed = (
             existing is None
+            or kwargs.get("title", existing.title) != existing.title
             or new_tags != existing.tags
             or list(kwargs.get("aliases", existing.aliases if existing else [])) != existing.aliases
             or list(kwargs.get("modes", existing.modes if existing else [])) != existing.modes
@@ -738,6 +750,7 @@ class MetaStore:
         )
         if changed:
             self._loras[name] = _LoraMeta(
+                title=kwargs.get("title", existing.title if existing else ""),
                 tags=new_tags,
                 aliases=list(kwargs.get("aliases", existing.aliases if existing else [])),
                 modes=list(kwargs.get("modes", existing.modes if existing else [])),
@@ -753,6 +766,7 @@ class MetaStore:
         existing = self._embeddings.get(name)
         changed = (
             existing is None
+            or kwargs.get("title", existing.title) != existing.title
             or list(kwargs.get("tags", existing.tags if existing else [])) != existing.tags
             or list(kwargs.get("modes", existing.modes if existing else [])) != existing.modes
             or list(kwargs.get("families", existing.families if existing else [])) != existing.families
@@ -762,6 +776,7 @@ class MetaStore:
         )
         if changed:
             self._embeddings[name] = _EmbeddingMeta(
+                title=kwargs.get("title", existing.title if existing else ""),
                 tags=list(kwargs.get("tags", existing.tags if existing else [])),
                 modes=list(kwargs.get("modes", existing.modes if existing else [])),
                 families=list(kwargs.get("families", existing.families if existing else [])),

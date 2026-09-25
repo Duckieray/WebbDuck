@@ -1475,12 +1475,25 @@ def list_model_loras(base_model: str):
     return [
         {
             "name": name,
+            "title": _lora_title(name),
             "description": cfg.get("description", ""),
             "weight": cfg.get("weight", 1.0),
         }
         for name, cfg in LORA_REGISTRY.items()
         if _lora_matches_arch(cfg["arch"], model_arch, _FLUX_FAMILY)
     ]
+
+
+def _lora_title(name: str) -> str:
+    """Canonical display name for a LoRA (fallback: file-stem 'name')."""
+    meta = meta_store.get(name, asset_type="lora")
+    return meta.title if meta and meta.title else ""
+
+
+def _embedding_title(name: str) -> str:
+    """Canonical display name for an embedding (fallback: file-stem 'name')."""
+    meta = meta_store.get(name, asset_type="embedding")
+    return meta.title if meta and meta.title else ""
 
 
 def _lora_matches_arch(
@@ -1506,6 +1519,7 @@ def list_model_embeddings(base_model: str):
     return [
         {
             "name": name,
+            "title": _embedding_title(name),
             "description": cfg.get("description", ""),
             "token": cfg.get("token", name),
         }

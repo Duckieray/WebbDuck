@@ -63,7 +63,7 @@ python run.py --output ./outputs --port 8010
 - `server/state.py`: shared runtime status snapshot.
 - `server/storage.py`: output metadata and gallery manifest.
 - `server/thumbnails.py`: thumbnail generation.
-- `server/model_catalog_api.py`: architecture-free model profile API (capabilities/defaults).
+- `server/model_catalog_api.py`: architecture-free model profile API (capabilities/defaults; payload includes a display-only `arch` grouping hint).
 - `server/provider_credentials_api.py`: provider credential configuration endpoints.
 - `server/runtime_readiness_api.py`: non-loading runtime readiness surface.
 
@@ -134,6 +134,8 @@ python run.py --output ./outputs --port 8010
 2. Check any request/response changes in `server/app.py`.
 3. Update `ui/modules/LoraManager.js` or `ui/modules/EmbeddingManager.js`.
 4. Run focused tests such as `tests/test_embedding_loading.py` and `tests/test_server.py`.
+
+Canonical display titles: LoRAs and embeddings carry an optional `title` (the human-facing name) in `webbduck_meta/`; the file-stem `name` stays the generation/persistence key. Backfill titles from CivitAI pages plus safetensors metadata with `python tools/backfill_canonical_titles.py` (`--dry-run`, `--offline-only`, `--force`).
 
 ### Change Gallery Behavior
 

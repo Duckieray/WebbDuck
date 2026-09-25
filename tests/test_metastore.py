@@ -43,6 +43,7 @@ _CHECKPOINTS = {
 _LORAS = {
     "loras": {
         "add-detail-xl": {
+            "title": "Add Detail",
             "tags": ["detail", "quality", "enhancer"],
             "aliases": ["add detail", "detail enhancer"],
             "modes": ["all"],
@@ -65,6 +66,7 @@ _LORAS = {
 
 _EMBEDDINGS = {
     "pureerosface_xl": {
+        "title": "Pure Eros Face XL",
         "file": "pureerosface_xl.safetensors",
         "token": "pureerosface_xl",
         "tags": ["style", "nsfw", "erotic"],
@@ -151,6 +153,21 @@ class TestFileLifecycle:
         assert lora.weight_hint == 0.6
         assert "all" in lora.modes
 
+    def test_loaded_lora_title(self, store: MetaStore):
+        lora = store._loras["add-detail-xl"]
+        assert lora.title == "Add Detail"
+
+    def test_loaded_embedding_title(self, store: MetaStore):
+        emb = store._embeddings["pureerosface_xl"]
+        assert emb.title == "Pure Eros Face XL"
+
+    def test_title_round_trips_through_save(self, store: MetaStore, meta_dir: Path):
+        store.update_lora_meta("add-detail-xl", title="Add Detail")
+        store.update_embedding_meta("pureerosface_xl", title="Pure Eros Face XL")
+        reloaded = MetaStore(meta_dir=meta_dir)
+        assert reloaded._loras["add-detail-xl"].title == "Add Detail"
+        assert reloaded._embeddings["pureerosface_xl"].title == "Pure Eros Face XL"
+
     def test_loaded_embedding_meta_disabled(self, store: MetaStore):
         emb = store._embeddings["bad_x"]
         assert emb.disabled is True
@@ -228,6 +245,18 @@ class TestQuery:
         result = store.search(query="nonexistent")
         assert result == []
 
+    def test_search_matches_title(self, store: MetaStore, monkeypatch):
+        # The fuzzy search must match the canonical display title even when the
+        # asset key (file stem) looks nothing like it.
+        from models.metastore import AssetInfo
+
+        store.checkpoints = lambda: []
+        store.embeddings = lambda: []
+        store.loras = lambda: [AssetInfo(name="sdxl-stem-0001", type="lora", title="Canonical Style Name")]
+        result = store.search(query="canonical")
+        assert [a.name for a in result] == ["sdxl-stem-0001"]
+        assert [a.title for a in result] == ["Canonical Style Name"]
+
     def test_search_mode_filter(self, store: MetaStore):
         result = store.search(mode="anime")
         assert isinstance(result, list)
@@ -265,6 +294,22 @@ class TestAssetInfo:
         assert a.aliases == []
         assert a.modes == []
         assert a.disabled is False
+
+    def test_title_defaults_to_empty(self):
+        a = AssetInfo(name="test", type="lora")
+        assert a.title == ""
+
+    def test_merge_lora_carries_title(self, store: MetaStore):
+        a = store._merge_lora("add-detail-xl", {"arch": "sdxl", "path": "/x.safetensors"})
+        assert a.title == "Add Detail"
+
+    def test_merge_lora_title_empty_without_meta(self, store: MetaStore):
+        a = store._merge_lora("nometa", {"arch": "sdxl", "path": "/x.safetensors"})
+        assert a.title == ""
+
+    def test_merge_embedding_carries_title(self, store: MetaStore):
+        a = store._merge_embedding("pureerosface_xl", {"arch": "sdxl", "path": "/y.safetensors"})
+        assert a.title == "Pure Eros Face XL"
 
     def test_type_checkpoint_has_all_fields(self):
         a = AssetInfo(
@@ -322,6 +367,20 @@ class TestWriteHelpers:
         changed = store.update_lora_meta("new-lora", tags=["test"], modes=["all"])
         assert changed is True
         assert store._loras["new-lora"].modes == ["all"]
+
+    def test_update_lora_meta_title(self, store: MetaStore):
+        changed = store.update_lora_meta("add-detail-xl", title="Add Detail v2")
+        assert changed is True
+        assert store._loras["add-detail-xl"].title == "Add Detail v2"
+
+    def test_update_lora_meta_title_noop(self, store: MetaStore):
+        changed = store.update_lora_meta("add-detail-xl", title="Add Detail")
+        assert changed is False
+
+    def test_update_embedding_meta_title(self, store: MetaStore):
+        changed = store.update_embedding_meta("SimpleNegativeV3", title="SimpleNegative | Negative TI")
+        assert changed is True
+        assert store._embeddings["SimpleNegativeV3"].title == "SimpleNegative | Negative TI"
 
     def test_update_embedding_meta_disable(self, store: MetaStore):
         changed = store.update_embedding_meta(

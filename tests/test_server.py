@@ -1,9 +1,95 @@
+#!/usr/bin/env python3
 """Tests for the FastAPI server endpoints."""
 
 import pytest
 import threading
 
 
+class _StubMeta:
+    """Minimal stand-in for a metastore AssetInfo (title-only read)."""
+
+    def __init__(self, title):
+        self.title = title
+
+
+class _StubMetaStore:
+    """Deterministic stand-in for ``meta_store`` in endpoint tests."""
+
+    def __init__(self, titles=None):
+        self._titles = titles or {}
+
+    def get(self, name, asset_type=None):
+        return _StubMeta(self._titles.get(name, ""))
+
+
+class TestMetaTitleSurfacing:
+    """Canonical display titles must ride along lora/embedding listings."""
+
+    def test_list_model_loras_includes_title(self, monkeypatch):
+        from server import app as appmod
+
+        monkeypatch.setattr(appmod, "MODEL_REGISTRY", {"some-sdxl": {"arch": "sdxl"}})
+        monkeypatch.setattr(
+            appmod,
+            "LORA_REGISTRY",
+            {
+                "add-detail-xl": {"arch": "sdxl", "description": "boosts detail", "weight": 0.6},
+                "flux-only": {"arch": "flux2", "description": "flux", "weight": 1.0},
+            },
+        )
+        monkeypatch.setattr(
+            appmod,
+            "meta_store",
+            _StubMetaStore({"add-detail-xl": "Add Detail"}),
+        )
+
+        result = appmod.list_model_loras("some-sdxl")
+
+        assert result == [{
+            "name": "add-detail-xl",
+            "title": "Add Detail",
+            "description": "boosts detail",
+            "weight": 0.6,
+        }]
+
+    def test_list_model_loras_title_empty_when_unknown(self, monkeypatch):
+        from server import app as appmod
+
+        monkeypatch.setattr(appmod, "MODEL_REGISTRY", {"some-sdxl": {"arch": "sdxl"}})
+        monkeypatch.setattr(
+            appmod,
+            "LORA_REGISTRY",
+            {"plain-stem": {"arch": "sdxl", "description": "d", "weight": 1.0}},
+        )
+        monkeypatch.setattr(appmod, "meta_store", _StubMetaStore())
+
+        result = appmod.list_model_loras("some-sdxl")
+        assert result[0]["title"] == ""
+        assert result[0]["name"] == "plain-stem"
+
+    def test_list_model_embeddings_includes_title(self, monkeypatch):
+        from server import app as appmod
+
+        monkeypatch.setattr(appmod, "MODEL_REGISTRY", {"some-sdxl": {"arch": "sdxl"}})
+        monkeypatch.setattr(
+            appmod,
+            "EMBEDDING_REGISTRY",
+            {"deep_negative_xl": {"arch": "sdxl", "description": "negative", "token": "deep_n"}},
+        )
+        monkeypatch.setattr(
+            appmod,
+            "meta_store",
+            _StubMetaStore({"deep_negative_xl": "Deep Negative XL"}),
+        )
+
+        result = appmod.list_model_embeddings("some-sdxl")
+
+        assert result == [{
+            "name": "deep_negative_xl",
+            "title": "Deep Negative XL",
+            "description": "negative",
+            "token": "deep_n",
+        }]
 
 
 class TestHealthEndpoint:

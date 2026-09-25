@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 from core.backends.krea2_lora import is_krea2_lora_entry
 from models.catalog import descriptor_for_model, public_runtime_catalog, runtime_registry
+from models.metastore import meta_store
 from models.registry import LORA_REGISTRY, LORA_ROOT
 
 
@@ -79,6 +80,7 @@ def list_model_loras(model_name: str):
         return [
             {
                 "name": name,
+                "title": _lora_title(name),
                 "description": cfg.get("description", ""),
                 "weight": cfg.get("weight", 1.0),
             }
@@ -89,12 +91,19 @@ def list_model_loras(model_name: str):
     return [
         {
             "name": name,
+            "title": _lora_title(name),
             "description": cfg.get("description", ""),
             "weight": cfg.get("weight", 1.0),
         }
         for name, cfg in LORA_REGISTRY.items()
         if _lora_matches_checkpoint(cfg, checkpoint_arch, _FLUX_FAMILY)
     ]
+
+
+def _lora_title(name: str) -> str:
+    """Canonical display name for a LoRA (fallback: file-stem 'name')."""
+    meta = meta_store.get(name, asset_type="lora")
+    return meta.title if meta and meta.title else ""
 
 
 def _lora_matches_checkpoint(

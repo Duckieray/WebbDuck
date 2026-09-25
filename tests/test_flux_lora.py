@@ -15,6 +15,23 @@ from core.backends.flux_lora import (
 from models.model_descriptor import backend_for_architecture
 
 
+class _StubMeta:
+    """Minimal stand-in for a metastore AssetInfo (title-only read)."""
+
+    def __init__(self, title: str):
+        self.title = title
+
+
+class _StubMetaStore:
+    """Deterministic stand-in for ``meta_store`` in endpoint tests."""
+
+    def __init__(self, titles: dict[str, str] | None = None):
+        self._titles = titles or {}
+
+    def get(self, name: str, asset_type: str | None = None):
+        return _StubMeta(self._titles.get(name, ""))
+
+
 def test_convert_diffusers_suffix_lora_to_peft_handles_native_transformer_paths():
     import torch
 
@@ -403,10 +420,52 @@ def test_runtime_catalog_lora_endpoint_supports_gguf_models(monkeypatch):
             "SDXL": {"arch": "sdxl", "description": "SDXL", "weight": 1.0},
         },
     )
+    monkeypatch.setattr(model_catalog_api, "meta_store", _StubMetaStore())
 
     result = model_catalog_api.list_model_loras("flux-2-klein-9b-Q5_K_M")
 
-    assert result == [{"name": "RedCraft", "description": "FLUX", "weight": 1.0}]
+    assert result == [
+        {"name": "RedCraft", "title": "", "description": "FLUX", "weight": 1.0}
+    ]
+
+
+def test_catalog_lora_endpoint_surfaces_canonical_title(monkeypatch):
+    from server import model_catalog_api
+
+    registry = {
+        "flux-2-klein-9b": {
+            "type": "gguf",
+            "arch": "flux2",
+            "backend": backend_for_architecture("flux"),
+            "path": "/models/flux/flux-2-klein-9b.gguf",
+            "source": "local",
+        }
+    }
+    monkeypatch.setattr(model_catalog_api, "runtime_registry", lambda: registry)
+    monkeypatch.setattr(
+        model_catalog_api,
+        "LORA_REGISTRY",
+        {
+            "sdxl-stem-0001": {"arch": "flux2", "description": "FLUX.2 style", "weight": 0.7},
+            "plain_stem": {"arch": "flux2", "description": "Plain", "weight": 1.0},
+            "SDXL": {"arch": "sdxl", "description": "SDXL", "weight": 1.0},
+        },
+    )
+    monkeypatch.setattr(
+        model_catalog_api,
+        "meta_store",
+        _StubMetaStore({"sdxl-stem-0001": "Canonical Style Name"}),
+    )
+
+    result = model_catalog_api.list_model_loras("flux-2-klein-9b")
+    by_name = {entry["name"]: entry for entry in result}
+
+    assert by_name["sdxl-stem-0001"]["title"] == "Canonical Style Name"
+    # Identity/weight/description unchanged; no title -> empty string.
+    assert by_name["sdxl-stem-0001"]["name"] == "sdxl-stem-0001"
+    assert by_name["plain_stem"]["title"] == ""
+    assert by_name["plain_stem"]["weight"] == 1.0
+    assert "SDXL" not in by_name
 
 
 def test_catalog_lora_endpoint_filters_flux1_from_flux2_checkpoint(monkeypatch):

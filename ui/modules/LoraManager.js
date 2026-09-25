@@ -88,13 +88,21 @@ export class LoraManager {
             if (this.selectedLoras.has(name)) return;
             const opt = document.createElement('option');
             opt.value = name;
-            opt.textContent = name;
+            opt.textContent = this.displayName(name);
             this.select.appendChild(opt);
         });
 
         if (currentValue && !this.selectedLoras.has(currentValue) && this.availableLorasMap.has(currentValue)) {
             this.select.value = currentValue;
         }
+    }
+
+    /**
+     * Canonical display name for a LoRA (fallback: file-stem identity name).
+     */
+    displayName(name) {
+        const info = this.availableLorasMap.get(name);
+        return info?.title ? String(info.title) : String(name);
     }
 
     /**
@@ -132,7 +140,7 @@ export class LoraManager {
      */
     removeLora(name) {
         this.selectedLoras.delete(name);
-        const card = this.container.querySelector(`.lora-card[data-lora="${CSS.escape(name)}"]`);
+        const card = this.container?.querySelector(`.lora-card[data-lora="${CSS.escape(name)}"]`);
         if (card) card.remove();
         this.refreshSelectOptions();
         this.persistSelection();
@@ -144,12 +152,13 @@ export class LoraManager {
     renderCard(name, weight) {
         if (!this.container) return;
 
+        const display = this.displayName(name).replace(/"/g, '&quot;');
         const card = document.createElement('div');
         card.className = 'lora-card';
         card.dataset.lora = name;
         card.innerHTML = `
             <div class="lora-card-header">
-                <span class="lora-card-name">${name}</span>
+                <span class="lora-card-name" title="${display}">${display}</span>
                 <button class="btn btn-ghost btn-icon btn-sm lora-remove" title="Remove">✕</button>
             </div>
             <div class="lora-card-slider">

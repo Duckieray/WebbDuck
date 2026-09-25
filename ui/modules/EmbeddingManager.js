@@ -47,6 +47,7 @@ export class EmbeddingManager {
                 this.availableEmbeddingsMap.set(name, {
                     name,
                     token: embedding.token || name,
+                    title: embedding.title || '',
                     description: embedding.description || '',
                 });
             });
@@ -69,13 +70,21 @@ export class EmbeddingManager {
             if (this.selectedEmbeddings.has(name)) return;
             const opt = document.createElement('option');
             opt.value = name;
-            opt.textContent = name;
+            opt.textContent = this.displayName(name);
             this.select.appendChild(opt);
         });
 
         if (currentValue && !this.selectedEmbeddings.has(currentValue) && this.availableEmbeddingsMap.has(currentValue)) {
             this.select.value = currentValue;
         }
+    }
+
+    /**
+     * Canonical display name for an embedding (fallback: file-stem identity name).
+     */
+    displayName(name) {
+        const info = this.availableEmbeddingsMap.get(name);
+        return info?.title ? String(info.title) : String(name);
     }
 
     addEmbedding(name, token = null, options = {}) {
@@ -108,7 +117,7 @@ export class EmbeddingManager {
 
     renderCard(name, token) {
         if (!this.container) return;
-        const safeName = String(name).replace(/"/g, '&quot;');
+        const display = String(this.displayName(name)).replace(/"/g, '&quot;');
         const safeToken = String(token).replace(/"/g, '&quot;');
 
         const card = document.createElement('div');
@@ -116,7 +125,7 @@ export class EmbeddingManager {
         card.dataset.embedding = name;
         card.innerHTML = `
             <div class="lora-card-header">
-                <span class="lora-card-name">${safeName}</span>
+                <span class="lora-card-name" title="${display}">${display}</span>
                 <button class="btn btn-ghost btn-icon btn-sm embedding-remove" title="Remove">✕</button>
             </div>
             <div class="embedding-token-row">

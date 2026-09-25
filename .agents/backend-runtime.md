@@ -245,6 +245,7 @@ Low VRAM (~6 GB) is by design, not headroom.
 ## Models And Asset Discovery
 
 - `models/registry.py`: discovers checkpoints, LoRAs, embeddings, and Hugging Face cache assets; persists `models.json`, `loras.json`, and `embeddings.json`. LoRA arch detection (`detect_lora_arch`) distinguishes FLUX.1 vs FLUX.2 using `ss_base_model_version` metadata first (`flux1-dev`/`flux1-schnell` vs `flux2_klein_9b`/`klein`), then structural keys (`to_qkv_mlp_proj`/`time_guidance_embed` = FLUX.2; `guidance_in`/`time_text_embed` = FLUX.1), then Klein block-geometry caps (24 single / 8 double) and hidden-size shapes (3072 vs 4096). Kohya `diffusion_model.`/`lora_unet_` prefixes are version-agnostic and never decide the arch.
+- `webbduck_meta/` (via `models/metastore.py`): canonical rich metadata. LoRA and embedding entries carry an optional `title` — the canonical display name (from the CivitAI page or safetensors header) surfaced by the pickers and `/meta/*` + lora/embedding listing endpoints. Identity stays the file-stem `name`. Backfill generator: `tools/backfill_canonical_titles.py`.
 - `models/upscaler.py`: Real-ESRGAN loader and weights-path resolution.
 
 ## Mode Selection Order
