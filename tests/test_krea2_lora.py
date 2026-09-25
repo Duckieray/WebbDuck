@@ -75,6 +75,43 @@ def test_krea_kohya_suffixes_and_alpha_are_normalized():
     assert prefix + ".lora_alpha" in converted
 
 
+def test_krea_kohya_text_fusion_blocks_resolve_to_flat_diffusers_names():
+    # kohya flattens ``layerwise_blocks`` to ``layerwise_blocks`` with underscores,
+    # so unflattening splits it into ``layerwise.blocks``. Diffusers keeps the flat
+    # ModuleList name, and a mismatched path aborts the whole install.
+    state = {
+        "lora_unet_txtfusion_layerwise_blocks_0_attn_gate.lora_down.weight": torch.zeros(2, 4),
+        "lora_unet_txtfusion_layerwise_blocks_0_attn_gate.lora_up.weight": torch.zeros(6, 2),
+        "lora_unet_txtfusion_layerwise_blocks_0_attn_gate.alpha": torch.tensor(16.0),
+        "lora_unet_txtfusion_refiner_blocks_1_mlp_down.lora_down.weight": torch.zeros(2, 4),
+        "lora_unet_txtfusion_refiner_blocks_1_mlp_down.lora_up.weight": torch.zeros(6, 2),
+    }
+    converted = convert_krea2_lora_state(state)
+    assert "text_fusion.layerwise_blocks.0.attn.to_gate.lora_A.weight" in converted
+    assert "text_fusion.layerwise_blocks.0.attn.to_gate.lora_B.weight" in converted
+    assert "text_fusion.layerwise_blocks.0.attn.to_gate.lora_alpha" in converted
+    assert "text_fusion.refiner_blocks.1.ff.down.lora_A.weight" in converted
+    assert "text_fusion.refiner_blocks.1.ff.down.lora_B.weight" in converted
+    assert not any(".layerwise.blocks." in key or ".refiner.blocks." in key for key in converted)
+
+
+def test_krea_ai_toolkit_text_fusion_block_spellings_both_map_to_flat_names():
+    def _state(blocks: str) -> dict:
+        return {
+            f"diffusion_model.txtfusion.{blocks}.0.attn.wq.lora_A.weight": torch.zeros(2, 4),
+            f"diffusion_model.txtfusion.{blocks}.0.attn.wq.lora_B.weight": torch.zeros(6, 2),
+        }
+
+    flat = _state("layerwise_blocks") | _state("refiner_blocks")
+    split = _state("layerwise.blocks") | _state("refiner.blocks")
+    flat_converted = convert_krea2_lora_state(flat)
+    split_converted = convert_krea2_lora_state(split)
+    assert set(flat_converted) == set(split_converted)
+    assert split_converted
+    for key in split_converted:
+        assert "layerwise_blocks" in key or "refiner_blocks" in key
+
+
 def test_krea_lora_namespace_is_authoritative_even_for_old_registry_arch(tmp_path: Path):
     path = tmp_path / "loras" / "krea2" / "style.safetensors"
     path.parent.mkdir(parents=True)

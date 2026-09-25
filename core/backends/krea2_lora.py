@@ -16,6 +16,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from core.backends.krea2_weights import normalize_krea2_text_fusion_blocks
+
 
 _KREA_NAMESPACE_NAMES = {"krea", "krea2", "krea-2"}
 _KREA_HIDDEN_SIZE = 6144
@@ -307,7 +309,9 @@ def _map_krea_module(module: str) -> str:
     )
     for source, target in replacements:
         value = value.replace(source, target)
-    return value
+    # ``lora_unet_txtfusion_layerwise_blocks_*`` unflattens to the split
+    # ``txtfusion.layerwise.blocks`` spelling; Diffusers keeps the flat name.
+    return normalize_krea2_text_fusion_blocks(value)
 
 
 def _split_lora_suffix(key: str) -> tuple[str | None, str | None]:

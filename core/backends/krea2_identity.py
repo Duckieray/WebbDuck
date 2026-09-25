@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from core.backends.krea2_weights import normalize_krea2_text_fusion_blocks
+
 PROVIDER_ID = "krea2_identity_edit"
 DEFAULT_REPO = "conradlocke/krea2-identity-edit"
 DEFAULT_WEIGHT_FILE = "krea2_identity_edit_v1_2.safetensors"
@@ -505,6 +507,8 @@ def analyze_lora_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
         elif candidate.startswith("txtfusion."):
             candidate = "text_fusion." + candidate[len("txtfusion."):]
 
+        candidate = normalize_krea2_text_fusion_blocks(candidate)
+
         for source, target in _ATTN_MLP_MAP:
             if source in candidate:
                 candidate = candidate.replace(source, target)
@@ -570,6 +574,7 @@ def convert_lora_keys(
             candidate = "transformer_blocks." + candidate[len("blocks."):]
         elif candidate.startswith("txtfusion."):
             candidate = "text_fusion." + candidate[len("txtfusion."):]
+        candidate = normalize_krea2_text_fusion_blocks(candidate)
         for source, target in _ATTN_MLP_MAP:
             if source in candidate:
                 candidate = candidate.replace(source, target)

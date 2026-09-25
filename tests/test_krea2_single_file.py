@@ -156,6 +156,21 @@ def test_key_mapping_covers_original_krea_names():
     )
 
 
+def test_key_mapping_normalizes_text_fusion_block_spellings():
+    flat = "txtfusion.layerwise_blocks.0.attn.wq.weight"
+    assert map_krea2_source_key(flat) == ("text_fusion.layerwise_blocks.0.attn.to_q.weight", None)
+    assert map_krea2_source_key(flat.replace("layerwise_blocks", "layerwise.blocks")) == (
+        "text_fusion.layerwise_blocks.0.attn.to_q.weight",
+        None,
+    )
+    refiner = "txtfusion.refiner_blocks.1.mlp.down.weight"
+    assert map_krea2_source_key(refiner) == ("text_fusion.refiner_blocks.1.ff.down.weight", None)
+    assert map_krea2_source_key(refiner.replace("refiner_blocks", "refiner.blocks")) == (
+        "text_fusion.refiner_blocks.1.ff.down.weight",
+        None,
+    )
+
+
 def test_quant_marker_parser_and_classifier():
     marker = _quant_tensor({"format": "float8_e4m3fn"})
     config = parse_comfy_quant_payload(marker)

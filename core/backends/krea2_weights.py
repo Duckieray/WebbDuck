@@ -17,6 +17,35 @@ def strip_krea2_prefix(key: str) -> str:
     return value
 
 
+# Diffusers exposes the text-fusion stacks as flat ``nn.ModuleList`` attributes
+# (``layerwise_blocks`` / ``refiner_blocks``). Kohya exports flatten the compound
+# name into ``layerwise.blocks`` / ``refiner.blocks`` (its key format replaces
+# every dot with an underscore), and some original/ComfyUI-era exports ship the
+# split spelling natively. Both spellings must land on the flat Diffusers name.
+_TEXT_FUSION_BLOCK_SPELLINGS = (
+    (".layerwise.blocks.", ".layerwise_blocks."),
+    (".refiner.blocks.", ".refiner_blocks."),
+    (".layerwise.blocks", ".layerwise_blocks"),
+    (".refiner.blocks", ".refiner_blocks"),
+)
+
+
+def normalize_krea2_text_fusion_blocks(key: str) -> str:
+    """Collapse split ``layerwise.blocks``/``refiner.blocks`` text-fusion names.
+
+    Operates on the ``txtfusion.`` or already-rewritten ``text_fusion.`` tail
+    and returns the flat ``layerwise_blocks``/``refiner_blocks`` spelling
+    Diffusers' ``Krea2TextFusion`` exposes. Shared by the checkpoint, user-LoRA,
+    and identity-LoRA key converters so a compound module name cannot resolve
+    differently depending on which converter saw it.
+    """
+    value = str(key)
+    for source, target in _TEXT_FUSION_BLOCK_SPELLINGS:
+        if source in value:
+            value = value.replace(source, target)
+    return value
+
+
 def _map_attention_and_mlp(key: str) -> str:
     replacements = (
         (".attn.wq.", ".attn.to_q."),
@@ -82,6 +111,8 @@ def map_krea2_source_key(source_key: str) -> tuple[str | None, str | None]:
     for source_prefix, target_prefix in (
         ("txtfusion.layerwise_blocks.", "text_fusion.layerwise_blocks."),
         ("txtfusion.refiner_blocks.", "text_fusion.refiner_blocks."),
+        ("txtfusion.layerwise.blocks.", "text_fusion.layerwise_blocks."),
+        ("txtfusion.refiner.blocks.", "text_fusion.refiner_blocks."),
     ):
         if key.startswith(source_prefix):
             mapped = target_prefix + key[len(source_prefix) :]

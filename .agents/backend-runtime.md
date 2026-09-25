@@ -106,6 +106,21 @@ behind `_guard_identity_staged`; it preserves identity geometry when planning
 (skips resolution-scaling and default-step tuning) and records
 `identity_enabled` on the plan.
 
+## Krea 2 LoRA key conversion
+
+Three converters translate exporter key layouts into Diffusers transformer
+module paths: `krea2_weights.map_krea2_source_key` (checkpoints),
+`krea2_lora._map_krea_module` (ordinary user LoRAs, including kohya
+`lora_unet_*` unflattening), and `krea2_identity.convert_lora_keys` (the
+identity adapter). They all normalize compound text-fusion names through
+`krea2_weights.normalize_krea2_text_fusion_blocks`: Diffusers exposes flat
+`text_fusion.layerwise_blocks` / `refiner_blocks` ModuleLists, while kohya
+(`lora_unet_txtfusion_layerwise_blocks_0_...`) and some original/ComfyUI-era
+exports spell them as `layerwise.blocks` / `refiner.blocks`. A key that does not
+resolve to a real submodule aborts the whole install with
+`Krea identity LoRA targets unknown module ...`, so new exporter spellings must
+be added to the shared normalizer rather than to one converter.
+
 ### Identity-aware adaptive planning + OOM retry reconfigure (Phase 5)
 
 `core/backends/krea2_worker.py::configure_krea_identity_transformer` is the

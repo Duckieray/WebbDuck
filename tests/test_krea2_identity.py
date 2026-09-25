@@ -355,6 +355,27 @@ def test_no_prefix_key_stays_ignored():
     assert "lora_scaler" in report["ignored"]
 
 
+def test_text_fusion_block_spellings_both_convert_to_flat_module_paths():
+    # ``layerwise.blocks`` is the split spelling kohya/older exports use;
+    # Diffusers' Krea2TextFusion exposes flat ``layerwise_blocks`` ModuleLists.
+    split = {
+        "diffusion_model.txtfusion.layerwise.blocks.0.attn.gate.lora_A.weight": 1,
+        "diffusion_model.txtfusion.layerwise.blocks.0.attn.gate.lora_B.weight": 2,
+        "diffusion_model.txtfusion.refiner.blocks.1.mlp.down.lora_A.weight": 3,
+    }
+    flat = {
+        key.replace("layerwise.blocks.", "layerwise_blocks.").replace(
+            "refiner.blocks.", "refiner_blocks."
+        ): value
+        for key, value in split.items()
+    }
+    converted = convert_lora_keys(split)
+    assert convert_lora_keys(flat) == converted
+    assert "text_fusion.layerwise_blocks.0.attn.to_gate.lora_A.weight" in converted
+    assert "text_fusion.refiner_blocks.1.ff.down.lora_A.weight" in converted
+    assert analyze_lora_keys(split)["unresolved"] == []
+
+
 # --------------------------------------------------------------------------------------
 # Grounding template
 # --------------------------------------------------------------------------------------
