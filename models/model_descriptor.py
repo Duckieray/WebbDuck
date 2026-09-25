@@ -62,7 +62,7 @@ class ModelDescriptor:
 
         if self.architecture == "krea2" and self.format == "single":
             quantization = str(self.detection.get("quantization") or "none").lower()
-            if quantization in {"convrot", "unsupported", "unknown"}:
+            if quantization in {"unsupported", "unknown"}:
                 return False
         return True
 

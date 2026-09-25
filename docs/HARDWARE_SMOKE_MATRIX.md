@@ -96,8 +96,10 @@ be a complete Diffusers directory containing at least `model_index.json` and
 Keep the FP8 `.safetensors` as a local model file under any architecture-neutral
 checkpoint root scanned by WebbDuck. The Krea backend should discover it from
 its tensor structure and use Krea Raw shared components with the Dark Beast
-transformer overlaid. INT8 ConvRot is intentionally a separate unsupported
-format for this smoke pass.
+transformer overlaid. INT8 ConvRot checkpoints (for example ai-toolkit `convrot8`
+fine-tunes such as `snofsSexNudesAndOther_krea2TurboV14`) are supported: the
+single-file loader dequantizes the INT8 weights and cancels the Hadamard
+activation rotation at load time, so they generate through the same Krea worker.
 
 ### Qwen-Image-2512
 

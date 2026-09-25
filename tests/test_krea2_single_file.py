@@ -5,10 +5,14 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn as nn
 from safetensors.torch import save_file
 
 from core.backends.krea2_weights import map_krea2_source_key
-from core.backends.krea2_worker import overlay_single_file_transformer
+from core.backends.krea2_worker import (
+    _hadamard_matrix,
+    overlay_single_file_transformer,
+)
 from models.discovery import discover_local_image_models
 from models.model_descriptor import describe_registry_model
 from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
@@ -56,7 +60,7 @@ def test_generic_discovery_finds_krea_single_file_outside_family_folder(tmp_path
     assert models[path.stem]["detection"]["quantization"] == "fp8_scaled"
 
 
-def test_convrot_is_recognized_but_not_runnable(tmp_path):
+def test_convrot_is_recognized_and_supported(tmp_path):
     path = tmp_path / "Dark_Beast_3_INT8_ConvRot.safetensors"
     _minimal_krea_file(
         path,
@@ -80,12 +84,12 @@ def test_convrot_is_recognized_but_not_runnable(tmp_path):
 
     assert architecture == "krea2"
     assert detection["quantization"] == "convrot"
-    assert descriptor.supported is False
+    assert descriptor.supported is True
     assert descriptor.defaults["steps"] == 28
     assert descriptor.defaults["cfg"] == 4.5
 
 
-def test_top_level_quant_metadata_also_blocks_convrot(tmp_path):
+def test_top_level_quant_metadata_detects_convrot(tmp_path):
     path = tmp_path / "custom_name.safetensors"
     tensors = {
         "first.weight": torch.ones((2, 2), dtype=torch.int8),
@@ -178,12 +182,15 @@ def test_quant_marker_parser_and_classifier():
     assert classify_comfy_quant({"format": "int8_tensorwise", "convrot": True}) == "convrot"
 
 
-class _FakeTransformer:
-    def __init__(self) -> None:
-        self.weight = torch.nn.Parameter(torch.zeros((2, 2), dtype=torch.bfloat16))
+class _FakeTransformer(nn.Module):
+    def __init__(self, shape=(2, 2)) -> None:
+        super().__init__()
+        self.img_in = nn.Module()
+        self.img_in.weight = nn.Parameter(torch.zeros(shape, dtype=torch.bfloat16))
 
     def state_dict(self, *, keep_vars=False):
-        return {"img_in.weight": self.weight if keep_vars else self.weight.detach()}
+        weight = self.img_in.weight
+        return {"img_in.weight": weight if keep_vars else weight.detach()}
 
 
 def test_fp8_scaled_overlay_dequantizes_and_replaces_base_weight(tmp_path):
@@ -201,23 +208,73 @@ def test_fp8_scaled_overlay_dequantizes_and_replaces_base_weight(tmp_path):
     result = overlay_single_file_transformer(transformer, path)
 
     assert result["mapped_tensors"] == 1
-    assert torch.equal(transformer.weight.detach(), torch.full((2, 2), 6.0, dtype=torch.bfloat16))
+    assert torch.equal(transformer.img_in.weight.detach(), torch.full((2, 2), 6.0, dtype=torch.bfloat16))
 
 
-def test_overlay_rejects_convrot_before_copying_weights(tmp_path):
-    path = tmp_path / "dark_beast_convrot.safetensors"
+def test_overlay_dequantizes_int8_convrot_and_derotates(tmp_path):
+    path = tmp_path / "snofs_int8_convrot.safetensors"
+    q = torch.tensor([[1, -1, 2, -2], [3, 1, -1, 3]], dtype=torch.int8)
+    scale = torch.tensor([[2.0], [0.5]], dtype=torch.float32)
+    save_file(
+        {
+            "first.weight": q,
+            "first.weight_scale": scale,
+            "first.comfy_quant": _quant_tensor(
+                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 4}
+            ),
+        },
+        str(path),
+    )
+    transformer = _FakeTransformer(shape=(2, 4))
+
+    result = overlay_single_file_transformer(transformer, path)
+
+    expected = (q.float() * scale) @ _hadamard_matrix(4)
+    assert result["mapped_tensors"] == 1
+    assert result["execution_quantization"] == "dense"
+    assert torch.allclose(transformer.img_in.weight.detach().float(), expected, atol=1e-6)
+
+
+def test_overlay_dequantizes_int8_tensorwise_without_rotation(tmp_path):
+    path = tmp_path / "int8_tensorwise.safetensors"
+    q = torch.tensor([[1, -1, 2, -2], [3, 1, -1, 3]], dtype=torch.int8)
+    scale = torch.tensor([[2.0], [0.5]], dtype=torch.float32)
+    save_file(
+        {
+            "first.weight": q,
+            "first.weight_scale": scale,
+            "first.comfy_quant": _quant_tensor({"format": "int8_tensorwise"}),
+        },
+        str(path),
+    )
+    transformer = _FakeTransformer(shape=(2, 4))
+
+    result = overlay_single_file_transformer(transformer, path)
+
+    assert result["mapped_tensors"] == 1
+    assert torch.allclose(transformer.img_in.weight.detach().float(), q.float() * scale, atol=1e-6)
+
+
+def test_overlay_rejects_unsupported_int8_without_contract(tmp_path):
+    path = tmp_path / "bare_int8.safetensors"
     save_file(
         {
             "first.weight": torch.ones((2, 2), dtype=torch.int8),
-            "first.weight_scale": torch.ones((2, 1), dtype=torch.float32),
-            "first.comfy_quant": _quant_tensor(
-                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
-            ),
         },
         str(path),
     )
     transformer = _FakeTransformer()
 
-    with pytest.raises(RuntimeError, match="ConvRot"):
+    with pytest.raises(RuntimeError, match="no supported dequantization contract"):
         overlay_single_file_transformer(transformer, path)
-    assert torch.equal(transformer.weight.detach(), torch.zeros((2, 2), dtype=torch.bfloat16))
+    assert torch.equal(transformer.img_in.weight.detach(), torch.zeros((2, 2), dtype=torch.bfloat16))
+
+
+def test_hadamard_matrix_is_orthogonal_symmetric_and_normalized():
+    for size in (4, 16, 256):
+        h = _hadamard_matrix(size)
+        assert h.shape == (size, size)
+        assert h.dtype == torch.float32
+        assert torch.allclose(h @ h.T, torch.eye(size, dtype=h.dtype), atol=1e-5)
+        assert torch.allclose(h, h.T, atol=1e-6)
+        assert torch.allclose(h[0].abs(), torch.full((size,), 1 / (size**0.5)), atol=1e-6)

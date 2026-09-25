@@ -40,3 +40,8 @@ def classify_comfy_quant(config: dict[str, Any]) -> str:
     if fmt in _SUPPORTED_FP8_FORMATS or fmt.startswith("float8"):
         return "fp8"
     return "unsupported" if fmt else "unknown"
+
+
+def is_int8_tensorwise(config: dict[str, Any]) -> bool:
+    """Return True when a layer stores symmetric INT8 weights with a scale."""
+    return str(config.get("format") or "").strip().lower() == "int8_tensorwise"

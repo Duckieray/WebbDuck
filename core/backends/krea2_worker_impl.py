@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import sys
 import time
@@ -45,7 +46,11 @@ from core.backends.krea2_identity import (
     source_token_count,
 )
 from core.backends.krea2_weights import map_krea2_source_key, strip_krea2_prefix
-from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
+from models.quantization import (
+    classify_comfy_quant,
+    is_int8_tensorwise,
+    parse_comfy_quant_payload,
+)
 from runtime_hardware import detect_torch_hardware
 
 
@@ -197,24 +202,73 @@ def _quant_config(handle: Any, keys: set[str], source_key: str) -> dict[str, Any
     return parse_comfy_quant_payload(handle.get_tensor(marker))
 
 
-def _metadata_quant_configs(handle: Any) -> list[dict[str, Any]]:
-    try:
-        metadata = handle.metadata() or {}
-    except Exception:
-        return []
-    raw = metadata.get("_quantization_metadata") if isinstance(metadata, dict) else None
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(parsed, dict):
-        return []
-    layers = parsed.get("layers")
-    if not isinstance(layers, dict):
-        return []
-    return [dict(value) for value in layers.values() if isinstance(value, dict)]
+_HADAMARD_CACHE: dict[int, torch.Tensor] = {}
+
+
+def _hadamard_matrix(size: int) -> torch.Tensor:
+    """Normalized regular orthogonal Hadamard used by INT8 ConvRot.
+
+    Uses comfy_kitchen's power-of-four Sylvester construction (base 4x4, block
+    Kronecker product, ``1/sqrt(size)`` normalization) so derotation exactly
+    cancels the offline ``W @ H_block`` rotation the INT8-Fast quantizer applied.
+    """
+    cached = _HADAMARD_CACHE.get(size)
+    if cached is not None:
+        return cached
+    if size < 4 or (size & (size - 1)) != 0 or math.log(size, 4) % 1 != 0:
+        raise ValueError(f"ConvRot Hadamard size must be a power of 4, got {size}")
+    h4 = torch.tensor(
+        [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
+        dtype=torch.float32,
+    )
+    h = h4
+    while int(h.shape[0]) < size:
+        h = torch.kron(h, h4)
+    h = h / (size ** 0.5)
+    _HADAMARD_CACHE[size] = h
+    return h
+
+
+def _dequantize_int8_tensorwise(
+    tensor: Any,
+    scale: Any,
+    *,
+    convrot: bool,
+    convrot_groupsize: int,
+    target_dtype: Any,
+) -> torch.Tensor:
+    """Recover a dense weight from symmetric INT8 + per-output-row scale.
+
+    Stored weights are ``q`` (INT8) and ``weight_scale`` (per output row), with
+    ``W_rot ≈ weight_scale ⊙ q`` where ``W_rot = W @ H_block`` when ``convrot``
+    is set. ``H`` is symmetric-orthogonal, so right-multiplying by ``H_block``
+    again recovers ``W`` exactly under the quantization noise.
+    """
+    value = tensor.float()
+    scale_values = scale.float().reshape(-1)
+    if scale_values.numel() not in (1, int(value.shape[0])):
+        raise RuntimeError(
+            f"INT8 weight scale must be scalar or per-output-channel, got "
+            f"{tuple(scale.shape)} for weight shape {tuple(value.shape)}."
+        )
+    scale_values = (
+        scale_values.reshape(-1, 1) if scale_values.numel() == int(value.shape[0]) else scale_values
+    )
+    dequantized = value * scale_values
+
+    if convrot:
+        in_features = int(dequantized.shape[-1])
+        if convrot_groupsize <= 0 or in_features % convrot_groupsize != 0:
+            raise RuntimeError(
+                f"INT8 ConvRot group size {convrot_groupsize} does not divide "
+                f"input features {in_features}."
+            )
+        n_groups = in_features // convrot_groupsize
+        h = _hadamard_matrix(convrot_groupsize)
+        grouped = dequantized.reshape(-1, n_groups, convrot_groupsize)
+        dequantized = torch.matmul(grouped, h).reshape(dequantized.shape)
+
+    return dequantized.to(dtype=target_dtype)
 
 
 def _dequantize_source_tensor(
@@ -226,25 +280,32 @@ def _dequantize_source_tensor(
 ) -> Any:
     config = _quant_config(handle, keys, source_key)
     quant_kind = classify_comfy_quant(config)
-    if quant_kind == "convrot":
-        raise RuntimeError(
-            "This Krea checkpoint uses INT8 ConvRot. ConvRot rotates both stored weights and runtime "
-            "activations, so it cannot be safely flattened into a normal Diffusers transformer. "
-            "Use an FP8/BF16 checkpoint until WebbDuck's native ConvRot backend is installed."
+
+    prefix = _source_layer_prefix(source_key)
+    scale_key = f"{prefix}.weight_scale" if prefix else ""
+    scale = handle.get_tensor(scale_key) if scale_key and scale_key in keys else None
+    is_float8 = str(tensor.dtype).startswith("torch.float8")
+
+    if is_int8_tensorwise(config):
+        if scale is None:
+            raise RuntimeError(f"Missing INT8 weight scale for Krea tensor {source_key!r}.")
+        return _dequantize_int8_tensorwise(
+            tensor,
+            scale,
+            convrot=bool(config.get("convrot")),
+            convrot_groupsize=int(config.get("convrot_groupsize") or 256),
+            target_dtype=target_dtype,
         )
+
     if quant_kind == "unsupported":
         raise RuntimeError(
             f"Unsupported Krea quantization format {config.get('format')!r} in tensor {source_key!r}."
         )
 
-    prefix = _source_layer_prefix(source_key)
-    scale_key = f"{prefix}.weight_scale" if prefix else ""
-    is_float8 = str(tensor.dtype).startswith("torch.float8")
-
     if quant_kind == "fp8" or is_float8:
         value = tensor.float()
-        if scale_key and scale_key in keys:
-            value = value * handle.get_tensor(scale_key).float()
+        if scale is not None:
+            value = value * scale.float()
         return value.to(dtype=target_dtype)
 
     if tensor.dtype in {torch.int8, torch.uint8}:
@@ -385,17 +446,6 @@ def overlay_single_file_transformer(
     with safe_open(str(checkpoint_path), framework="pt", device="cpu") as handle:
         keys = set(handle.keys())
 
-        quant_configs = _metadata_quant_configs(handle)
-        for marker in (key for key in keys if key.endswith(".comfy_quant")):
-            parsed = parse_comfy_quant_payload(handle.get_tensor(marker))
-            if parsed:
-                quant_configs.append(parsed)
-        if any(classify_comfy_quant(config) == "convrot" for config in quant_configs):
-            raise RuntimeError(
-                "INT8 ConvRot Krea checkpoint detected. This format requires runtime activation "
-                "rotation and is intentionally not handled by the FP8/BF16 overlay loader."
-            )
-
         ignored_suffixes = (
             ".comfy_quant",
             ".weight_scale",
@@ -500,8 +550,8 @@ def _fuse_linear_lora(
     folded into the base projection so the hot path stays a plain ``F.linear``.
     """
     weight = module.weight
-    a = torch.as_tensor(lora_a).to(device=weight.device, dtype=weight.dtype)
-    b = torch.as_tensor(lora_b).to(device=weight.device, dtype=weight.dtype)
+    a = torch.as_tensor(lora_a)
+    b = torch.as_tensor(lora_b)
     rank = int(a.shape[0])
     if a.shape[1] != module.in_features or b.shape[0] != module.out_features or b.shape[1] != rank:
         raise KreaIdentityError(
@@ -511,8 +561,14 @@ def _fuse_linear_lora(
     coef = _linear_lora_coefficient(rank, alpha, lora_scale)
     if coef == 0.0:
         return
+    # Compute the low-rank delta in fp32 and down-cast before fusing. A direct
+    # bf16 CPU ``mm`` dispatches to a slow fallback kernel (~10 s per 6144^2
+    # module), which turns dense-checkpoint identity installs into multi-minute
+    # stalls; fp32 BLAS is ~80x faster here and the extra rounding on the final
+    # cast into the bf16 weight is immaterial.
     with torch.no_grad():
-        weight.data.add_(coef * torch.mm(b, a))
+        delta = torch.mm(b.float(), a.float())
+        weight.data.add_((coef * delta).to(dtype=weight.dtype, device=weight.device))
 
 
 def apply_identity_lora_residuals(
@@ -975,11 +1031,6 @@ def _load_pipeline(
         raise RuntimeError(f"Krea checkpoint path does not exist: {model_path}")
 
     quantization = str(request.get("quantization") or "none").lower()
-    if quantization == "convrot":
-        raise RuntimeError(
-            "INT8 ConvRot Krea checkpoints require WebbDuck's future native ConvRot runtime; "
-            "the generic single-file loader will not silently mis-handle them."
-        )
 
     component_source = str(request.get("component_source") or _component_source(variant))
     if callable(report):

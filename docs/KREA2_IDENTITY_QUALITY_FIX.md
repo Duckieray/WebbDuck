@@ -25,6 +25,12 @@ Changes:
   parity testing.
 - Post-hoc Real-ESRGAN is disabled by default while identity parity is being
   validated. Explicitly set `WEBBDUCK_KREA2_IDENTITY_UPSCALE=1` to re-enable it.
+- Identity LoRA installation on dense checkpoints (diffusers-format, INT8
+  convrot dequant) now computes the fused delta in fp32 before down-casting into
+  the bf16 weight. A direct bf16 CPU `mm` dispatches to a slow fallback kernel
+  (~8 s per 6144^2 module), which made a full-r128 install take ~50 minutes on
+  CPU-only transform streams; the fp32 path installs the same delta in tens of
+  seconds with immaterial rounding differences.
 
 Recommended first parity run: Krea-2-Turbo, 10 steps, CFG 0, LoRA 1.0,
 ref_boost 4, grounding 768, fixed seed, simple daylight portrait/restaging
