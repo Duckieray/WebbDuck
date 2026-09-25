@@ -21,6 +21,7 @@ ui/
 |- modules/
 |  |- EmbeddingManager.js
 |  |- GalleryManager.js
+|  |- ImageEditor.js
 |  |- LightboxManager.js
 |  |- LoraManager.js
 |  |- MaskEditor.js
@@ -51,8 +52,15 @@ ui/
 - `ui/core/modelCapabilities.js`: capability-driven model profile layer; gates sections/controls from `/model-catalog` capabilities.
 - `ui/core/state.js`: persisted Studio state and DOM sync.
 - `ui/core/utils.js`: DOM, toast, async, and form-data helpers used across the app.
-- `ui/modules/GalleryManager.js`: gallery paging, search, filters, and thumbnail sizing.
-- `ui/modules/LightboxManager.js`: full-screen viewer and metadata display.
+- `ui/modules/GalleryManager.js`: gallery paging, search, filters, thumbnail sizing, and batch delete in selection mode.
+- `ui/modules/LightboxManager.js`: full-screen viewer, metadata display, and the `Edit` / `Input Image` actions.
+- `ui/modules/ImageEditor.js`: self-mounting crop/rotate/flip/resize/adjust overlay, opened from
+  the lightbox `Edit` button. Renders the edit on a `<canvas>` (full-resolution offscreen source,
+  downscaled preview) so previews cost no network or GPU. The preview always paints the whole
+  oriented frame and draws the crop as an overlay, so you can still see what you are cutting away.
+  The crop rect is normalized (0..1) in the oriented frame so rotate/flip carry it across
+  correctly. `Save Copy` posts the PNG to `/image/edit`; `Use as Input Image` feeds the same blob
+  into `handleImageUpload()`.
 - `ui/modules/LoraManager.js`: LoRA list, weights, and compatibility filtering.
 - `ui/modules/EmbeddingManager.js`: embedding selection and token editing.
 - `ui/modules/MaskEditor.js`: inpaint mask interactions.
@@ -66,6 +74,7 @@ WebSocket events from `/ws` are translated into local frontend events:
 - `state` -> `Events.STATUS_UPDATE`
 - `queue` -> `Events.QUEUE_UPDATE`
 - `catalog` -> `Events.CATALOG_UPDATE`
+- `gallery` -> `Events.GALLERY_REFRESH` (emitted after a saved edit so other tabs reload)
 
 This keeps queue and catalog state fresh without extra polling loops in the browser.
 

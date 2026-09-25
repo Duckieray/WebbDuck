@@ -9,6 +9,16 @@ Use this file when working in `server/`, `core/`, `models/`, `modes/`, or `promp
 - `server/state.py`: shared in-memory progress, stage, and VRAM snapshot for UI updates.
 - `server/storage.py`: saves images, run metadata, manifest entries, and favorites.
 - `server/thumbnails.py`: on-demand thumbnail generation with per-path locking.
+- `server/image_edit.py`: non-destructive gallery image editing. `resolve_output_image()`
+  re-validates containment inside the output root because `resolve_web_path()` is a plain
+  string split with no traversal protection. `store_edited_upload()` persists the PNG the browser
+  already rendered (`ui/modules/ImageEditor.js` does the crop/rotate/flip/resize/adjust work on a
+  canvas), allocating a fresh `<stem>_edit[_N].png` beside the source and registering a manifest
+  entry carrying `edited_from`. The server never re-derives pixels for this path and never takes
+  the GPU lease.
+- `/image/edit` (multipart `path` + `image` + `ops`) runs its CPU work in a thread executor
+  bounded by `thumb_semaphore` and broadcasts a `{"type": "gallery"}` websocket event so other
+  tabs refresh.
 
 ## Worker And Pipeline Layer
 

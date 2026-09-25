@@ -106,6 +106,8 @@ Tests are grouped by subsystem. Shared fixtures and helpers live in `tests/conft
 | File | Covers |
 | --- | --- |
 | `tests/test_thumbnails.py` | thumbnail generation and race safety |
+| `tests/test_image_edit.py` | gallery image editing: output-path containment, edit-name allocation, manifest lineage, and the `/image/edit` endpoint |
+| `tests/test_image_edit_ui_contract.py` | static UI contract for the editor: lightbox-only entry point, button ordering, control ids, `gallery` event wiring, crop render/geometry rules, and valid `ui/index.html` markup |
 | `tests/test_outpaint_pyramid_regression.py` | smart-extend/outpaint pyramid regression coverage |
 | `tests/test_ui_sanity.py` | UI contract and markup sanity checks (running server + browser) |
 | `tests/test_capability_driven_ui.py` | capability-driven frontend contract (no server needed) |
@@ -160,6 +162,22 @@ Run:
 pytest tests/test_thumbnails.py -v
 pytest tests/test_server.py -v
 ```
+
+### Gallery editing change
+
+Run:
+
+```bash
+pytest tests/test_image_edit.py -v
+pytest tests/test_image_edit_ui_contract.py -v
+pytest tests/test_thumbnails.py -v
+```
+
+`tests/test_image_edit_ui_contract.py` is a headless static check (no server, no browser).
+It parses `ui/index.html` and asserts the ids, class-visibility convention, and module wiring the
+editor depends on, so UI regressions surface in a normal pytest run instead of only in a browser.
+Use it for quick iteration, and still cover the interactive behaviour (crop dragging, slider preview,
+Input Image hand-off) with `tests/test_ui_sanity.py` or a real browser before release.
 
 ### Frontend contract change
 

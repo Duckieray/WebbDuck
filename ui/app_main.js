@@ -8,6 +8,7 @@ import { LoraManager } from './modules/LoraManager.js';
 import { EmbeddingManager } from './modules/EmbeddingManager.js';
 import { LightboxManager } from './modules/LightboxManager.js';
 import { GalleryManager } from './modules/GalleryManager.js';
+import { ImageEditor } from './modules/ImageEditor.js';
 
 let isGenerating = false;
 const seenCompletedQueueJobs = new Set();
@@ -749,9 +750,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.loraManager = new LoraManager();
         window.embeddingManager = new EmbeddingManager();
         window.galleryManager = new GalleryManager();
+        window.imageEditor = new ImageEditor({
+            onSaved: handleEditedImageSaved,
+            onUseAsInput: (file) => useFileAsInputImage(file, 'edited image'),
+        });
         window.lightboxManager = new LightboxManager({
             onUpscale: (src, cb) => startUpscale(src, cb),
             onInpaint: (src) => sendToInpaint(src),
+            onUseAsInput: (src) => sendToInputImage(src),
+            onEdit: (payload) => openImageEditor(payload),
             onDuckMotion: (src, curr) => sendToDuckMotion(src, curr),
             onRegenerate: handleRegenerateFromLightbox,
             onStageSettings: handleStageSettingsFromLightbox,
@@ -2607,22 +2614,47 @@ function normalizeUpscaledUrl(pathOrUrl) {
 }
 
 async function sendToInpaint(imageSrc) {
+    return sendToInputImage(imageSrc, { label: 'inpaint', doneLabel: 'inpaint' });
+}
+
+async function sendToInputImage(imageSrc, options = {}) {
+    const label = options.label || 'Studio';
     try {
-        toast('Loading image for inpaint...', 'info');
+        toast(`Loading image for the ${label}...`, 'info');
 
         const response = await fetch(imageSrc);
         const blob = await response.blob();
         const file = new File([blob], 'inpaint_source.png', { type: blob.type || 'image/png' });
 
-        await handleImageUpload(file);
-        switchView('studio');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-
-        toast('Image loaded for inpaint', 'success');
+        await useFileAsInputImage(file, label, options.doneLabel);
     } catch (error) {
-        console.error('Inpaint transfer error:', error);
-        toast('Failed to load image for inpaint', 'error');
+        console.error('Input image transfer error:', error);
+        toast(`Failed to load the image into the ${label}`, 'error');
     }
+}
+
+async function useFileAsInputImage(file, label = 'Studio', doneLabel = null) {
+    await handleImageUpload(file);
+    switchView('studio');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    toast(`Image loaded for the ${doneLabel || label}`, 'success');
+}
+
+function openImageEditor(payload = {}) {
+    const editor = window.imageEditor;
+    if (!editor) return;
+
+    editor.open({
+        src: payload.src,
+        onSaved: handleEditedImageSaved,
+        onUseAsInput: (file) => useFileAsInputImage(file, 'edited image'),
+    });
+}
+
+function handleEditedImageSaved(newPath) {
+    window.galleryManager?.invalidateFilterCache();
+    window.galleryManager?.refreshLatest();
+    if (newPath) emit(Events.IMAGE_GENERATED, { path: newPath });
 }
 
 async function handleRegenerateFromLightbox(curr) {
@@ -2821,6 +2853,12 @@ function setupQueuePanel() {
 function setupRealtimeGalleryRefresh() {
     on(Events.GENERATION_COMPLETE, () => {
         // Keep gallery up to date immediately after each finished job.
+        window.galleryManager?.refreshLatest();
+    });
+
+    // Edits performed in another tab land as new gallery entries.
+    on(Events.GALLERY_REFRESH, () => {
+        window.galleryManager?.invalidateFilterCache();
         window.galleryManager?.refreshLatest();
     });
 }

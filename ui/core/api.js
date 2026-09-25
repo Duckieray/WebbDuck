@@ -257,3 +257,11 @@ export async function deleteRun(runId) {
 export async function deleteImages(paths = []) {
     return post('/delete_images', { paths: Array.isArray(paths) ? paths : [] });
 }
+
+export async function saveImageEdit(sourcePath, file, ops = null) {
+    const formData = new FormData();
+    formData.append('path', sourcePath);
+    formData.append('image', file, file.name || 'edit.png');
+    if (ops) formData.append('ops', JSON.stringify(ops));
+    return postForm('/image/edit', formData);
+}

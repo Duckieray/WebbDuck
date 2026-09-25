@@ -27,7 +27,8 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 4. `core/worker.py` processes generation and upscale jobs serially.
 5. `core/generation.py` selects the mode and calls the pipeline/runtime helpers.
 6. `server/storage.py` writes files, metadata, and gallery manifest entries.
-7. `server/events.py` pushes `state`, `queue`, and `catalog` updates to connected clients.
+7. `server/image_edit.py` stores non-destructive edits and writes derived images.
+8. `server/events.py` pushes `state`, `queue`, `catalog`, and `gallery` updates to connected clients.
 
 ## Repo Map
 
@@ -55,6 +56,7 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `server/state.py` | runtime status snapshot shared with the UI |
 | `server/storage.py` | output persistence, metadata files, gallery manifest management |
 | `server/thumbnails.py` | thumbnail generation and caching |
+| `server/image_edit.py` | non-destructive storage for gallery edits: path containment, `<stem>_edit[_N].png` allocation, manifest lineage (the browser does the pixel work) |
 | `server/model_catalog_api.py` | architecture-free model profile API from the runtime catalog (capabilities/defaults) |
 | `server/provider_credentials_api.py` | Hugging Face/Civitai provider credential configuration endpoints |
 | `server/runtime_readiness_api.py` | non-loading runtime readiness surface for checkpoint-driven generation |
@@ -132,6 +134,7 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 | `ui/modules/LoraManager.js` | LoRA picker, weights, persistence |
 | `ui/modules/EmbeddingManager.js` | embedding picker and token editing |
 | `ui/modules/MaskEditor.js` | inpaint mask editing |
+| `ui/modules/ImageEditor.js` | browser canvas crop/rotate/flip/resize/adjust editor, opened from the lightbox |
 | `ui/modules/ProgressManager.js` | progress card and cancel flow |
 | `ui/modules/PersonaIdentityUI.js` | Identity / Persona presentation over the shared reference + preset manager |
 | `ui/modules/PersonaIdentityUI_impl.js` | PersonaIdentityUI implementation details |
@@ -172,6 +175,8 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 2. Check route behavior in `server/app.py` and thumbnail behavior in `server/thumbnails.py`.
 3. Verify UI expectations in `ui/modules/GalleryManager.js` and `ui/modules/LightboxManager.js`.
 4. Run focused tests like `tests/test_thumbnails.py` and gallery-related server tests.
+5. For crop/rotate/flip/resize/adjust changes, update `server/image_edit.py` and
+   `ui/modules/ImageEditor.js` together, and run `tests/test_image_edit.py`.
 
 ### Change Plugin Integration
 

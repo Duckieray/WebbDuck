@@ -34,6 +34,12 @@ from server.storage import (
     remove_favorite_run,
 )
 from server.thumbnails import ensure_thumbnail, get_thumbnail_path
+from server.image_edit import (
+    ImageEditError,
+    resolve_output_image,
+    store_edited_upload,
+    web_path as edit_web_path,
+)
 from core.worker import gpu_worker
 from models.registry import (
     MODEL_REGISTRY,
@@ -1377,6 +1383,59 @@ async def favorite_image(path: str = Form(...), favorite: bool = Form(True)):
         return {"status": "ok", "path": web_path, "favorite": fav}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# IMAGE EDITING (CPU only; never touches the GPU lease or the generation worker)
+# ---------------------------------------------------------------------------
+
+def _notify_gallery_changed(reason: str, images: list[str]):
+    """Tell other open tabs that the gallery contents changed."""
+    try:
+        asyncio.get_running_loop().create_task(
+            broadcast({"type": "gallery", "payload": {"reason": reason, "images": images}})
+        )
+    except RuntimeError:
+        # No event loop (e.g. a worker thread in tests); the poller still picks it up.
+        pass
+
+
+@app.post("/image/edit")
+async def save_image_edit(
+    path: str = Form(...),
+    image: UploadFile = File(...),
+    ops: str = Form(""),
+):
+    """Store a client-rendered edit as a new image beside the source."""
+    try:
+        source = resolve_output_image(path)
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    try:
+        parse_ops = json.loads(ops) if ops else {}
+    except Exception:
+        parse_ops = {}
+
+    payload = await image.read()
+    if not payload:
+        return JSONResponse(status_code=400, content={"error": "Edited image payload is empty"})
+
+    loop = asyncio.get_event_loop()
+    try:
+        async with thumb_semaphore:
+            dest = await loop.run_in_executor(
+                None, store_edited_upload, source, payload, parse_ops
+            )
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        print(f"[Error] Image edit failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    new_path = edit_web_path(dest)
+    _notify_gallery_changed("edit", [new_path])
+    return {"status": "ok", "path": new_path, "source": to_web_path(source)}
 
 
 @app.get("/models")

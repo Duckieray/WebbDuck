@@ -63,6 +63,7 @@ Upload an image to unlock edit tools.
 - Open `Gallery` to browse saved images.
 - Search Gallery with simple keywords like `forest night`.
 - Use the `Thumb` slider to change gallery thumbnail size.
+- Use `Select` to pick several images, then `Delete (N)` to remove them.
 
 ## 8. Lightbox
 
@@ -72,13 +73,28 @@ You can:
 
 - regenerate
 - upscale
+- edit
 - send to inpaint
+- send to the Studio Input Image
 - download
 - delete
 
 Use `Info` to see prompt, model, seed, LoRAs, embeddings, and other settings.
 
-## 9. Good Starter Preset
+## 9. Editing an Image
+
+Click `Edit` in the lightbox to crop, rotate, flip, resize, or adjust an image. The preview updates
+as you work, and the size readout shows what you started with next to what you will get.
+
+- The whole picture stays visible with your crop drawn on top, so you can see what you are cutting away.
+- Drag on the picture to draw a crop, drag inside it to move it, or drag a handle to resize it. Aspect
+  buttons start a centred crop in a common shape like `1:1` or `16:9`.
+- `Save Copy` adds the edited version to the Gallery next to the original.
+- `Use as Input Image` puts the edited image into the Studio so you can keep working from it.
+
+Your original image is never overwritten.
+
+## 10. Good Starter Preset
 
 - Size: `1024 x 1024`
 - Steps: `30`
@@ -88,7 +104,7 @@ Use `Info` to see prompt, model, seed, LoRAs, embeddings, and other settings.
 
 Change one setting at a time while learning.
 
-## 10. If Something Goes Wrong
+## 11. If Something Goes Wrong
 
 - Slow generation: lower size, steps, or batch size.
 - Memory errors: close other GPU apps and lower the requested size.

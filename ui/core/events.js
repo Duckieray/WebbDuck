@@ -169,6 +169,8 @@ export function initWebSocket() {
                     emit(Events.QUEUE_UPDATE, data.payload || {});
                 } else if (data?.type === 'catalog') {
                     emit(Events.CATALOG_UPDATE, data.payload || {});
+                } else if (data?.type === 'gallery') {
+                    emit(Events.GALLERY_REFRESH, data.payload || {});
                 }
             } catch (e) {
                 console.warn('Failed to parse WebSocket message:', e);

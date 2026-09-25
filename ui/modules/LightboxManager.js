@@ -12,6 +12,8 @@ export class LightboxManager {
         this.callbacks = {
             onUpscale: callbacks.onUpscale || (() => { }),
             onInpaint: callbacks.onInpaint || (() => { }),
+            onEdit: callbacks.onEdit || (() => { }),
+            onUseAsInput: callbacks.onUseAsInput || (() => { }),
             onDuckMotion: callbacks.onDuckMotion || (() => { }),
             onRegenerate: callbacks.onRegenerate || (() => { }),
             onStageSettings: callbacks.onStageSettings || (() => { }),
@@ -26,6 +28,59 @@ export class LightboxManager {
         this.infoVisible = true;
 
         this.initActions();
+        document.addEventListener('keydown', this._onLightboxKeyDown.bind(this));
+    }
+
+    _onLightboxKeyDown(e) {
+        if (!this.currentPswpInstance?.pswp) return;
+        if (e.repeat) return;
+        // The image editor owns the keyboard while it is open.
+        if (document.body.classList.contains('image-editor-open')) return;
+
+        const target = e.target;
+        const isEditable = target instanceof Element &&
+            (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+                target.tagName === 'SELECT' || target.isContentEditable);
+        if (isEditable) return;
+
+        const modal = byId('confirmation-modal');
+        const modalActive = Boolean(modal && modal.classList.contains('active'));
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (modalActive) return;
+            e.preventDefault();
+            this.openDeleteModal();
+        } else if (e.key === 'Enter' && modalActive) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.deleteCurrentImage();
+        }
+    }
+
+    openDeleteModal() {
+        const modal = byId('confirmation-modal');
+        const imgBtn = byId('modal-delete-img');
+        if (imgBtn) imgBtn.style.display = '';
+
+        if (modal && modal.parentNode !== document.body) {
+            document.body.appendChild(modal);
+        }
+
+        if (!modal) return;
+        modal.classList.remove('hidden');
+        void modal.offsetWidth;
+        setTimeout(() => modal.classList.add('active'), 10);
+    }
+
+    async deleteCurrentImage() {
+        if (!this.currentPswpInstance?.pswp) return;
+        const curr = this.currentPswpInstance.pswp.currSlide.data;
+        const deleteSrc = curr?.originalSrc || curr?.src;
+        const success = await this.callbacks.onDelete(deleteSrc, 'image');
+        if (!success) return;
+
+        this.closeModal();
+        this.reopenAfterDeletingCurrentImage(deleteSrc);
     }
 
     initActions() {
@@ -60,6 +115,23 @@ export class LightboxManager {
             const curr = this.currentPswpInstance.pswp.currSlide.data;
             this.currentPswpInstance.pswp.close();
             this.callbacks.onInpaint(curr.src);
+        });
+
+        listen(byId('lightbox-input-image'), 'click', () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            const src = curr?.originalSrc || curr?.src;
+            this.currentPswpInstance.pswp.close();
+            this.callbacks.onUseAsInput(src);
+        });
+
+        listen(byId('lightbox-edit'), 'click', () => {
+            if (!this.currentPswpInstance?.pswp) return;
+            const curr = this.currentPswpInstance.pswp.currSlide.data;
+            this.callbacks.onEdit({
+                src: curr?.originalSrc || curr?.src,
+                meta: curr?.meta,
+            });
         });
 
         listen(byId('lightbox-duckmotion'), 'click', () => {
@@ -108,29 +180,11 @@ export class LightboxManager {
         });
 
         listen(byId('lightbox-delete'), 'click', () => {
-            const modal = byId('confirmation-modal');
-            const imgBtn = byId('modal-delete-img');
-            if (imgBtn) imgBtn.style.display = '';
-
-            if (modal && modal.parentNode !== document.body) {
-                document.body.appendChild(modal);
-            }
-
-            if (!modal) return;
-            modal.classList.remove('hidden');
-            void modal.offsetWidth;
-            setTimeout(() => modal.classList.add('active'), 10);
+            this.openDeleteModal();
         });
 
-        listen(byId('modal-delete-img'), 'click', async () => {
-            if (!this.currentPswpInstance?.pswp) return;
-            const curr = this.currentPswpInstance.pswp.currSlide.data;
-            const deleteSrc = curr?.originalSrc || curr?.src;
-            const success = await this.callbacks.onDelete(deleteSrc, 'image');
-            if (!success) return;
-
-            this.closeModal();
-            this.reopenAfterDeletingCurrentImage(deleteSrc);
+        listen(byId('modal-delete-img'), 'click', () => {
+            this.deleteCurrentImage();
         });
 
         listen(byId('modal-delete-run'), 'click', async () => {
@@ -534,8 +588,16 @@ export class LightboxManager {
         const favoriteBtn = byId('lightbox-favorite');
         if (viewHdBtn) viewHdBtn.style.display = curr.variant ? 'inline-flex' : 'none';
         if (compareBtn) compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
+
+        // Editing and input-image import only make sense for a stored output file.
+        const isOutput = typeof curr?.src === 'string' && curr.src.includes('/outputs/');
+        const editBtn = byId('lightbox-edit');
+        if (editBtn) editBtn.style.display = isOutput ? 'inline-flex' : 'none';
+        const inputBtn = byId('lightbox-input-image');
+        if (inputBtn) inputBtn.style.display = isOutput ? 'inline-flex' : 'none';
+
         if (favoriteBtn) {
-            const canFavorite = typeof curr?.src === 'string' && curr.src.includes('/outputs/');
+            const canFavorite = isOutput;
             favoriteBtn.style.display = canFavorite ? 'inline-flex' : 'none';
             if (!canFavorite) return;
             const isFav = Boolean(curr?.isFavorite);

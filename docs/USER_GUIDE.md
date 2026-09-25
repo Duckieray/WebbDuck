@@ -30,13 +30,42 @@ Gallery shows saved outputs in a flat newest-first grid.
 - Filters include `All`, `HD`, and `Favorites`.
 - The `Thumb` slider changes thumbnail size.
 - More results load automatically as you scroll.
+- `Select` enters selection mode, where `Delete (N)` removes the selected images.
+
+### Editing Images
+
+Click `Edit` in the lightbox to open the editor. Edits are non-destructive: the original is always
+kept and the result is saved as a new image next to it in the same run folder, so nothing you
+already generated is lost.
+
+- `Crop` — the whole image is shown with your crop drawn on top, so you can always see what you are
+  cutting away. Drag on the image to draw a crop; once one exists, drag inside it to move it, or
+  drag a handle to resize. Picking a ratio (`1:1` / `3:4` / `4:5` / `16:9` / `9:16`) starts a centred
+  crop of that shape immediately. `Full Frame` clears the crop.
+- `Rotate & Flip` turns the image in 90-degree steps and mirrors it horizontally or vertically.
+- `Resize` sets an explicit output size. `Lock aspect ratio` keeps the other dimension in step, and
+  `Snap to multiples of 8` rounds to a size every backend accepts. `Reset Size` returns to the cropped size.
+- `Adjust` applies brightness, contrast, and saturation. Browsers without canvas filter support disable
+  these sliders automatically.
+- The readout shows the source size on the left and the resulting size on the right.
+
+Editor actions:
+
+- `Use as Input Image` loads the edited pixels straight into the Studio Input Image and switches to the
+  Studio view, so you can immediately img2img, inpaint, or outpaint from your edit.
+- `Save Copy` writes the edit into the gallery as a new image.
+- `Reset All` clears every adjustment; `Cancel` closes without saving.
+
+The lightbox `Input Image` button does the same import without opening the editor, sending the original
+image unchanged.
 
 ### Lightbox
 
 Click an image to inspect it full size.
 
 - Metadata includes prompt, negative prompt, model, seed, dimensions, timing, LoRAs, embeddings, and inpaint/outpaint settings.
-- Actions include regenerate, upscale, send to inpaint, download, compare, and delete.
+- Actions include regenerate, upscale, edit, send to inpaint, send to the Studio Input Image, download, compare, and delete.
+- `Edit` and `Input Image` only appear for saved gallery outputs.
 
 ## Core Generation Controls
 
