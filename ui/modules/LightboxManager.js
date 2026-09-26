@@ -7,6 +7,20 @@ import PhotoSwipeLightbox from '../lib/photoswipe-lightbox.esm.js';
 import PhotoSwipe from '../lib/photoswipe.esm.js';
 import { byId, listen, toast } from '../core/utils.js';
 
+/**
+ * True when a lightbox source points at a stored output file.
+ *
+ * The path shape is inconsistent by design of the server: gallery entries carry
+ * `to_web_path()` values ("outputs/run/image.png", no leading slash) while
+ * `POST /image/edit` returns a rooted URL ("/outputs/run/image.png"). Both must
+ * match, so match on the `outputs/` segment rather than requiring a leading
+ * slash. A previous `includes('/outputs/')` check never matched gallery items
+ * and silently hid the Edit, Input Image, and Favorite buttons.
+ */
+export function isOutputImageSrc(value) {
+    return typeof value === 'string' && /(^|\/)outputs\//.test(value);
+}
+
 export class LightboxManager {
     constructor(callbacks = {}) {
         this.callbacks = {
@@ -590,7 +604,7 @@ export class LightboxManager {
         if (compareBtn) compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
 
         // Editing and input-image import only make sense for a stored output file.
-        const isOutput = typeof curr?.src === 'string' && curr.src.includes('/outputs/');
+        const isOutput = isOutputImageSrc(curr?.originalSrc || curr?.src);
         const editBtn = byId('lightbox-edit');
         if (editBtn) editBtn.style.display = isOutput ? 'inline-flex' : 'none';
         const inputBtn = byId('lightbox-input-image');

@@ -230,3 +230,65 @@ def test_gallery_refreshes_on_the_server_gallery_event():
 def test_editor_locks_page_scroll_only_while_open():
     assert "image-editor-open" in EDITOR
     assert "body.image-editor-open" in CSS
+
+
+def _output_src_predicate():
+    """Extract the shipped regex from isOutputImageSrc() and compile it here.
+
+    The JS and Python regex semantics agree for this pattern, so we can execute
+    the real shipped expression instead of only grepping for it.
+    """
+    match = re.search(
+        r"export function isOutputImageSrc\(value\)\s*\{\s*return typeof value === 'string' && /(.*)/\.test\(value\);",
+        LIGHTBOX,
+        re.S,
+    )
+    assert match, "isOutputImageSrc() no longer uses a single inline regex literal"
+    return re.compile(match.group(1))
+
+
+def test_output_source_gate_accepts_the_real_gallery_path_shape():
+    """Regression: the gate used includes('/outputs/'), which never matches.
+
+    to_web_path() emits "outputs/<run>/<file>" with no leading slash, so every
+    gallery item failed the check and Edit / Input Image / Favorite stayed
+    hidden. Assert against the server's actual path format, not a guess.
+    """
+    from server.storage import to_web_path
+
+    gallery_path = to_web_path(ROOT / "outputs" / "run_20260925" / "img.png")
+    assert not gallery_path.startswith("/"), (
+        f"to_web_path() unexpectedly grew a leading slash: {gallery_path!r}; "
+        "update isOutputImageSrc() and this test together"
+    )
+
+    predicate = _output_src_predicate()
+    assert predicate.search(gallery_path), (
+        f"gate rejects the real gallery path {gallery_path!r}; Edit/Input Image/Favorite would stay hidden"
+    )
+    # The rooted form returned by POST /image/edit must match too.
+    assert predicate.search("/" + gallery_path)
+    # And non-output sources must not.
+    for bad in ("/thumbs/run/img_thumb.png", "http://example.com/x.png", "outputs.png", ""):
+        assert not predicate.search(bad), f"gate wrongly accepts non-output source {bad!r}"
+
+    # The typeof guard is what makes non-string input safe in JS; mirror it here.
+    body = re.search(
+        r"return typeof value === 'string' && /(.*)/\.test\(value\);", LIGHTBOX, re.S
+    )
+    assert body, "the typeof-string guard is gone; isOutputImageSrc(undefined) would throw"
+
+
+def test_output_source_gate_drives_edit_and_input_image_visibility():
+    # The buttons must be wired to the shared helper, not an inline substring test.
+    assert "const isOutput = isOutputImageSrc(" in LIGHTBOX
+    assert "editBtn.style.display = isOutput" in LIGHTBOX
+    assert "inputBtn.style.display = isOutput" in LIGHTBOX
+    # Ignore comments: the helper's docblock names the old bug it replaced.
+    code = re.sub(r"/\*.*?\*/", "", LIGHTBOX, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "includes('/outputs/')" not in code, (
+        "the old substring gate is back and will hide the buttons for gallery images"
+    )
+    # The handler reads the full-size source, not the thumbnail.
+    assert "originalSrc || curr?.src" in LIGHTBOX
