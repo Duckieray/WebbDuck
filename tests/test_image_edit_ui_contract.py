@@ -292,3 +292,61 @@ def test_output_source_gate_drives_edit_and_input_image_visibility():
     )
     # The handler reads the full-size source, not the thumbnail.
     assert "originalSrc || curr?.src" in LIGHTBOX
+
+
+def _rule_body(css, selector):
+    """Return the declaration block for a selector, with comments stripped.
+
+    Comments are removed first: they legitimately mention z-index values while
+    explaining the stacking tiers, and would otherwise be matched instead of the
+    real declaration.
+    """
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    idx = css.index(selector)
+    start = css.index("{", idx)
+    depth, i = 1, start + 1
+    while depth:
+        if css[i] == "{":
+            depth += 1
+        elif css[i] == "}":
+            depth -= 1
+        i += 1
+    return css[start + 1:i - 1]
+
+
+def test_editing_dismisses_the_lightbox_before_opening_the_editor():
+    """Regression: the editor opened behind the still-open lightbox."""
+    handler = LIGHTBOX[
+        LIGHTBOX.index("listen(byId('lightbox-edit')"):LIGHTBOX.index("listen(byId('lightbox-duckmotion')")
+    ]
+    assert "pswp.close()" in handler, (
+        "the Edit handler must close PhotoSwipe first, or the editor renders behind the lightbox"
+    )
+    # Mirror the Input Image handler, which already dismissed the lightbox.
+    assert "this.currentPswpInstance.pswp.close();" in LIGHTBOX.split(
+        "listen(byId('lightbox-input-image')"
+    )[1].split("listen(")[0]
+
+
+def test_editor_overlay_stacks_above_photoswipe_but_below_modals():
+    """Regression: the overlay was z-index 10060, under PhotoSwipe's 100000."""
+    pswp_css = (ROOT / "ui" / "lib" / "photoswipe.css").read_text(encoding="utf-8")
+    tokens = (ROOT / "ui" / "styles" / "design-tokens.css").read_text(encoding="utf-8")
+
+    pswp_z = int(re.search(r"--pswp-root-z-index:\s*(\d+)", pswp_css).group(1))
+    modal_backdrop_z = int(re.search(r"--z-modal-backdrop:\s*(\d+)", tokens).group(1))
+    editor_z = int(re.search(r"z-index:\s*(\d+)", _rule_body(CSS, ".image-editor-overlay")).group(1))
+
+    assert editor_z > pswp_z, (
+        f"editor z-index {editor_z} is under PhotoSwipe's {pswp_z}; the editor would open behind the lightbox"
+    )
+    assert editor_z < modal_backdrop_z, (
+        f"editor z-index {editor_z} collides with the modal tier at {modal_backdrop_z}"
+    )
+    # The docked lightbox info panel is hard-coded above the PhotoSwipe root.
+    modals = (ROOT / "ui" / "styles" / "components" / "modals.css").read_text(encoding="utf-8")
+    docked = [int(m) for m in re.findall(r"z-index:\s*(\d{6,});", modals)]
+    assert docked, "expected a hard-coded high z-index for the docked lightbox info panel"
+    assert editor_z > max(docked), (
+        f"editor z-index {editor_z} is under the docked lightbox info panel {max(docked)}"
+    )

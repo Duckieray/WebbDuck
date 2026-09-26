@@ -142,6 +142,10 @@ export class LightboxManager {
         listen(byId('lightbox-edit'), 'click', () => {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
+            // The editor is a full-screen takeover, so dismiss the lightbox first.
+            // PhotoSwipe's root layer sits at z-index 100000; leaving it open
+            // buries the editor behind it.
+            this.currentPswpInstance.pswp.close();
             this.callbacks.onEdit({
                 src: curr?.originalSrc || curr?.src,
                 meta: curr?.meta,

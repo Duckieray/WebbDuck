@@ -399,7 +399,11 @@
 .image-editor-overlay {
     position: fixed;
     inset: 0;
-    z-index: 10060;
+    /* Must clear PhotoSwipe's root layer (--pswp-root-z-index: 100000) and the
+       docked lightbox info panel (100600) so the editor is never occluded while
+       the lightbox is closing. Stays below the modal tiers (--z-modal-backdrop
+       9999999) so app modals can still appear on top if needed. */
+    z-index: 100700;
     display: flex;
     align-items: center;
     justify-content: center;
