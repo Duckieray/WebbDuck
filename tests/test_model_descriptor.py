@@ -4,7 +4,10 @@ import pytest
 
 from core.backends.base import BackendResolver, GenerationBackend
 from models.model_descriptor import (
+    _BACKENDS,
+    _CAPABILITIES,
     ModelDescriptor,
+    defaults_for_model,
     detect_diffusers_architecture,
     describe_registry_model,
 )
@@ -66,7 +69,11 @@ def test_krea_public_descriptor_is_runnable_and_exposes_lora_ui(tmp_path):
     assert payload["name"] == "Krea-2-Turbo"
     assert payload["arch"] == "krea2"
     assert payload["capabilities"]["text2img"] is True
-    assert payload["capabilities"]["img2img"] is False
+    # TASK-012: Krea 2 gains latent-init img2img via the pipeline's
+    # latents=/sigmas= entry points. Masked editing still has no trained runtime.
+    assert payload["capabilities"]["img2img"] is True
+    assert payload["capabilities"]["inpaint"] is False
+    assert payload["capabilities"]["outpaint"] is False
     assert payload["capabilities"]["lora"] is True
     assert payload["defaults"]["steps"] == 8
     assert payload["defaults"]["cfg"] == 0.0
@@ -113,3 +120,30 @@ def test_backend_resolver_fails_actionably_when_unsupported():
     )
     with pytest.raises(LookupError, match="future-model"):
         resolver.resolve(descriptor)
+
+
+def test_every_generatable_architecture_declares_explicit_inference_defaults():
+    # Regression: the UI only restores steps/cfg when the selected architecture
+    # publishes defaults, so a missing entry makes the form silently keep the
+    # previously selected model's values. SDXL had no entry, so switching back
+    # from FLUX.2 left it at steps=4 / cfg=1.0 and outpainting came out blurry.
+    generatable = sorted(set(_CAPABILITIES) | set(_BACKENDS))
+    assert "sdxl" in generatable
+    for architecture in generatable:
+        defaults = defaults_for_model(architecture, "test-model")
+        assert "steps" in defaults, f"{architecture} declares no default step count"
+        assert "cfg" in defaults, f"{architecture} declares no default guidance"
+        assert isinstance(defaults["steps"], int)
+        assert isinstance(defaults["cfg"], (int, float))
+        # Must stay inside the slider bounds declared in ui/index.html, otherwise
+        # the browser silently clamps the restored value.
+        assert 1 <= defaults["steps"] <= 100, architecture
+        assert 0 <= defaults["cfg"] <= 20, architecture
+
+
+def test_switching_back_to_sdxl_restores_the_sdxl_inference_contract():
+    # The exact reported failure: FLUX.2 defaults followed the user into SDXL.
+    sdxl_defaults = defaults_for_model("sdxl", "some-sdxl-checkpoint")
+    assert sdxl_defaults["steps"] == 30
+    assert sdxl_defaults["cfg"] == 7.0
+    assert sdxl_defaults["steps"] != defaults_for_model("flux2", "flux2")["steps"]

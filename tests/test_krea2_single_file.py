@@ -89,6 +89,32 @@ def test_convrot_is_recognized_and_supported(tmp_path):
     assert descriptor.defaults["cfg"] == 4.5
 
 
+def test_plain_int8_tensorwise_without_convrot_is_supported(tmp_path):
+    path = tmp_path / "JANK2_int8_tensorwise.safetensors"
+    _minimal_krea_file(
+        path,
+        quant={
+            "format": "int8_tensorwise",
+            "per_row": True,
+        },
+    )
+    architecture, detection = inspect_single_image_checkpoint(path)
+    descriptor = describe_registry_model(
+        "JANK2 int8 tensorwise",
+        {
+            "path": path,
+            "type": "single",
+            "source": "local",
+            "arch": architecture,
+            "detection": detection,
+        },
+    )
+
+    assert architecture == "krea2"
+    assert detection["quantization"] == "int8"
+    assert descriptor.supported is True
+
+
 def test_top_level_quant_metadata_detects_convrot(tmp_path):
     path = tmp_path / "custom_name.safetensors"
     tensors = {

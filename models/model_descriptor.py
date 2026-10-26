@@ -36,6 +36,9 @@ class ModelCapabilities:
     clip_skip: bool = False
     identity_adapter: bool = False
     tokenize: bool = False
+    # Optional 2x realism VAE decoder (Wan2.1 upscale2x, shared latent space).
+    realism_decoder: bool = False
+    face_detailer: bool = False
 
     def to_dict(self) -> dict[str, bool]:
         return asdict(self)
@@ -105,6 +108,7 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         text2img=True,
         img2img=True,
         inpaint=True,
+        outpaint=True,
         lora=True,
         identity_adapter=True,
     ),
@@ -113,10 +117,18 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
         text2img=True,
         img2img=True,
         inpaint=True,
+        outpaint=True,
         lora=True,
         identity_adapter=True,
     ),
-    "krea2": ModelCapabilities(text2img=True, lora=True, identity_adapter=True),
+    "krea2": ModelCapabilities(
+        text2img=True,
+        img2img=True,
+        lora=True,
+        identity_adapter=True,
+        realism_decoder=True,
+        face_detailer=True,
+    ),
     # Qwen-Image-2512 is the currently installed Qwen target and is officially
     # published as Text-to-Image. Qwen edit checkpoints will receive their own
     # checkpoint-specific capabilities rather than borrowing generic pipeline
@@ -150,6 +162,18 @@ _CONSTRAINTS: dict[str, dict[str, Any]] = {
 }
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
+    # SDXL must carry an explicit contract. Without an entry here the UI has nothing
+    # to restore when a user switches back from a low-step architecture, so the form
+    # keeps the previous model's values (e.g. FLUX.2's steps=4 / cfg=1.0). SDXL at
+    # 4 steps with cfg 1.0 barely denoises and produces a blurry, low-contrast image,
+    # which reads as "outpainting is broken". Checkpoint-specific overrides still win
+    # via the registry entry's own `defaults` (see describe_registry_model).
+    "sdxl": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 30,
+        "cfg": 7.0,
+    },
     "flux": {
         "width": 1024,
         "height": 1024,

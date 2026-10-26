@@ -44,8 +44,15 @@ def _validate_operation(descriptor: ModelDescriptor, operation: str) -> None:
     if not capability_name:
         raise ValueError(f"Unknown image operation: {operation}")
     if not getattr(descriptor.capabilities, capability_name, False):
+        # The UI deliberately leaves input staging ungated so a picture can be
+        # staged before the checkpoint is chosen, so this is the authoritative
+        # rejection point. Keep the wording aligned with the client-side toast.
+        workflow = {"inpaint": "Inpaint", "outpaint": "Outpaint"}.get(
+            operation, operation.capitalize()
+        )
         raise ValueError(
-            f"Checkpoint '{descriptor.name}' does not support the requested {operation} workflow."
+            f"{workflow} is not available for this checkpoint yet. "
+            f"(checkpoint '{descriptor.name}' does not support {operation})"
         )
 
 

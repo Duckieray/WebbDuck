@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.backends import krea2_face_detailer, krea2_img2img
 from core.backends.krea2_identity import (
     KreaIdentityError,
     combined_token_count,
@@ -1429,11 +1430,19 @@ def _denoise_one(
     index: int,
     total_denoise_steps: int,
     report: Any,
+    init_latents: torch.Tensor | None = None,
+    init_sigmas: list[float] | None = None,
+    executed_steps: int | None = None,
 ) -> torch.Tensor:
     prompt_gpu = prompt_embeds.to(device)
     mask_gpu = prompt_mask.to(device)
     negative_gpu = negative_embeds.to(device) if negative_embeds is not None else None
     negative_mask_gpu = negative_mask.to(device) if negative_mask is not None else None
+
+    # An img2img request runs a strength-truncated schedule, so progress and step
+    # accounting follow the steps actually executed rather than the requested
+    # step count.
+    exec_steps = max(1, int(executed_steps if executed_steps is not None else steps))
 
     def on_step_end(
         _pipe: Any,
@@ -1441,7 +1450,7 @@ def _denoise_one(
         _timestep: Any,
         callback_kwargs: dict,
     ) -> dict:
-        completed = index * steps + step_index + 1
+        completed = index * exec_steps + step_index + 1
         progress = 0.55 + (0.34 * completed / total_denoise_steps)
         report("Denoising with Krea 2", progress, completed, total_denoise_steps)
         return callback_kwargs
@@ -1461,6 +1470,12 @@ def _denoise_one(
     if guidance > 0:
         call_kwargs["negative_prompt_embeds"] = negative_gpu
         call_kwargs["negative_prompt_embeds_mask"] = negative_mask_gpu
+    if init_latents is not None:
+        # Krea's prepare_latents passes a caller-supplied latent straight through,
+        # so this must already be packed. `sigmas` must be pre-inverted against the
+        # scheduler's time shift (see core.backends.krea2_img2img).
+        call_kwargs["latents"] = init_latents.to(device)
+        call_kwargs["sigmas"] = init_sigmas
 
     with torch.inference_mode():
         result = pipe(**call_kwargs)
@@ -2132,6 +2147,168 @@ def _run_identity(
     }
 
 
+def _coerce_conditioning_dtype(
+    prompt_embeds: torch.Tensor,
+    negative_embeds: torch.Tensor | None,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Keep masks boolean, but force floating conditioning to inference dtype.
+
+    Diffusers otherwise reuses FP32 latents/attention and inflates peak VRAM on
+    constrained cards.
+    """
+    prompt_embeds = prompt_embeds.to(device="cpu", dtype=dtype)
+    if negative_embeds is not None:
+        negative_embeds = negative_embeds.to(device="cpu", dtype=dtype)
+    return prompt_embeds, negative_embeds
+
+
+def _memory_reserve_gb(
+    hardware: dict[str, Any],
+    width: int,
+    height: int,
+) -> float:
+    """Reserve room for attention, FP8 dequant temporaries and desktop jitter."""
+    total_vram_gb = float(hardware.get("total_vram_gb") or 0.0)
+    reserve = _activation_reserve_gb(total_vram_gb, width, height)
+
+    # 16/18 GB-class desktop GPUs are especially sensitive to compositor and
+    # browser VRAM plus Krea's transient SDPA/dequant allocations. Real hardware
+    # showed a 1.22 GiB attention allocation after the worker had already
+    # consumed ~11 GiB, so a 2 GiB theoretical reserve is not sufficient.
+    if _torch_device(hardware) == "cuda" and 0 < total_vram_gb <= 18.5:
+        reserve = max(reserve, 4.0)
+
+    explicit = str(os.getenv("WEBBDUCK_KREA2_VRAM_RESERVE_GB") or "").strip()
+    if explicit:
+        try:
+            reserve = max(0.5, float(explicit))
+        except ValueError:
+            pass
+    return reserve
+
+
+def _retry_profiles(current_mode: str, hardware: dict[str, Any]) -> list[tuple[str, bool]]:
+    """Return strictly more conservative (mode_override, stream_prefetch) retries."""
+    retries: list[tuple[str, bool]] = []
+    current = str(current_mode or "")
+
+    # Resident and streamed block modes both fall first to synchronous block
+    # offload. Streams prefetch the next layer and intentionally cost extra VRAM.
+    if current.startswith("resident") or "block-stream" in current:
+        retries.append(("transformer-block", False))
+
+    # Any non-leaf, non-sequential profile can then fall to synchronous leaf
+    # offload. Never select leaf again when it is already the current profile.
+    if "leaf" not in current and current != "sequential":
+        retries.append(("group", False))
+
+    if current != "sequential":
+        retries.append(("sequential", False))
+
+    deduped: list[tuple[str, bool]] = []
+    for item in retries:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _dispose_pipe(pipe: Any, device: str) -> None:
+    """Drop the denoiser so a retry reloads into clean VRAM."""
+    if pipe is None:
+        return
+    transformer = getattr(pipe, "transformer", None)
+    try:
+        if transformer is not None:
+            transformer.to("cpu")
+    except Exception:
+        pass
+    for attr in ("transformer", "text_encoder", "vae"):
+        try:
+            setattr(pipe, attr, None)
+        except Exception:
+            pass
+    del transformer
+    gc.collect()
+    if device == "cuda":
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
+
+
+def _fresh_denoiser(
+    request: dict[str, Any],
+    *,
+    dtype: torch.dtype,
+    hardware: dict[str, Any],
+    reserve_gb: float,
+    mode_override: str,
+    stream_prefetch: bool,
+    report: Any,
+) -> tuple[Any, dict[str, Any], str, float]:
+    """Reload Krea CPU-side and configure a clean, safer denoiser profile.
+
+    A stale offload hook can capture freed blocks, so an OOM retry must build a
+    fresh module rather than reconfigure the one that just failed.
+    """
+    report("Reloading Krea denoiser for safe retry", 0.53)
+    fresh_hardware = dict(hardware)
+    fresh_hardware["stream_prefetch"] = bool(stream_prefetch)
+    fresh_pipe, fresh_load_info = _load_pipeline(
+        request,
+        dtype,
+        fresh_hardware,
+        report=None,
+    )
+
+    # Conditioning was already computed. Do not keep duplicate support models
+    # around during the retry denoiser phase.
+    retry_text_encoder = getattr(fresh_pipe, "text_encoder", None)
+    retry_vae = getattr(fresh_pipe, "vae", None)
+    fresh_pipe.text_encoder = None
+    fresh_pipe.vae = None
+    del retry_text_encoder, retry_vae
+    gc.collect()
+    if _torch_device(fresh_hardware) == "cuda":
+        torch.cuda.empty_cache()
+        fresh_hardware = detect_torch_hardware(torch)
+        fresh_hardware["stream_prefetch"] = bool(stream_prefetch)
+
+    storage_gb = _module_storage_gb(fresh_pipe.transformer)
+    mode = _configure_execution(
+        fresh_pipe,
+        hardware=fresh_hardware,
+        load_info=fresh_load_info,
+        transformer_storage_gb=storage_gb,
+        reserve_gb=reserve_gb,
+        mode_override=mode_override,
+    )
+    return fresh_pipe, fresh_load_info, mode, storage_gb
+
+
+def _fit_requested_output(image: Any, request: dict[str, Any]) -> Any:
+    """Resize a decoded image back to the size the user actually asked for.
+
+    The adaptive planner shrinks width/height to fit the card's token budget, and
+    the 2x realism decoder doubles the decode again, so the natural decode size can
+    be far larger than the request. Without this the caller silently receives a
+    different resolution - and the unresampled high-frequency detail reads as
+    grain. Runs after the face pass so refinement happens at full decode detail.
+    """
+    try:
+        req_w = int(request.get("requested_width") or 0)
+        req_h = int(request.get("requested_height") or 0)
+    except (TypeError, ValueError):
+        return image
+    if req_w <= 0 or req_h <= 0:
+        return image
+    if image.size == (req_w, req_h):
+        return image
+    return image.resize((req_w, req_h), Image.LANCZOS)
+
+
 def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> dict:
     worker_started = time.perf_counter()
 
@@ -2146,6 +2323,22 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     num_images = max(1, int(request.get("num_images") or 1))
     seed = int(request.get("seed") or 0)
     timing: dict[str, float] = {}
+
+    # Latent-init img2img. The identity edit path returns above, so an explicit
+    # img2img payload and a Krea identity request never share a run.
+    img2img_cfg = request.get("img2img")
+    img2img_cfg = img2img_cfg if isinstance(img2img_cfg, dict) else None
+    img2img_source = str((img2img_cfg or {}).get("input_image") or "").strip()
+    img2img_enabled = bool(img2img_source)
+    img2img_strength = krea2_img2img.normalize_strength(
+        (img2img_cfg or {}).get("strength") if img2img_cfg else None,
+        default=1.0,
+    )
+    img2img_note: dict[str, Any] | None = None
+    img2img_init_sigma = 0.0
+    # Each image reuses one VAE encode of the source but draws its own init noise,
+    # so a batch behaves like N img2img runs of the same picture.
+    executed_steps = steps
 
     def report(stage: str, progress: float, step: int = 0, total_steps: int = 0) -> None:
         _write_progress(progress_path, stage, progress, step, total_steps)
@@ -2173,6 +2366,11 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         hardware=hardware,
         report=report,
     )
+    prompt_embeds, negative_embeds = _coerce_conditioning_dtype(
+        prompt_embeds,
+        negative_embeds,
+        dtype,
+    )
     timing["prompt_encode_seconds"] = time.perf_counter() - encode_started
 
     # The VAE is explicitly detached during denoising. It is loaded onto the GPU
@@ -2181,14 +2379,55 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     vae = pipe.vae
     pipe.vae = None
 
+    # Encode the img2img source while the pipeline VAE is still attached and the
+    # transformer profile has not been chosen yet, so the VAE never competes with
+    # the denoise pass for VRAM.
+    img2img_init_latent: torch.Tensor | None = None
+    img2img_sigmas: list[float] | None = None
+    if img2img_enabled:
+        report("Encoding Krea img2img source", 0.52)
+        encode_started = time.perf_counter()
+        try:
+            source_image = krea2_img2img.load_source_image(img2img_source)
+            clean_packed, image_seq_len = krea2_img2img.encode_source_latent(
+                pipe,
+                vae,
+                source_image,
+                width=width,
+                height=height,
+                device=device,
+            )
+            img2img_sigmas, init_sigma, executed_steps = krea2_img2img.img2img_schedule(
+                pipe,
+                steps=steps,
+                strength=img2img_strength,
+                image_seq_len=image_seq_len,
+                device=device,
+            )
+            img2img_init_sigma = float(init_sigma)
+            img2img_init_latent = clean_packed
+            timing["img2img_encode_seconds"] = time.perf_counter() - encode_started
+            img2img_note = {
+                "enabled": True,
+                "strength": round(img2img_strength, 4),
+                "requested_steps": steps,
+                "executed_steps": executed_steps,
+                "init_sigma": round(img2img_init_sigma, 6),
+                "image_seq_len": image_seq_len,
+                "source": Path(img2img_source).name,
+            }
+        except Exception as exc:
+            _release_transformer(pipe, device)
+            raise RuntimeError(
+                f"Krea 2 img2img source could not be encoded: {type(exc).__name__}: {exc}"
+            ) from exc
+        finally:
+            krea2_img2img.release_vae(vae)
+
     if device == "cuda":
         hardware = detect_torch_hardware(torch)
     transformer_storage_gb = _module_storage_gb(pipe.transformer)
-    reserve_gb = _activation_reserve_gb(
-        float(hardware.get("total_vram_gb") or 0.0),
-        width,
-        height,
-    )
+    reserve_gb = _memory_reserve_gb(hardware, width, height)
 
     report("Selecting Krea GPU profile", 0.50)
     setup_started = time.perf_counter()
@@ -2201,61 +2440,73 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     )
     initial_execution_mode = execution_mode
     fallback_reason: str | None = None
+    fallback_attempts: list[dict[str, Any]] = []
+
+    # Estimates can still be optimistic. Validate *actual* post-placement free
+    # memory before the first forward and proactively downgrade if resident
+    # placement consumed the reserve we meant to protect.
+    if device == "cuda" and execution_mode.startswith("resident"):
+        post_setup = detect_torch_hardware(torch)
+        post_free = float(post_setup.get("free_vram_gb") or 0.0)
+        if post_free < reserve_gb:
+            fallback_reason = "resident_headroom"
+            fallback_attempts.append(
+                {
+                    "from": execution_mode,
+                    "to": "transformer-block-sync",
+                    "reason": "post_setup_free_vram_below_reserve",
+                    "free_vram_gb": round(post_free, 3),
+                    "reserve_gb": round(reserve_gb, 3),
+                }
+            )
+            _dispose_pipe(pipe, device)
+            hardware = detect_torch_hardware(torch)
+            pipe, load_info, execution_mode, transformer_storage_gb = _fresh_denoiser(
+                request,
+                dtype=dtype,
+                hardware=hardware,
+                reserve_gb=reserve_gb,
+                mode_override="transformer-block",
+                stream_prefetch=False,
+                report=report,
+            )
+
     timing["execution_setup_seconds"] = time.perf_counter() - setup_started
     timing["offload_setup_seconds"] = timing["execution_setup_seconds"]
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
     latent_batches: list[torch.Tensor] = []
-    total_denoise_steps = max(1, steps * num_images)
+    # A strength-truncated img2img run iterates fewer scheduler steps than were
+    # requested, so progress totals follow the executed count.
+    total_denoise_steps = max(1, executed_steps * num_images)
     denoise_started = time.perf_counter()
 
     for index in range(num_images):
         report(
             "Starting Krea denoising",
-            0.54 + (0.35 * (index * steps) / total_denoise_steps),
-            index * steps,
+            0.54 + (0.35 * (index * executed_steps) / total_denoise_steps),
+            index * executed_steps,
             total_denoise_steps,
         )
-        try:
-            latent = _denoise_one(
-                pipe,
-                prompt_embeds=prompt_embeds,
-                prompt_mask=prompt_mask,
-                negative_embeds=negative_embeds,
-                negative_mask=negative_mask,
-                width=width,
-                height=height,
-                steps=steps,
-                guidance=guidance,
+        init_latents = img2img_init_latent
+        if init_latents is not None:
+            # Fresh noise per image so a batch yields distinct variants of the
+            # same source rather than N identical results.
+            init_latents = krea2_img2img.noise_init_latent(
+                init_latents,
+                img2img_init_sigma,
                 seed=seed + index,
                 device=device,
-                index=index,
-                total_denoise_steps=total_denoise_steps,
-                report=report,
             )
-        except Exception as exc:
-            # A desktop compositor/browser/game can consume VRAM after profile
-            # selection. Resident execution therefore gets one automatic retry
-            # using the safer transformer-only block-offload profile.
-            if device == "cuda" and execution_mode.startswith("resident") and _is_cuda_oom(exc):
-                fallback_reason = "resident_oom"
-                report("VRAM changed; retrying Krea with safe offload", 0.53)
-                try:
-                    pipe.transformer.to("cpu")
-                except Exception:
-                    pass
-                gc.collect()
-                torch.cuda.empty_cache()
-                hardware = detect_torch_hardware(torch)
-                execution_mode = _configure_execution(
-                    pipe,
-                    hardware=hardware,
-                    load_info=load_info,
-                    transformer_storage_gb=transformer_storage_gb,
-                    reserve_gb=reserve_gb,
-                    mode_override="transformer-block",
-                )
+        # A desktop compositor/browser/game can consume VRAM after profile
+        # selection, and estimates can be optimistic. Walk a ladder of strictly
+        # more conservative profiles, reloading the denoiser at each rung so a
+        # stale offload hook cannot contaminate the retry. Every attempt reuses the
+        # same init latents and seed, so a retry is deterministic, not a reroll.
+        retry_queue = _retry_profiles(execution_mode, hardware)
+        while True:
+            try:
                 latent = _denoise_one(
                     pipe,
                     prompt_embeds=prompt_embeds,
@@ -2271,26 +2522,70 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
                     index=index,
                     total_denoise_steps=total_denoise_steps,
                     report=report,
+                    init_latents=init_latents,
+                    init_sigmas=img2img_sigmas,
+                    executed_steps=executed_steps,
                 )
-            else:
-                raise
+                break
+            except Exception as exc:
+                if device != "cuda" or not _is_cuda_oom(exc) or not retry_queue:
+                    raise
+                mode_override, use_stream = retry_queue.pop(0)
+                previous_mode = execution_mode
+                fallback_reason = "cuda_oom"
+                report("Krea OOM; retrying with safer GPU profile", 0.53)
+                _dispose_pipe(pipe, device)
+                hardware = detect_torch_hardware(torch)
+                reload_started = time.perf_counter()
+                pipe, load_info, execution_mode, transformer_storage_gb = _fresh_denoiser(
+                    request,
+                    dtype=dtype,
+                    hardware=hardware,
+                    reserve_gb=reserve_gb,
+                    mode_override=mode_override,
+                    stream_prefetch=use_stream,
+                    report=report,
+                )
+                timing["fallback_reload_seconds"] = timing.get("fallback_reload_seconds", 0.0) + (
+                    time.perf_counter() - reload_started
+                )
+                fallback_attempts.append(
+                    {
+                        "from": previous_mode,
+                        "to": execution_mode,
+                        "reason": "cuda_oom",
+                        "seed": seed + index,
+                    }
+                )
+                retry_queue = _retry_profiles(execution_mode, hardware)
         latent_batches.append(latent)
 
     timing["denoise_seconds"] = time.perf_counter() - denoise_started
 
-    del prompt_embeds, prompt_mask, negative_embeds, negative_mask
-    report("Releasing Krea denoiser", 0.90, total_denoise_steps, total_denoise_steps)
-    _release_transformer(pipe, device)
+    # The face/skin detailer re-denoises crops *after* the main decode, so it
+    # needs both the transformer and the prompt embeds to stay resident. Without
+    # it we keep the established order: release the denoiser, then decode.
+    detailer_cfg = request.get("face_detailer")
+    detailer_cfg = detailer_cfg if isinstance(detailer_cfg, dict) else None
+    detailer_enabled = bool(detailer_cfg and detailer_cfg.get("enabled"))
+
+    if not detailer_enabled:
+        del prompt_embeds, prompt_mask, negative_embeds, negative_mask
+        report("Releasing Krea denoiser", 0.90, total_denoise_steps, total_denoise_steps)
+        _release_transformer(pipe, device)
 
     report("Decoding Krea image", 0.92, total_denoise_steps, total_denoise_steps)
     decode_started = time.perf_counter()
     pipe.vae = vae
-    if max(width, height) > 1536:
+    # Tiling bounds decode memory, which matters more when the detailer keeps the
+    # transformer resident alongside the VAE.
+    if max(width, height) > 1536 or detailer_enabled:
         try:
             vae.enable_tiling()
         except Exception:
             pass
 
+    detailer_notes: list[dict[str, Any]] = []
     for index, latents in enumerate(latent_batches):
         images = _decode_latents(
             pipe,
@@ -2301,7 +2596,42 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             device=device,
         )
         image = images[0]
-        report("Writing Krea image", 0.97, (index + 1) * steps, total_denoise_steps)
+        if detailer_enabled:
+            # Every stage of the detailer is individually guarded, and the pass as
+            # a whole is wrapped too: a refine failure must still save the image.
+            try:
+                refine_started = time.perf_counter()
+                refined_image, detailer_note = krea2_face_detailer.run_face_detailer(
+                    pipe,
+                    vae,
+                    image,
+                    detailer_cfg or {},
+                    prompt_embeds=prompt_embeds,
+                    prompt_mask=prompt_mask,
+                    negative_embeds=negative_embeds,
+                    negative_mask=negative_mask,
+                    guidance=guidance,
+                    seed=seed + index,
+                    device=device,
+                    steps=steps,
+                    report=lambda stage: report(stage, 0.94),
+                )
+                detailer_note["seconds"] = round(time.perf_counter() - refine_started, 3)
+                if refined_image is not None:
+                    image = refined_image
+                detailer_notes.append(detailer_note)
+            except Exception as exc:  # pragma: no cover - defensive
+                detailer_notes.append(
+                    {
+                        "enabled": True,
+                        "skipped": "detailer-failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        # Resample to the requested size last, so the face pass refines at full
+        # decode detail and the downsample supersamples away decoder grain.
+        image = _fit_requested_output(image, request)
+        report("Writing Krea image", 0.97, (index + 1) * executed_steps, total_denoise_steps)
         write_started = time.perf_counter()
         path = output_dir / f"krea2_{index:03d}.png"
         image.save(path)
@@ -2311,6 +2641,14 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         saved.append(str(path))
 
     timing["decode_seconds"] = time.perf_counter() - decode_started
+
+    if detailer_enabled:
+        timing["face_detailer_seconds"] = round(
+            sum(float(note.get("seconds") or 0.0) for note in detailer_notes), 3
+        )
+        del prompt_embeds, prompt_mask, negative_embeds, negative_mask
+        report("Releasing Krea denoiser", 0.96, total_denoise_steps, total_denoise_steps)
+        _release_transformer(pipe, device)
     timing["denoise_decode_seconds"] = timing["denoise_seconds"] + timing["decode_seconds"]
     timing["inference_seconds"] = timing["prompt_encode_seconds"] + timing["denoise_decode_seconds"]
     timing["worker_total_seconds"] = time.perf_counter() - worker_started
@@ -2325,12 +2663,16 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
         "ok": True,
         "images": saved,
         "seed": seed,
+        "img2img": img2img_note,
+        "face_detailer": detailer_notes or None,
+        "realism": request.get("realism") if isinstance(request.get("realism"), dict) else None,
         "timing": {key: round(value, 6) for key, value in timing.items()},
         "runtime": {
             **load_info,
             "offload": execution_mode,
             "initial_offload": initial_execution_mode,
             "fallback_reason": fallback_reason,
+            "fallback_attempts": fallback_attempts,
             "text_encoder_mode": encode_mode,
             "device": device,
             "dtype": str(dtype).replace("torch.", ""),
@@ -2338,7 +2680,7 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             "transformer_storage_gb": round(transformer_storage_gb, 2),
             "activation_reserve_gb": round(reserve_gb, 2),
             "system_ram_gb": round(_system_ram_gb(), 2),
-            "transformer_forward_passes": steps * num_images * transformer_passes_per_step,
+            "transformer_forward_passes": executed_steps * num_images * transformer_passes_per_step,
         },
     }
 

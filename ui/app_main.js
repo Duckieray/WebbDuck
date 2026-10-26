@@ -923,6 +923,9 @@ function setupSliders() {
         ['second_pass_steps', 'second-steps-value'],
         ['second_pass_blend', 'blend-value'],
         ['denoising_strength', 'denoise-value'],
+        ['face_detailer_strength', 'face-detailer-strength-value'],
+        ['face_detailer_min_face_px', 'face-detailer-min-face-value'],
+        ['face_detailer_max_faces', 'face-detailer-max-faces-value'],
     ];
 
     pairs.forEach(([inputId, outputId]) => {
@@ -985,7 +988,7 @@ function updateActivePresetChip(width, height) {
 function setupFormHandlers() {
     const saveState = debounce(() => syncFromDOM(), 250);
 
-    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-type', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale', 'ip-adapter-grounding-px', 'ip-adapter-lora-rank'].forEach(id => {
+    ['prompt', 'negative', 'width', 'height', 'steps', 'cfg', 'scheduler', 'batch', 'long-run-warning-minutes', 'clip-skip-2-enabled', 'vae_decoder', 'vae_decoder_output', 'seed_input', 'second_pass_steps', 'second_pass_blend', 'second_pass_enabled', 'second_pass_model', 'denoising_strength', 'denoise-mode', 'smart-extend-enabled', 'smart-extend-pyramid-enable', 'smart-extend-advanced-enabled', 'smart-extend-feather', 'smart-extend-auto-step', 'smart-extend-step-growth', 'smart-extend-refine', 'smart-extend-refine-each-step', 'smart-extend-refine-width', 'smart-extend-refine-strength', 'smart-extend-pyramid-trigger-ratio', 'ip-adapter-enabled', 'ip-adapter-type', 'ip-adapter-refs', 'ip-adapter-scale', 'ip-adapter-lora-scale', 'ip-adapter-grounding-px', 'ip-adapter-lora-rank'].forEach(id => {
         const el = byId(id);
         if (!el) return;
         listen(el, 'input', saveState);
@@ -1052,6 +1055,14 @@ function setupFormHandlers() {
     const promptEl = byId('prompt');
     if (promptEl) {
         listen(promptEl, 'input', debounce(() => updateTokenCounter(promptEl.value), 300));
+    }
+
+    const refreshRealism = debounce(() => updateRealismStatus(), 400);
+    for (const id of ['prompt', 'negative', 'realism_mode', 'base_model']) {
+        const el = byId(id);
+        if (!el) continue;
+        listen(el, 'input', refreshRealism);
+        listen(el, 'change', refreshRealism);
     }
 
     listen(byId('randomize-seed'), 'click', () => {
@@ -1208,6 +1219,39 @@ async function startGeneration(mode) {
     }
 }
 
+const REALISM_LABELS = {
+    realistic: 'Photographic',
+    stylized: 'Illustrated',
+    unknown: 'Unclear',
+};
+
+async function updateRealismStatus() {
+    const textEl = byId('realism-status-text');
+    const reasonEl = byId('realism-status-reason');
+    if (!textEl) return;
+
+    const params = new URLSearchParams({
+        prompt: byId('prompt')?.value || '',
+        negative_prompt: byId('negative')?.value || '',
+        checkpoint_name: byId('base_model')?.value || '',
+        realism_mode: byId('realism_mode')?.value || 'auto',
+    });
+
+    try {
+        const result = await api.get(`/realism/preview?${params.toString()}`);
+        if (!result || typeof result.mode !== 'string') return;
+        const label = REALISM_LABELS[result.mode] || result.mode;
+        textEl.textContent = result.override !== 'auto'
+            ? `${label} (override)`
+            : label;
+        // The backend already prefixes mode, so show the evidence on its own line.
+        reasonEl.textContent = (result.reason || '').replace(/^[a-z]+ - /, '');
+    } catch {
+        textEl.textContent = 'Detecting\u2026';
+        if (reasonEl) reasonEl.textContent = '';
+    }
+}
+
 function collectFormData() {
     const formData = new FormData();
     const state = getState();
@@ -1236,6 +1280,37 @@ function collectFormData() {
     if (seedVal) formData.append('seed', seedVal);
     if (byId('clip-skip-2-enabled')?.checked) {
         formData.append('clip_skip', '2');
+    }
+
+    // Only send the decoder choice when the selected model exposes it; hidden
+    // controls are disabled by the capability layer.
+    const vaeDecoder = byId('vae_decoder');
+    if (vaeDecoder && !vaeDecoder.disabled) {
+        formData.append('vae_decoder', vaeDecoder.value === 'realism' ? 'realism' : 'stock');
+        formData.append('vae_decoder_output', byId('vae_decoder_output')?.value === '2x' ? '2x' : 'requested');
+    }
+
+    // Advanced Settings escape hatch. Sent always so the backend can decide;
+    // 'auto' is the default and needs no user action.
+    const realismMode = byId('realism_mode');
+    if (realismMode && !realismMode.disabled) {
+        formData.append('realism_mode', realismMode.value || 'auto');
+    }
+
+    // Face refinement is auto-selected by the backend for photographic prompts.
+    // Only an explicit checkbox here overrides that, so an untouched Advanced
+    // section never fights the automatic decision.
+    const faceDetailerEnabled = byId('face_detailer_enabled');
+    if (faceDetailerEnabled && !faceDetailerEnabled.disabled) {
+        const cfg = {
+            enabled: faceDetailerEnabled.checked,
+            strength: parseFloat(byId('face_detailer_strength')?.value) || 0.30,
+            min_face_px: parseInt(byId('face_detailer_min_face_px')?.value) || 32,
+            max_faces: parseInt(byId('face_detailer_max_faces')?.value) || 3,
+            detector_path: (byId('face_detailer_detector_path')?.value || '').trim(),
+        };
+        formData.append('face_detailer', JSON.stringify(cfg));
+        formData.append('face_detailer_explicit', '1');
     }
 
     if (byId('second_pass_enabled')?.checked) {

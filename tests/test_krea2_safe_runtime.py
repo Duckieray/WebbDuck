@@ -71,11 +71,13 @@ def test_resident_oom_never_retries_resident():
 
 
 def test_backend_routes_through_adaptive_hardened_worker():
+    # The worker launch lives in the host implementation; krea2.py only patches
+    # defaults and re-exports the impl module.
     source = (
         Path(__file__).resolve().parents[1]
         / "core"
         / "backends"
-        / "krea2.py"
+        / "krea2_host_impl.py"
     ).read_text(encoding="utf-8")
     assert 'with_name("krea2_worker_adaptive.py")' in source
 

@@ -73,6 +73,7 @@ from core.web_plugins import (
     reload_web_plugin,
 )
 from core.gpu_lease import get_gpu_lease
+from core.realism_profile import resolve_realism
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -824,6 +825,11 @@ async def test(
     smart_extend_pyramid_trigger_ratio: float = Form(SMART_EXTEND_PYRAMID_TRIGGER_RATIO_DEFAULT),
     clip_skip: int = Form(None),
     identity_adapter: str = Form("{}"),
+    vae_decoder: str = Form(""),
+    vae_decoder_output: str = Form(""),
+    face_detailer: str = Form(""),
+    face_detailer_explicit: bool = Form(False),
+    realism_mode: str = Form("auto"),
     wait_for_result: bool = Form(True),
 ):
     """Generate single test image."""
@@ -856,6 +862,11 @@ async def test(
         "loras": lora_list,
         "embeddings": embedding_list,
         "identity_adapter": identity_adapter_dict,
+        "vae_decoder": vae_decoder.strip(),
+        "vae_decoder_output": vae_decoder_output.strip(),
+        "face_detailer": _parse_face_detailer_settings(face_detailer),
+        "face_detailer_explicit": face_detailer_explicit,
+        "realism_mode": realism_mode.strip() or "auto",
         "strength": strength,
         "inpainting_fill": inpainting_fill,
         "mask_blur": mask_blur,
@@ -989,6 +1000,11 @@ async def generate(
     smart_extend_pyramid_initializer: str = Form("edge_strips"),
     clip_skip: int = Form(None),
     identity_adapter: str = Form("{}"),
+    vae_decoder: str = Form(""),
+    vae_decoder_output: str = Form(""),
+    face_detailer: str = Form(""),
+    face_detailer_explicit: bool = Form(False),
+    realism_mode: str = Form("auto"),
     wait_for_result: bool = Form(True),
     client_request_id: str = Form(""),
 ):
@@ -1026,6 +1042,11 @@ async def generate(
         "loras": lora_list,
         "embeddings": embedding_list,
         "identity_adapter": identity_adapter_dict,
+        "vae_decoder": vae_decoder.strip(),
+        "vae_decoder_output": vae_decoder_output.strip(),
+        "face_detailer": _parse_face_detailer_settings(face_detailer),
+        "face_detailer_explicit": face_detailer_explicit,
+        "realism_mode": realism_mode.strip() or "auto",
         "strength": strength,
         "refinement_strength": refinement_strength,
         "inpainting_fill": inpainting_fill,
@@ -1648,6 +1669,35 @@ def get_recommendations(checkpoint_name: str, mode: str = ""):
     return result
 
 
+@app.get("/realism/preview")
+def preview_realism(
+    prompt: str = "",
+    negative_prompt: str = "",
+    checkpoint_name: str = "",
+    realism_mode: str = "auto",
+):
+    """Report how a request would be classified before generating anything.
+
+    The Studio shows this as the "Image Style" read-out so the automatic routing
+    is visible and explainable instead of magic. It is advisory only - the
+    generation host runs the same resolver again at submit time.
+    """
+    meta = {}
+    if checkpoint_name:
+        try:
+            meta = meta_store.get(checkpoint_name, asset_type="checkpoint") or {}
+        except Exception:
+            meta = {}
+    return resolve_realism(
+        {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "meta": meta,
+            "realism_mode": realism_mode,
+        }
+    )
+
+
 @app.get("/meta/categories")
 def get_meta_categories():
     """Return aggregate tag/mode/family lists for UI filtering."""
@@ -2125,6 +2175,22 @@ async def get_thumbnail(path: str):
 REFS_DIR = BASE / "refs"
 REFS_DIR.mkdir(exist_ok=True)
 PRESETS_FILE = BASE / ".faceid_presets.json"
+
+def _parse_face_detailer_settings(raw: str) -> dict:
+    """Parse the optional face/skin detailer payload from a form field.
+
+    Returns ``{}`` when absent or malformed. The backend also treats junk as a
+    skipped pass, so this stays forgiving rather than rejecting the request.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
 
 def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
     """Merge a saved preset into the identity adapter config.

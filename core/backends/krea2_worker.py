@@ -9,6 +9,7 @@ from core.backends.krea2_identity_quality import install_worker_quality_patch
 from core.backends.krea2_identity_reference import install_identity_reference_patch
 from core.backends.krea2_identity_stability import install_identity_stability_patch
 from core.backends.krea2_lora import install_worker_lora_patch
+from core.backends.krea2_realism_decoder import install_worker_realism_patch
 
 # Order matters:
 # 1) quality patch installs corrected v1.2.4 encode/denoise math;
@@ -19,12 +20,15 @@ from core.backends.krea2_lora import install_worker_lora_patch
 # 5) user-LoRA patch wraps the final _load_pipeline so every transformer load,
 #    including OOM-retry reloads, receives the selected Krea LoRAs before any
 #    group-offload hooks snapshot parameters/buffers. It also makes FP8 residual
-#    installation additive so ordinary LoRAs and the Krea Identity LoRA coexist.
+#    installation additive so ordinary LoRAs and the Krea Identity LoRA coexist;
+# 6) realism patch wraps the final _decode_latents so requests that opt into the
+#    2x realism decoder use it, falling back to the stock VAE on any failure.
 install_worker_quality_patch(_impl)
 install_identity_face_patch(_impl)
 install_identity_reference_patch(_impl)
 install_identity_stability_patch(_impl)
 install_worker_lora_patch(_impl)
+install_worker_realism_patch(_impl)
 
 # Preserve the original module object for monkeypatch-heavy tests and for code
 # whose function globals intentionally refer to the worker module itself.

@@ -40,6 +40,8 @@ if str(ROOT) not in sys.path:
 
 from core.backends import krea2_native_fp8 as native_fp8
 from core.backends import krea2_worker_safe as safe
+from core.backends.krea2_img2img import denoise_step_count
+from core.backends.krea2_realism_decoder import realism_decode_context
 from runtime_hardware import detect_torch_hardware
 
 _EFFECTIVE_TOKEN_MULTIPLE = 16
@@ -366,6 +368,17 @@ def _adaptive_request(
     budget: int | None = None
     tuned_width, tuned_height = requested_width, requested_height
 
+    # A latent-init img2img request costs exactly one text2img forward per step
+    # (no reference grid is packed into the sequence), so it shares the text2img
+    # token envelope. Only its *step count* changes: strength truncates the
+    # sigma schedule, so the card is asked to run fewer iterations than the
+    # requested step count implies.
+    img2img_cfg = tuned.get("img2img")
+    img2img_cfg = img2img_cfg if isinstance(img2img_cfg, dict) else {}
+    img2img_enabled = bool(str(img2img_cfg.get("input_image") or "").strip())
+    img2img_strength = float(img2img_cfg.get("strength") or 1.0) if img2img_enabled else 1.0
+    img2img_steps = denoise_step_count(requested_steps, img2img_strength)
+
     if identity_enabled:
         # Identity edits derive their output size from the reference AR
         # (edit_target_size) and use the LoRA card's own step recipe, so the
@@ -413,6 +426,11 @@ def _adaptive_request(
     tuned["width"] = tuned_width
     tuned["height"] = tuned_height
     tuned["steps"] = tuned_steps
+    # The planner rewrites width/height to fit the token budget and the 2x
+    # realism decoder decodes at double that, so the worker needs the original
+    # request to resample the saved image back to the size the user asked for.
+    tuned["requested_width"] = requested_width
+    tuned["requested_height"] = requested_height
 
     plan = {
         "requested_width": requested_width,
@@ -428,6 +446,9 @@ def _adaptive_request(
         "steps_tuned": tuned_steps != requested_steps,
         "identity_enabled": identity_enabled,
         "identity": identity_accounting,
+        "img2img_enabled": img2img_enabled,
+        "img2img_strength": round(img2img_strength, 4) if img2img_enabled else None,
+        "img2img_denoise_steps": img2img_steps if img2img_enabled else None,
         "variant": variant,
         "accelerator": str(hardware.get("accelerator") or "cpu"),
         "hardware_total_vram_gb": round(
@@ -484,13 +505,17 @@ def _run(
         )
 
     try:
-        result = safe._run(tuned_request, output_dir, progress_path)
+        with realism_decode_context(tuned_request) as decoder_note:
+            result = safe._run(tuned_request, output_dir, progress_path)
+            decoder_note = dict(decoder_note) if decoder_note is not None else None
     finally:
         _cleanup_accelerator_state()
 
     post_cleanup = _post_cleanup_hardware()
     runtime = result.setdefault("runtime", {})
     if isinstance(runtime, dict):
+        if decoder_note is not None:
+            runtime["decoder"] = decoder_note
         runtime["adaptive_request"] = plan
         runtime["requested_width"] = plan["requested_width"]
         runtime["requested_height"] = plan["requested_height"]

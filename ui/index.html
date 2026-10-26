@@ -152,6 +152,91 @@
                       </button>
                     </div>
                   </div>
+
+                  <div class="form-group hidden" id="vae-decoder-group">
+                    <div class="param-row">
+                      <label class="form-label" for="vae_decoder">Decoder</label>
+                      <span class="section-help-trigger" title="Realism 2x swaps the stock VAE decoder for a photo-trained 2x decoder that renders sharper skin pores and hair at almost no extra cost. It can over-sharpen anime, line art, and text. If it cannot load, the standard decoder is used.">i</span>
+                    </div>
+                    <div class="nova-two-col">
+                      <select class="select" id="vae_decoder" aria-label="VAE decoder">
+                        <option value="stock">Standard</option>
+                        <option value="realism">Realism 2x</option>
+                      </select>
+                      <select class="select" id="vae_decoder_output" aria-label="Decoder output size">
+                        <option value="requested">Requested size</option>
+                        <option value="2x">Keep 2x</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="form-group hidden" id="realism-status-group">
+                    <div class="param-row">
+                      <label class="form-label" for="realism-status-text">Image Style</label>
+                      <span class="param-value" id="realism-status-text">Detecting&hellip;</span>
+                    </div>
+                    <p class="field-help" id="realism-status-reason"></p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section collapsible collapsed nova-block" id="section-advanced">
+                <button class="section-header" type="button" data-section="section-advanced">
+                  <span class="section-header-main">
+                    <span class="section-title">Advanced</span>
+                    <span class="section-help-trigger" role="button" tabindex="0" data-help-section="advanced" aria-label="Advanced help" title="Advanced help">i</span>
+                  </span>
+                  <span class="section-arrow">v</span>
+                </button>
+                <div class="section-body">
+                  <p class="field-help">WebbDuck picks the photographic pipeline automatically. Only override this if it guesses wrong.</p>
+
+                  <div class="form-group">
+                    <label class="form-label" for="realism_mode">Style Handling</label>
+                    <select class="select" id="realism_mode" aria-label="Style handling">
+                      <option value="auto">Automatic (recommended)</option>
+                      <option value="always">Always photographic</option>
+                      <option value="never">Never photographic</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group hidden" id="face-detailer-group">
+                    <label class="toggle-row" for="face_detailer_enabled">
+                      <input type="checkbox" id="face_detailer_enabled" />
+                      <span>Refine faces</span>
+                      <span class="section-help-trigger" title="Re-renders the facial interior of each detected face at higher effective detail. On by default for photographic prompts; off for anime, line art and text.">i</span>
+                    </label>
+
+                    <div class="form-group">
+                      <div class="param-row">
+                        <label class="form-label" for="face_detailer_strength">Detail Strength</label>
+                        <span class="param-value" id="face-detailer-strength-value">0.30</span>
+                      </div>
+                      <input class="slider" type="range" id="face_detailer_strength" min="0.05" max="0.6" step="0.05" value="0.30" />
+                    </div>
+
+                    <div class="nova-two-col">
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="face_detailer_min_face_px">Min Face px</label>
+                          <span class="param-value" id="face-detailer-min-face-value">32</span>
+                        </div>
+                        <input class="input" type="number" id="face_detailer_min_face_px" min="8" max="512" step="4" value="32" aria-label="Minimum face size in pixels" />
+                      </div>
+                      <div class="form-group">
+                        <div class="param-row">
+                          <label class="form-label" for="face_detailer_max_faces">Max Faces</label>
+                          <span class="param-value" id="face-detailer-max-faces-value">3</span>
+                        </div>
+                        <input class="input" type="number" id="face_detailer_max_faces" min="1" max="16" step="1" value="3" aria-label="Maximum faces to refine" />
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="form-label" for="face_detailer_detector_path">Detector Model</label>
+                      <input class="input" type="text" id="face_detailer_detector_path" placeholder="Auto (weights/faces/)" />
+                    </div>
+                  </div>
                 </div>
               </section>
 

@@ -143,6 +143,8 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
         quantization = "convrot"
     elif "fp8" in quant_kinds:
         quantization = "fp8_scaled"
+    elif "int8" in quant_kinds:
+        quantization = "int8"
     elif "unsupported" in quant_kinds:
         quantization = "unsupported"
     else:

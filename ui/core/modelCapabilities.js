@@ -243,6 +243,20 @@ function applyFeatureSections(profile) {
     setSectionVisible('section-ip-adapter', capabilityAllowed(caps, 'identity_adapter'));
     setControlVisible('prompt_2', capabilityAllowed(caps, 'prompt_2'));
     setControlVisible('clip_skip', capabilityAllowed(caps, 'clip_skip'));
+    // The realism pipeline is automatic, so the decoder selects itself and the
+    // per-request decoder knobs stay out of Parameters. The only things worth
+    // surfacing are the read-out and the Advanced overrides, and only for
+    // profiles that actually advertise the capability.
+    setControlVisible('vae_decoder', false);
+    setControlVisible('vae_decoder_output', false);
+    const realism = capabilityEnabled(caps, 'realism_decoder') || capabilityEnabled(caps, 'face_detailer');
+    setControlVisible('realism-status-text', realism);
+    setControlVisible('realism_mode', realism);
+    setControlVisible('face_detailer_enabled', capabilityEnabled(caps, 'face_detailer'));
+    setControlVisible('face_detailer_strength', capabilityEnabled(caps, 'face_detailer'));
+    setControlVisible('face_detailer_min_face_px', capabilityEnabled(caps, 'face_detailer'));
+    setControlVisible('face_detailer_max_faces', capabilityEnabled(caps, 'face_detailer'));
+    setControlVisible('face_detailer_detector_path', capabilityEnabled(caps, 'face_detailer'));
 }
 
 function restoreLegacyStudioControls() {
@@ -254,6 +268,14 @@ function restoreLegacyStudioControls() {
     }
     setControlVisible('prompt_2', true);
     setControlVisible('clip_skip', true);
+    setControlVisible('vae_decoder', false);
+    setControlVisible('vae_decoder_output', false);
+    setControlVisible('face_detailer_enabled', false);
+    setControlVisible('face_detailer_strength', false);
+    setControlVisible('face_detailer_min_face_px', false);
+    setControlVisible('face_detailer_max_faces', false);
+    setControlVisible('face_detailer_detector_path', false);
+    setControlVisible('realism-status-text', false);
     applyOperationControls({ capabilities: {} });
 }
 
@@ -287,7 +309,7 @@ function warnWeakIdentitySettings() {
     const hasDmd2 = loras.some(lora => /dmd2/i.test(String(lora.name || '')));
     if (cfg > 1.5 && steps >= 12 && !hasDmd2) return;
     toast(
-        'Identity adapter works best with a normal SDXL schedule (~20-30 steps, CFG 3-7) and without ' +
+        'Identity adapter works best with a normal diffusion schedule (~20-30 steps, CFG 3-7) and without ' +
         'the DMD2 accelerator LoRA. The low-step LCM/CFG 1 recipe weakens likeness.',
         'warning'
     );

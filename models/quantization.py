@@ -39,6 +39,8 @@ def classify_comfy_quant(config: dict[str, Any]) -> str:
         return "convrot"
     if fmt in _SUPPORTED_FP8_FORMATS or fmt.startswith("float8"):
         return "fp8"
+    if fmt == "int8_tensorwise":
+        return "int8"
     return "unsupported" if fmt else "unknown"
 
 

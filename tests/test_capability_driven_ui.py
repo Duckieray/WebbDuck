@@ -55,7 +55,7 @@ def test_scheduler_model_defaults_apply_after_options_load():
 
 def test_identity_adapter_warns_when_fast_lcm_recipe_weakens_likeness():
     assert "warnWeakIdentitySettings" in CAPS
-    assert "Identity adapter works best with a normal SDXL schedule" in CAPS
+    assert "Identity adapter works best with a normal diffusion schedule" in CAPS
     assert "without " in CAPS
     assert "the DMD2 accelerator LoRA" in CAPS
 
@@ -83,6 +83,28 @@ def test_studio_only_hides_mature_controls_when_capability_is_explicitly_false()
         "section-ip-adapter",
     ):
         assert f"setSectionVisible('{section}', capabilityAllowed" in CAPS
+
+
+def test_staging_an_input_image_is_never_capability_gated():
+    # Staging a picture and choosing the checkpoint afterwards is a supported order,
+    # so the input section and the two load-into-Studio buttons stay available for
+    # every checkpoint and the workflow is validated at Generate time instead.
+    assert "const supportsSource = true;" in CAPS
+    assert "sourceSection.classList.remove('hidden')" in CAPS
+    assert "setCapabilityDisabled(byId('input-image'), false)" in CAPS
+    assert "for (const id of ['preview-inpaint', 'lightbox-inpaint'])" in CAPS
+    assert "button.classList.remove('hidden')" in CAPS
+    # Switching checkpoints must not destroy an already-staged upload.
+    assert "window._uploadedImage = null" not in CAPS
+    assert "window._uploadedImageDims = null" not in CAPS
+
+
+def test_unavailable_inpaint_workflow_reports_a_clear_message_at_generate_time():
+    assert "Inpaint is not available for this checkpoint yet." in CAPS
+    assert "Outpaint is not available for this checkpoint yet." in CAPS
+    runtime = (ROOT / "core" / "model_runtime.py").read_text(encoding="utf-8")
+    assert "is not available for this checkpoint yet." in runtime
+    assert 'capability_name, False' in runtime
 
 
 def test_model_selection_refreshes_its_profile_instead_of_relying_on_catalog_timing():

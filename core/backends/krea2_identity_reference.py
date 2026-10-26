@@ -24,7 +24,9 @@ DEFAULT_FACE_WIDTH_TRIGGER = 0.26
 DEFAULT_FACE_AREA_TRIGGER = 0.08
 DEFAULT_FACE_FILL_AFTER_CROP = 0.42
 _OFF_VALUES = {"0", "false", "off", "no", "none", "disabled"}
-_REAL_ESRGAN_VALUES = {"1", "true", "yes", "on", "auto", "realesrgan", "real-esrgan"}
+# Opt-in spellings the inner quality gate (``krea2_identity_quality
+# ._controlled_upscale``) understands directly, so they need no temporary override.
+# Every other non-off value -- including an unset variable -- is treated as auto.
 _LEGACY_REAL_ESRGAN_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -342,7 +344,23 @@ def _attach_reference_meta(result: Any, meta: dict[str, Any] | None) -> None:
 
 
 def _final_size_upscaler(original: Any):
-    """Restore exact requested artifact dimensions after safe native denoising."""
+    """Restore exact requested artifact dimensions after safe native denoising.
+
+    ``WEBBDUCK_KREA2_IDENTITY_UPSCALE`` gates the policy only:
+
+    * an off value (``0``/``false``/``off``/``no``/``none``/``disabled``) returns
+      the native decode untouched, for debugging;
+    * anything else -- including an unset variable -- delegates to
+      ``krea2_worker_impl._maybe_upscale_identity_artifact``, which runs
+      Real-ESRGAN and falls back to Lanczos (recording ``upscale_error``) when
+      the upscaler or its weights are unavailable.
+
+    Real-ESRGAN is therefore the default rather than something each deployment
+    has to opt into, matching the unconditional ``get_upsampler`` calls the
+    gallery upscale job (``core/worker.py``) and the ``/upscale`` endpoint
+    (``server/app.py``) already make. Those run in the host process, so the
+    isolated generation runtimes never need Real-ESRGAN installed for this path.
+    """
 
     def _call_realesrgan(image: Any, *, requested: Any, effective: Any, raw: str):
         key = "WEBBDUCK_KREA2_IDENTITY_UPSCALE"
@@ -362,36 +380,28 @@ def _final_size_upscaler(original: Any):
         raw = str(os.getenv("WEBBDUCK_KREA2_IDENTITY_UPSCALE") or "").strip().lower()
         if raw in _OFF_VALUES:
             return image, None
-        if raw in _REAL_ESRGAN_VALUES:
-            return _call_realesrgan(
-                image,
-                requested=requested,
-                effective=effective,
-                raw=raw,
-            )
-
-        if requested is None:
-            return image, None
-        try:
-            req_w, req_h = int(requested[0]), int(requested[1])
-        except Exception:
-            return image, None
-        if req_w <= 0 or req_h <= 0:
-            return image, None
-
-        current_w, current_h = image.size
-        if (current_w, current_h) == (req_w, req_h):
-            return image, None
-
-        image = image.resize((req_w, req_h), _lanczos())
-        note = {
-            "from": [current_w, current_h],
-            "to": [req_w, req_h],
-            "upscaler": "lanczos",
-            "policy": "exact-requested-size",
-            "native_effective_size": list(effective) if effective is not None else [current_w, current_h],
-        }
-        return image, note
+        # Unset (and any unrecognised value) means "auto": prefer Real-ESRGAN and
+        # let the wrapped caller degrade to Lanczos, recording `upscale_error`,
+        # when the upscaler is unavailable. Previously an unset value fell
+        # through to a plain-Lanczos branch in this wrapper, so the common case
+        # silently produced a soft ~1.7x Lanczos stretch even with Real-ESRGAN
+        # installed and its weights resolvable. That contradicted
+        # test_identity_artifact_upscale_realesrgan_path and
+        # test_identity_artifact_upscale_lanczos_fallback, which both clear the
+        # env var and still expect Real-ESRGAN-first behaviour.
+        #
+        # Exact-size restoration now lives solely in the wrapped caller
+        # (`krea2_worker_impl._maybe_upscale_identity_artifact`), which resizes
+        # to the requested box on both the Real-ESRGAN and fallback paths, so
+        # this wrapper stays a pure policy gate. `krea_upscale` notes therefore
+        # report `upscaler` plus `from`/`to`, and `upscale_error` when the
+        # fallback was used.
+        return _call_realesrgan(
+            image,
+            requested=requested,
+            effective=effective,
+            raw=raw,
+        )
 
     return _maybe_upscale
 

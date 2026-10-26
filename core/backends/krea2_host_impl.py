@@ -19,7 +19,11 @@ from core.backends.krea2_identity import (
     identity_settings_snapshot,
     resolve_identity_weight,
 )
+from core.backends.krea2_face_detailer import normalize_detailer_request
+from core.realism_profile import resolve_realism
+from core.backends.krea2_img2img import resolve_img2img_request
 from core.backends.krea2_lora import inject_lora_trigger, lora_trigger_phrase, resolve_krea2_loras
+from core.backends.krea2_realism_decoder import fit_realism_output, resolve_decoder_request
 from core.backends.runtime_probe import probe_python_runtime
 from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
@@ -387,6 +391,57 @@ class Krea2DiffusersBackend(GenerationBackend):
             payload["loras"] = user_loras
         if identity_payload is not None:
             payload["identity"] = identity_payload
+        # One automatic decision drives both photographic features. This is the
+        # "just works" path: a photoreal prompt gets the realism decoder and the
+        # face detailer without the user touching a single control.
+        realism = resolve_realism(settings)
+        payload["realism"] = realism
+
+        auto_settings = dict(settings)
+        if realism["apply"]:
+            # The Studio always submits vae_decoder, as "" when the hidden control
+            # was not sent. setdefault() would keep that empty string and silently
+            # skip automatic selection, so blank counts as "not chosen".
+            for key, chosen in (("vae_decoder", "realism"), ("vae_decoder_output", "requested")):
+                if not str(auto_settings.get(key) or "").strip():
+                    auto_settings[key] = chosen
+            # Only auto-enable the detailer when Advanced has not spoken. An
+            # explicit checkbox is the user's escape hatch and always wins.
+            if not settings.get("face_detailer_explicit"):
+                # Spell out the conservative values instead of inheriting the
+                # backend defaults. The refine budget is expressed as
+                # refine_strength/refine_steps rather than the main pass's
+                # strength/steps, because the shifted schedule turns a small
+                # "strength" into a large noise floor; see DEFAULT_REFINE_STEPS.
+                auto_settings["face_detailer"] = {
+                    "enabled": True,
+                    "refine_strength": 0.16,
+                    "refine_steps": 24,
+                    "min_face_px": 32,
+                    "max_faces": 3,
+                }
+            else:
+                auto_settings["face_detailer"] = settings.get("face_detailer")
+
+        decoder_payload = resolve_decoder_request(auto_settings)
+        if decoder_payload is not None:
+            payload["decoder"] = decoder_payload
+        img2img_payload = resolve_img2img_request(settings)
+        if img2img_payload is not None and identity_payload is not None:
+            # The Krea identity edit path is itself image-driven (it consumes the
+            # persona reference as its denoise anchor) and returns before the
+            # plain img2img branch in the worker. Refuse the ambiguous combination
+            # here instead of silently discarding the staged source.
+            raise ValueError(
+                "Krea 2 identity edit and Krea 2 img2img cannot run together. "
+                "Disable the identity/persona reference to run img2img from the staged "
+                "image, or remove the staged image to run the identity edit."
+            )
+        if img2img_payload is not None:
+            payload["img2img"] = img2img_payload
+        detailer_payload = normalize_detailer_request(auto_settings)
+        if detailer_payload is not None:
+            payload["face_detailer"] = detailer_payload
 
         python_exe = _runtime_python()
         worker = Path(__file__).with_name("krea2_worker_adaptive.py")
@@ -487,22 +542,59 @@ class Krea2DiffusersBackend(GenerationBackend):
             upscale_note_merged: dict = {}
             upscale_started = time.perf_counter()
 
+            decoder_note = runtime.get("decoder") if isinstance(runtime, dict) else None
+            decoder_note = dict(decoder_note) if isinstance(decoder_note, dict) else None
+            realism_applied = bool(decoder_note and decoder_note.get("applied"))
+            realism_output = (decoder_payload or {}).get("output") or "requested"
+
             from core.backends.krea2_worker import _maybe_upscale_identity_artifact
 
             images: list[Image.Image] = []
+            decoded_size: list[int] | None = None
+            resize_filter: str | None = None
             for raw_path in result.get("images") or []:
                 with Image.open(raw_path) as image:
                     image = image.convert("RGB").copy()
-                image, upscale_note = _maybe_upscale_identity_artifact(
-                    image,
-                    requested=(req_w, req_h),
-                    effective=(eff_w, eff_h),
-                )
-                if upscale_note is not None:
-                    upscale_note_merged = upscale_note
+                if realism_applied:
+                    # The 2x decoder already produced more pixels than the
+                    # native grid; size it directly instead of running the
+                    # identity Real-ESRGAN restore on top.
+                    if decoded_size is None:
+                        decoded_size = [int(image.size[0]), int(image.size[1])]
+                    image, used_filter = fit_realism_output(
+                        image,
+                        requested=(req_w, req_h),
+                        output_mode=realism_output,
+                    )
+                    resize_filter = resize_filter or used_filter
+                else:
+                    image, upscale_note = _maybe_upscale_identity_artifact(
+                        image,
+                        requested=(req_w, req_h),
+                        effective=(eff_w, eff_h),
+                    )
+                    if upscale_note is not None:
+                        upscale_note_merged = upscale_note
                 images.append(image)
             if not images:
                 raise RuntimeError("Krea 2 runtime returned no images")
+            if decoder_note is not None:
+                if realism_applied:
+                    decoder_note["decoded"] = decoded_size
+                    decoder_note["to"] = list(images[0].size)
+                    if resize_filter:
+                        decoder_note["resize"] = resize_filter
+                    # Saved metadata must describe the artifact on disk.
+                    settings["width"], settings["height"] = images[0].size
+                    settings.setdefault("requested_width", req_w)
+                    settings.setdefault("requested_height", req_h)
+                settings["krea_decoder"] = decoder_note
+                perf = settings.setdefault("performance_timing", {})
+                if isinstance(perf, dict) and decoder_note.get("load_seconds") is not None:
+                    try:
+                        perf["krea_decoder_load_seconds"] = round(float(decoder_note["load_seconds"]), 6)
+                    except (TypeError, ValueError):
+                        pass
             if upscale_note_merged:
                 settings["krea_upscale"] = upscale_note_merged
                 perf = settings.setdefault("performance_timing", {})
@@ -510,6 +602,15 @@ class Krea2DiffusersBackend(GenerationBackend):
                     perf["krea_upscale_seconds"] = round(
                         max(0.0, time.perf_counter() - upscale_started), 6
                     )
+            img2img_note = result.get("img2img")
+            if isinstance(img2img_note, dict) and img2img_note.get("enabled"):
+                settings["krea_img2img"] = img2img_note
+            detailer_result = result.get("face_detailer")
+            if isinstance(detailer_result, list) and detailer_result:
+                settings["krea_face_detailer"] = detailer_result
+            realism_result = result.get("realism")
+            if isinstance(realism_result, dict):
+                settings["krea_realism"] = realism_result
             return images, int(result.get("seed", seed))
 
 

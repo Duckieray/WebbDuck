@@ -122,13 +122,26 @@ def test_reference_max_edge_defaults_to_1024_and_can_be_disabled(monkeypatch):
     assert reference_max_edge({}) == 0
 
 
-def test_final_identity_artifact_defaults_to_exact_requested_size(monkeypatch):
+def test_final_identity_artifact_defaults_to_realesrgan(monkeypatch):
+    """An unset upscale policy must delegate to Real-ESRGAN, not plain Lanczos.
+
+    The wrapper is a pure policy gate: exact-size restoration lives in the
+    wrapped caller, so a stub delegate stands in for it here.
+    """
     monkeypatch.delenv('WEBBDUCK_KREA2_IDENTITY_UPSCALE', raising=False)
 
-    def should_not_be_called(*_args, **_kwargs):
-        raise AssertionError('Real-ESRGAN path should not be called by the default policy')
+    seen = {}
 
-    upscale = _final_size_upscaler(should_not_be_called)
+    def fake_realesrgan(image, *, requested, effective):
+        seen['requested'] = requested
+        seen['effective'] = effective
+        return image.resize((1024, 1536), Image.LANCZOS), {
+            'from': [672, 1008],
+            'to': [1024, 1536],
+            'upscaler': 'realesrgan-x2',
+        }
+
+    upscale = _final_size_upscaler(fake_realesrgan)
     source = Image.new('RGB', (672, 1008), 'white')
     result, note = upscale(
         source,
@@ -136,9 +149,9 @@ def test_final_identity_artifact_defaults_to_exact_requested_size(monkeypatch):
         effective=(672, 1008),
     )
 
+    assert seen == {'requested': (1024, 1536), 'effective': (672, 1008)}
     assert result.size == (1024, 1536)
-    assert note['upscaler'] == 'lanczos'
-    assert note['policy'] == 'exact-requested-size'
+    assert note['upscaler'] == 'realesrgan-x2'
     assert note['from'] == [672, 1008]
     assert note['to'] == [1024, 1536]
 
