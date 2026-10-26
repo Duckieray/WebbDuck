@@ -19,6 +19,11 @@ from core.gpu_lease import get_gpu_lease, release_gpu_lease, wait_for_gpu_lease_
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry, to_web_path
 from server.events import broadcast_state
+from server.queue_control import (
+    is_queue_paused,
+    release_gpu_for_pause,
+    wait_for_queue_resume,
+)
 from server.state import update_stage, update_progress, update_error_detail, snapshot
 from models.upscaler import get_upsampler
 
@@ -215,12 +220,37 @@ async def run_upscale(job, cancel_event=None):
     return to_web_path(out_path)
 
 
+async def _queue_pause_gate():
+    """Block new GPU work while the queue is paused, freeing the GPU first.
+
+    The in-flight job is never interrupted: the worker reaches this gate only
+    after the current job has finished and released its GPU lease.
+    """
+    if not is_queue_paused():
+        return
+    update_stage("Paused")
+    update_progress(0.0)
+    await broadcast_state(snapshot())
+    try:
+        release_gpu_for_pause()
+    except Exception:
+        log.exception("Failed to release GPU while pausing queue")
+    await wait_for_queue_resume()
+
+
 async def gpu_worker(queue):
     """Main GPU worker loop - processes generation and upscale jobs."""
     loop = asyncio.get_running_loop()
 
     while True:
+        await _queue_pause_gate()
         job = await queue.get()
+        if is_queue_paused():
+            # A pause arrived while we were blocked waiting for work. Keep the
+            # job in the queue (and cancellable) instead of starting it now.
+            queue.task_done()
+            await queue.put(job)
+            continue
         on_start = job.get("on_start")
         on_finish = job.get("on_finish")
         cancel_event = job.get("cancel_event")

@@ -224,6 +224,51 @@ class TestQueueControls:
             appmod.active_job = None
 
 
+class TestQueuePauseControls:
+    """Tests for pausing and resuming the generation queue."""
+
+    def test_pause_and_resume_toggles_state(self, client):
+        from server import app as appmod
+
+        try:
+            response = client.post("/queue/pause")
+            assert response.status_code == 200
+            assert response.json()["paused"] is True
+
+            queue = client.get("/queue").json()
+            assert queue["paused"] is True
+
+            response = client.post("/queue/resume")
+            assert response.status_code == 200
+            assert response.json()["paused"] is False
+
+            queue = client.get("/queue").json()
+            assert queue["paused"] is False
+        finally:
+            appmod.set_queue_paused(False)
+
+    def test_pause_does_not_interrupt_running_job(self, client):
+        from server import app as appmod
+
+        job_id = "test-pause-running-job"
+        cancel_event = threading.Event()
+        appmod.job_registry[job_id] = {"job_id": job_id, "status": "running"}
+        appmod.active_job_id = job_id
+        appmod.active_job = {"job_id": job_id, "cancel_event": cancel_event}
+
+        try:
+            response = client.post("/queue/pause")
+            assert response.status_code == 200
+            # The in-flight job keeps running: no cancel was requested.
+            assert not cancel_event.is_set()
+            assert appmod.is_queue_paused() is True
+        finally:
+            appmod.set_queue_paused(False)
+            appmod.job_registry.pop(job_id, None)
+            appmod.active_job_id = None
+            appmod.active_job = None
+
+
 class TestApiJobErrors:
     """Tests for third-party API error reporting."""
 

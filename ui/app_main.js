@@ -2951,6 +2951,7 @@ function setupQueuePanel() {
     listen(byId('close-settings-modal'), 'click', closeSettingsModal);
     listen(byId('close-settings-modal-footer'), 'click', closeSettingsModal);
     listen(byId('unload-models-btn'), 'click', handleUnloadModelsClick);
+    listen(byId('pause-queue-btn'), 'click', handleQueuePauseClick);
     listen(byId('shutdown-app-btn'), 'click', handleShutdownAppClick);
     setupRemotePluginSettings();
     listen(byId('queue-modal'), 'click', (event) => {
@@ -3300,12 +3301,15 @@ function renderQueuePanel(data) {
     const activeId = data?.active_job_id;
     const runningCount = activeId ? 1 : 0;
     const pendingCount = queuedCount + runningCount;
+    const paused = !!data?.paused;
 
-    summaryEl.textContent = pendingCount > 0
+    const summaryText = pendingCount > 0
         ? `${queuedCount} queued | ${runningCount} running`
         : 'No jobs queued';
+    summaryEl.textContent = paused ? `${summaryText} | Paused` : summaryText;
 
     updateQueueOpenButton(data);
+    updateQueuePauseButton(paused);
 
     applyCompletedQueueResults(recentCompleted);
 
@@ -3425,6 +3429,36 @@ function updateQueueOpenButton(data) {
 
     countEl.textContent = String(pendingCount);
     toggleClass(countEl, 'hidden', pendingCount === 0);
+}
+
+function updateQueuePauseButton(paused) {
+    const btn = byId('pause-queue-btn');
+    if (!btn) return;
+    btn.textContent = paused ? 'Resume Queue' : 'Pause Queue';
+    btn.dataset.paused = paused ? '1' : '0';
+    toggleClass(btn, 'btn-primary', paused);
+    toggleClass(btn, 'btn-secondary', !paused);
+}
+
+async function handleQueuePauseClick() {
+    const btn = byId('pause-queue-btn');
+    if (!btn) return;
+    const paused = btn.dataset.paused === '1';
+    btn.disabled = true;
+    try {
+        if (paused) {
+            await api.resumeQueue();
+            toast('Queue resumed', 'info');
+        } else {
+            await api.pauseQueue();
+            toast('Queue paused after the current job', 'info');
+        }
+        // Backend pushes fresh queue state via WebSocket.
+    } catch (err) {
+        toast(err.message || 'Pause request failed', 'error');
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function openQueueModal() {

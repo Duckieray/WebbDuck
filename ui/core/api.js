@@ -254,6 +254,14 @@ export async function cancelQueue(jobId) {
     return postForm('/queue/cancel', formData);
 }
 
+export async function pauseQueue() {
+    return postForm('/queue/pause', new FormData());
+}
+
+export async function resumeQueue() {
+    return postForm('/queue/resume', new FormData());
+}
+
 export async function unloadAllModels() {
     const formData = new FormData();
     return postForm('/models/unload_all', formData);

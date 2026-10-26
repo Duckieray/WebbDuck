@@ -17,6 +17,11 @@ from pydantic import BaseModel
 
 from server.state import snapshot, update_stage, update_progress
 from server.events import broadcast, broadcast_state, active_sockets
+from server.queue_control import (
+    is_queue_paused,
+    release_gpu_for_pause,
+    set_queue_paused,
+)
 from server.storage import (
     save_images,
     BASE,
@@ -389,6 +394,7 @@ def build_queue_payload() -> dict:
 
     return {
         "active_job_id": active_job_id,
+        "paused": is_queue_paused(),
         "queued_count": generation_queue.qsize(),
         "gpu_lease": get_gpu_lease(),
         "jobs": jobs[:100],
@@ -1856,6 +1862,39 @@ def runtime_profile():
     from core.runtime import resolve_runtime_profile
 
     return {"runtime": resolve_runtime_profile().to_dict()}
+
+
+@app.post("/queue/pause")
+async def pause_queue():
+    """Pause the generation queue.
+
+    The running job is allowed to finish; the worker then releases the GPU and
+    holds before starting the next queued job. When idle, models are unloaded
+    immediately so the GPU is freed right away.
+    """
+    set_queue_paused(True)
+    if active_job_id is None:
+        try:
+            release_gpu_for_pause()
+        except Exception:
+            pass
+        update_stage("Paused")
+        update_progress(0.0)
+        await broadcast_state(snapshot())
+    await broadcast_queue_update()
+    return {"status": "paused", "paused": True}
+
+
+@app.post("/queue/resume")
+async def resume_queue():
+    """Resume the generation queue after a pause."""
+    set_queue_paused(False)
+    if active_job_id is None:
+        update_stage("Idle")
+        update_progress(0.0)
+        await broadcast_state(snapshot())
+    await broadcast_queue_update()
+    return {"status": "resumed", "paused": False}
 
 
 @app.post("/queue/cancel")
