@@ -145,6 +145,7 @@ function applyDefaults(profile, { force = false } = {}) {
         ['height', 'height', null],
         ['steps', 'steps', 'steps-value'],
         ['cfg', 'cfg', 'cfg-value'],
+        ['scheduler', 'scheduler', null],
     ];
     for (const [field, id, outputId] of mappings) {
         if (defaults[field] === undefined || defaults[field] === null) continue;
@@ -161,6 +162,17 @@ function applyDefaults(profile, { force = false } = {}) {
         }
 
         if (!force && input.dataset.modelDefaultApplied === profile.name) continue;
+        if (id === 'scheduler') {
+            const value = String(defaults[field]);
+            if (!Array.from(input.options).some(option => option.value === value)) {
+                // Scheduler options load asynchronously; remember the desired
+                // value so the scheduler loader can apply it once available.
+                input.dataset.pendingModelDefault = value;
+                input.dataset.modelDefaultApplied = profile.name;
+                continue;
+            }
+            delete input.dataset.pendingModelDefault;
+        }
         if (id === 'cfg') {
             const numeric = Number(defaults[field]);
             if (Number.isFinite(numeric) && numeric < Number(input.min || 0)) {
@@ -263,6 +275,20 @@ function requestedOperation() {
     return 'text2img';
 }
 
+function warnWeakIdentitySettings() {
+    if (!byId('ip-adapter-enabled')?.checked) return;
+    const steps = Number(byId('steps')?.value || 0);
+    const cfg = Number(byId('cfg')?.value || 0);
+    const loras = window.loraManager?.getSelected?.() || [];
+    const hasDmd2 = loras.some(lora => /dmd2/i.test(String(lora.name || '')));
+    if (cfg > 1.5 && steps >= 12 && !hasDmd2) return;
+    toast(
+        'Identity adapter works best with a normal SDXL schedule (~20-30 steps, CFG 3-7) and without ' +
+        'the DMD2 accelerator LoRA. The low-step LCM/CFG 1 recipe weakens likeness.',
+        'warning'
+    );
+}
+
 function validateCurrentOperation(event) {
     const profile = activeProfile;
     if (!profile) return;
@@ -283,7 +309,17 @@ function validateCurrentOperation(event) {
     if (!supported) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        toast(`${profile.name} does not support the selected ${op} workflow.`, 'warning');
+        toast(`Inpaint is not available for this checkpoint yet.`, 'warning');
+        return;
+    }
+    warnWeakIdentitySettings();
+    // The source image is deliberately never capability-gated, so a staged picture
+    // can outlive the checkpoint that can use it. Warn before spending a job on a
+    // workflow this checkpoint cannot run.
+    if (op === 'inpaint' && !capabilityAllowed(caps, 'inpaint')) {
+        toast(`Inpaint is not available for this checkpoint yet.`, 'warning');
+    } else if (op === 'outpaint' && !capabilityAllowed(caps, 'outpaint')) {
+        toast(`Outpaint is not available for this checkpoint yet.`, 'warning');
     }
 }
 

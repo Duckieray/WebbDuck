@@ -1547,7 +1547,7 @@ function setupHelpModals() {
                   <li><strong>Aspect Ratio Buttons:</strong> quick size shapes like 1:1 or 9:16.</li>
                   <li><strong>Steps:</strong> how many thinking passes the model does. More steps can improve detail, but take longer. <strong>Best:</strong> <code>25-40</code>.</li>
                   <li><strong>CFG:</strong> how strongly the model follows your prompt. Too low = ignores prompt, too high = can look weird. <strong>Best:</strong> <code>5-8</code>.</li>
-                  <li><strong>Scheduler:</strong> the path the model uses while generating. Different schedulers give different speed/texture behavior. <strong>Best starters:</strong> <code>Euler a</code>, <code>DPM++ 2M Karras</code>, <code>UniPC</code>.</li>
+                  <li><strong>Scheduler:</strong> the path the model uses while generating. Different schedulers give different speed/texture behavior. <strong>Best starters:</strong> <code>Euler a</code>, <code>DPM++ 2M Karras</code>, <code>UniPC</code>. Use <code>LCM</code> with LCM LoRAs or low-step models (roughly 4-8 steps, CFG 1-2).</li>
                   <li><strong>Seed:</strong> random starting number. Same seed + same settings gives a very similar image. <strong>Best use:</strong> leave random while exploring, lock seed when refining.</li>
                 </ul>
             `
@@ -1628,12 +1628,12 @@ function setupHelpModals() {
                   <li><strong>Use reference identity</strong> must be checked for the persona to apply.</li>
                   <li>The identity method is chosen automatically from your selected model:
                     <ul>
-                      <li><strong>SDXL:</strong> FaceID adapter uses every selected reference photo.</li>
+                      <li><strong>SDXL:</strong> FaceID adapter uses every selected reference photo and auto-loads its companion FaceID LoRA. Use a normal SDXL schedule (~20-30 steps, CFG 3-7); the low-step LCM/CFG 1 recipe weakens likeness.</li>
                       <li><strong>FLUX.2:</strong> native multi-reference conditioning, up to <code>5</code> selected references.</li>
                       <li><strong>Krea 2:</strong> a single anchor reference with the krea2-identity-edit LoRA; the last image you select becomes the anchor.</li>
                     </ul>
                   </li>
-                  <li><strong>Identity Strength (0-1):</strong> how strongly the reference likeness is applied. Lower = weaker likeness, higher = stronger (can lock the reference composition). The balanced default is <code>0.30</code> (Krea), <code>1.00</code> for the SDXL/FLUX.2 LoRA scale.</li>
+                  <li><strong>Adapter Scale:</strong> how strongly the face adapter is applied. <strong>LoRA Scale:</strong> FaceID LoRA strength on SDXL (default <code>0.60</code>); on Krea this follows the Identity Strength slider.</li>
                 </ul>
             `
         }
@@ -2800,6 +2800,15 @@ async function loadSchedulers() {
     try {
         const schedulers = await api.getSchedulers();
         populateSelect('scheduler', schedulers, false);
+
+        const scheduler = byId('scheduler');
+        const pending = scheduler?.dataset?.pendingModelDefault;
+        if (pending && Array.from(scheduler.options).some(option => option.value === pending)) {
+            scheduler.value = pending;
+            delete scheduler.dataset.pendingModelDefault;
+            scheduler.dispatchEvent(new Event('input', { bubbles: true }));
+            scheduler.dispatchEvent(new Event('change', { bubbles: true }));
+        }
     } catch (error) {
         console.warn('Failed to load schedulers:', error);
         toast('Failed to load schedulers', 'error');

@@ -94,6 +94,27 @@ _REFINER_UNET_CACHE = {}
 MAX_CACHE_SIZE = 1
 _SINGLE_FILE_CONFIG_CACHE = {}
 
+# FaceID SDXL ships as an IP-Adapter plus a companion LoRA.  The adapter alone
+# conditions the UNet weakly; the LoRA is what carries most of the identity
+# consistency.  The upstream IPAdapterFaceIDXL helper loads this pair together,
+# so mirror that behavior when the caller does not name a LoRA explicitly.
+_FACEID_SDXL_LORA_BY_ADAPTER = {
+    "ip-adapter-faceid_sdxl.bin": "ip-adapter-faceid_sdxl_lora.safetensors",
+}
+
+
+def _resolve_faceid_lora_weight(adapter_weight, explicit_weight):
+    """Return ``(lora_weight, source)`` for a FaceID adapter.
+
+    ``None`` means the caller did not specify a LoRA, so known FaceID adapters
+    auto-pair with their companion LoRA. An explicit empty string disables it.
+    """
+    if explicit_weight is None:
+        weight = _FACEID_SDXL_LORA_BY_ADAPTER.get(str(adapter_weight))
+        return weight, ("auto" if weight else None)
+    weight = str(explicit_weight).strip() or None
+    return weight, ("explicit" if weight else None)
+
 
 def _get_single_file_config_path(repo_id: str) -> str | None:
     """Prepare a local Diffusers config snapshot for single-file checkpoints.
@@ -947,6 +968,7 @@ class PipelineManager:
             "adapter_weight": None,
             "adapter_scale": None,
             "lora_weight": None,
+            "lora_weight_source": None,
             "lora_scale": None,
             "reference_images_requested": 0,
             "reference_faces_detected": 0,
@@ -969,7 +991,11 @@ class PipelineManager:
         adapter_type = str(adapter_cfg.get("type", "faceid_sdxl"))
         adapter_weight = str(adapter_cfg.get("adapter_weight", "ip-adapter-faceid_sdxl.bin"))
         adapter_scale = float(adapter_cfg.get("adapter_scale", 0.55))
-        lora_weight = adapter_cfg.get("lora_weight")
+        raw_lora_weight = adapter_cfg.get("lora_weight")
+        lora_weight, lora_weight_source = _resolve_faceid_lora_weight(
+            adapter_weight, raw_lora_weight
+        )
+        debug["lora_weight_source"] = lora_weight_source
         lora_scale = float(adapter_cfg.get("lora_scale", 0.60))
 
         debug["identity_adapter_type"] = adapter_type
@@ -1029,11 +1055,34 @@ class PipelineManager:
 
         if hasattr(self.pipe, "peft_config"):
             debug["active_adapters"] = list(self.pipe.peft_config.keys())
+        elif hasattr(self.pipe, "get_list_adapters"):
+            try:
+                debug["active_adapters"] = {
+                    component: list(adapters)
+                    for component, adapters in self.pipe.get_list_adapters().items()
+                }
+            except Exception:
+                debug["active_adapters"] = []
 
         self._identity_debug = debug
         return kwargs
 
     # ── helpers ─────────────────────────────────────────────────────────────
+
+    def _faceid_adapter_names(self):
+        """Return FaceID LoRA adapter names currently registered on the pipeline."""
+        if not hasattr(self.pipe, "get_list_adapters"):
+            return []
+        try:
+            adapters = self.pipe.get_list_adapters()
+        except Exception:
+            return []
+        names = set()
+        for component_adapters in adapters.values():
+            for name in component_adapters:
+                if str(name).startswith("faceid_"):
+                    names.add(str(name))
+        return sorted(names)
 
     def _cleanup_identity_adapter(self):
         """Unload any previously loaded IP-Adapter and FaceID LoRAs."""
@@ -1045,10 +1094,17 @@ class PipelineManager:
 
         if hasattr(self.pipe, "unload_ip_adapter"):
             self.pipe.unload_ip_adapter()
-        if hasattr(self.pipe, "peft_config"):
-            faceid_adapters = [n for n in self.pipe.peft_config if n.startswith("faceid_")]
-            if faceid_adapters:
+
+        faceid_adapters = self._faceid_adapter_names()
+        if faceid_adapters and hasattr(self.pipe, "delete_adapters"):
+            try:
                 self.pipe.delete_adapters(faceid_adapters)
+            except Exception as exc:
+                log.warning(
+                    "FaceID: failed to delete stale LoRA adapters %s: %s",
+                    faceid_adapters,
+                    exc,
+                )
 
     def _extract_identity_faces(self, refs, embedder_name="buffalo_l"):
         """Return ``(list_of_face_embeddings, list_of_aligned_crops)``."""
@@ -1093,22 +1149,29 @@ class PipelineManager:
         return face_embeds, face_crops
 
     def _load_faceid_lora(self, lora_weight, lora_scale, repo):
-        """Load the FaceID LoRA weight, handling PEFT name conflicts.
+        """Apply the FaceID LoRA weight and return the adapter name used.
 
-        Returns the adapter name used.
+        Diffusers >= 0.28 loads the LoRA embedded in ``ip-adapter-faceid_*.bin``
+        during ``load_ip_adapter()`` under the name ``faceid_0``. Prefer
+        scaling that adapter so we do not load a second copy of the same
+        weights. Fall back to the standalone LoRA file only when the embedded
+        adapter is unavailable (older diffusers builds).
         """
-        import time
+        existing = self._faceid_adapter_names()
+        if existing:
+            self._faceid_lora_name = existing[0]
+        else:
+            import time
 
-        self._faceid_lora_name = f"faceid_{int(time.time() * 1_000_000)}"
-
-        try:
-            self.pipe.load_lora_weights(
-                repo, weight_name=lora_weight, adapter_name=self._faceid_lora_name
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load FaceID LoRA '{lora_weight}': {exc}"
-            ) from exc
+            self._faceid_lora_name = f"faceid_{int(time.time() * 1_000_000)}"
+            try:
+                self.pipe.load_lora_weights(
+                    repo, weight_name=lora_weight, adapter_name=self._faceid_lora_name
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load FaceID LoRA '{lora_weight}': {exc}"
+                ) from exc
 
         # Merge with tracked user LoRAs so it participates in the
         # active adapter set.  The weight is stored in

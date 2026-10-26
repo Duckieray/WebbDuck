@@ -16,6 +16,7 @@ SCHEDULERS = {
     "DPM++ 3M SDE": "DPMSolverMultistepScheduler",
     "DDIM": "DDIMScheduler",
     "UniPC": "UniPCMultistepScheduler",
+    "LCM": "LCMScheduler",
 }
 
 
@@ -26,6 +27,7 @@ def _scheduler_classes():
         DPMSolverSinglestepScheduler,
         EulerAncestralDiscreteScheduler,
         EulerDiscreteScheduler,
+        LCMScheduler,
         UniPCMultistepScheduler,
     )
 
@@ -36,6 +38,7 @@ def _scheduler_classes():
         "DPMSolverSinglestepScheduler": DPMSolverSinglestepScheduler,
         "DDIMScheduler": DDIMScheduler,
         "UniPCMultistepScheduler": UniPCMultistepScheduler,
+        "LCMScheduler": LCMScheduler,
     }
 
 

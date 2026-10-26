@@ -142,6 +142,7 @@ class TestModelEndpoints:
         schedulers = response.json()
         assert isinstance(schedulers, list)
         assert len(schedulers) > 0
+        assert "LCM" in schedulers
 
     def test_list_model_embeddings(self, client, first_available_model):
         """Should list embeddings for a model."""

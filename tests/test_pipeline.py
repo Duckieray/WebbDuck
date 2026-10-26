@@ -70,3 +70,9 @@ class TestSchedulers:
         from diffusers import UniPCMultistepScheduler
         assert get_scheduler_class("UniPC") == UniPCMultistepScheduler
         assert get_scheduler_class("unknown") == UniPCMultistepScheduler
+
+    def test_lcm_scheduler_available(self):
+        from core.schedulers import SCHEDULERS, get_scheduler_class
+        from diffusers import LCMScheduler
+        assert "LCM" in SCHEDULERS
+        assert get_scheduler_class("LCM") == LCMScheduler

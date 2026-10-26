@@ -46,6 +46,20 @@ def test_selected_model_defaults_and_dimension_constraints_drive_studio():
     assert "input.step = String(multiple)" in CAPS
 
 
+def test_scheduler_model_defaults_apply_after_options_load():
+    assert "['scheduler', 'scheduler', null]" in CAPS
+    assert "pendingModelDefault" in CAPS
+    assert "pendingModelDefault" in MAIN
+    assert "option.value === pending" in MAIN
+
+
+def test_identity_adapter_warns_when_fast_lcm_recipe_weakens_likeness():
+    assert "warnWeakIdentitySettings" in CAPS
+    assert "Identity adapter works best with a normal SDXL schedule" in CAPS
+    assert "without " in CAPS
+    assert "the DMD2 accelerator LoRA" in CAPS
+
+
 def test_unsupported_models_and_operations_are_blocked_in_browser():
     assert "option.disabled = profile.supported === false" in CAPS
     assert "validateCurrentOperation" in CAPS

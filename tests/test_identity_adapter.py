@@ -34,6 +34,100 @@ def _make_adapter_cfg(enabled=True, **overrides):
 
 # ── tests ────────────────────────────────────────────────────────
 
+def test_faceid_sdxl_auto_pairs_companion_lora():
+    """FaceID SDXL needs its LoRA for identity consistency."""
+    from core.backends.sdxl_pipeline import _resolve_faceid_lora_weight
+
+    assert _resolve_faceid_lora_weight("ip-adapter-faceid_sdxl.bin", None) == (
+        "ip-adapter-faceid_sdxl_lora.safetensors",
+        "auto",
+    )
+    assert _resolve_faceid_lora_weight("ip-adapter-faceid-portrait_sdxl.bin", None) == (None, None)
+    assert _resolve_faceid_lora_weight(
+        "ip-adapter-faceid_sdxl.bin", "custom_lora.safetensors"
+    ) == ("custom_lora.safetensors", "explicit")
+    assert _resolve_faceid_lora_weight("ip-adapter-faceid_sdxl.bin", "") == (None, None)
+
+
+class _FakeFaceIDPipe:
+    def __init__(self, adapters=None):
+        self.adapters = adapters or {"unet": []}
+        self.loaded = []
+        self.last_set = None
+        self.deleted = []
+        self.unloaded = False
+
+    def get_list_adapters(self):
+        return {k: list(v) for k, v in self.adapters.items()}
+
+    def set_adapters(self, names, adapter_weights=None):
+        self.last_set = (list(names), list(adapter_weights or []))
+
+    def load_lora_weights(self, repo, weight_name=None, adapter_name=None):
+        self.loaded.append((repo, weight_name, adapter_name))
+        self.adapters.setdefault("unet", []).append(adapter_name)
+
+    def delete_adapters(self, names):
+        self.deleted.extend(names)
+        for component in self.adapters.values():
+            for name in names:
+                if name in component:
+                    component.remove(name)
+
+    def unload_ip_adapter(self):
+        self.unloaded = True
+
+
+def test_faceid_reuses_embedded_lora_from_load_ip_adapter():
+    from core.backends.sdxl_pipeline import PipelineManager
+
+    pm = PipelineManager()
+    pm.pipe = _FakeFaceIDPipe({"unet": ["dmd2", "faceid_0"]})
+    pm.current_loras = {"dmd2": 1.0}
+
+    name = pm._load_faceid_lora(
+        "ip-adapter-faceid_sdxl_lora.safetensors", 0.8, "h94/IP-Adapter-FaceID"
+    )
+
+    assert name == "faceid_0"
+    assert pm.pipe.loaded == []
+    assert pm.current_loras == {"dmd2": 1.0, "faceid_0": 0.8}
+    assert pm.pipe.last_set == (["dmd2", "faceid_0"], [1.0, 0.8])
+
+
+def test_faceid_falls_back_to_standalone_lora_file():
+    from core.backends.sdxl_pipeline import PipelineManager
+
+    pm = PipelineManager()
+    pm.pipe = _FakeFaceIDPipe({"unet": ["dmd2"]})
+    pm.current_loras = {"dmd2": 1.0}
+
+    name = pm._load_faceid_lora(
+        "ip-adapter-faceid_sdxl_lora.safetensors", 0.8, "h94/IP-Adapter-FaceID"
+    )
+
+    assert name.startswith("faceid_")
+    assert pm.pipe.loaded == [
+        ("h94/IP-Adapter-FaceID", "ip-adapter-faceid_sdxl_lora.safetensors", name)
+    ]
+    assert pm.current_loras == {"dmd2": 1.0, name: 0.8}
+
+
+def test_faceid_cleanup_deletes_stale_adapters():
+    from core.backends.sdxl_pipeline import PipelineManager
+
+    pm = PipelineManager()
+    pm.pipe = _FakeFaceIDPipe({"unet": ["dmd2", "faceid_0", "faceid_123"]})
+    pm.current_loras = {"dmd2": 1.0, "faceid_123": 0.6}
+    pm._faceid_lora_name = "faceid_123"
+
+    pm._cleanup_identity_adapter()
+
+    assert pm.pipe.unloaded is True
+    assert pm.pipe.deleted == ["faceid_0", "faceid_123"]
+    assert pm.current_loras == {"dmd2": 1.0}
+    assert pm._faceid_lora_name is None
+
 @pytest.mark.slow
 class TestIdentityAdapterDebugMetadata:
     """Debug metadata must be populated in all code paths."""
