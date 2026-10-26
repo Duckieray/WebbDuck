@@ -18,6 +18,7 @@ from core.backends.flux_lora import inject_lora_trigger, lora_trigger_phrase, re
 from core.backends.runtime_probe import probe_python_runtime
 from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
+from core.image_operations import prepare_image_operation
 from core.provider_credentials import resolve_provider_token
 from models.model_descriptor import ModelDescriptor
 
@@ -429,6 +430,7 @@ class FluxDiffusersBackend(GenerationBackend):
             ),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
+            "mask_blur": max(0, int(settings.get("mask_blur") or 0)),
         }
 
         python_exe = resolve_runtime_python("flux", "WEBBDUCK_FLUX_PYTHON")
@@ -437,6 +439,22 @@ class FluxDiffusersBackend(GenerationBackend):
 
         with tempfile.TemporaryDirectory(prefix="webbduck_flux_") as tmp_raw:
             tmp = Path(tmp_raw)
+            # FLUX's native inpaint pipeline owns its soft-mask conversion.
+            prepared = prepare_image_operation(settings, apply_mask_blur=False)
+            if prepared is not None:
+                input_path = tmp / "input.png"
+                prepared.image.save(input_path)
+                payload["input_image"] = str(input_path)
+                if prepared.mask is not None:
+                    mask_path = tmp / "mask.png"
+                    prepared.mask.save(mask_path)
+                    payload["mask_image"] = str(mask_path)
+                else:
+                    payload["mask_image"] = None
+                if prepared.source_box is not None:
+                    settings["smart_extend_source_box"] = prepared.source_box
+                    settings["width"], settings["height"] = prepared.image.size
+                    payload["width"], payload["height"] = prepared.image.size
             request_path = tmp / "request.json"
             result_path = tmp / "result.json"
             progress_path = tmp / "progress.json"
@@ -508,9 +526,27 @@ class FluxDiffusersBackend(GenerationBackend):
             images: list[Image.Image] = []
             for raw_path in result.get("images") or []:
                 with Image.open(raw_path) as image:
-                    images.append(image.convert("RGB").copy())
+                    output = image.convert("RGB").copy()
+                # Native FLUX inpainting can make small changes outside the mask.
+                # Smart Extend promises that the placed source stays locked, so
+                # apply the same final CPU composite used by SDXL's staged path.
+                if prepared is not None and prepared.source_box is not None and prepared.mask is not None:
+                    source = prepared.image
+                    mask = prepared.mask
+                    if output.size != source.size:
+                        # FLUX can resize the source internally and its OOM ladder
+                        # can intentionally demote the canvas. Keep the lock in
+                        # the returned image's coordinate space rather than
+                        # failing Pillow's equal-size composite requirement.
+                        source = source.resize(output.size, Image.Resampling.LANCZOS)
+                        mask = mask.resize(output.size, Image.Resampling.NEAREST)
+                    output = Image.composite(output, source, mask)
+                images.append(output)
             if not images:
                 raise RuntimeError("FLUX runtime returned no images")
+            if images:
+                settings["width"], settings["height"] = images[0].size
+                settings["flux_final_width"], settings["flux_final_height"] = images[0].size
             _report_progress(progress_callback, "FLUX.2 complete", 1.0)
             return images, int(result.get("seed", seed))
 

@@ -278,6 +278,7 @@ def _load_flux_pipeline(request: dict, dtype, progress_path: Path | None = None,
             raise FileNotFoundError(f"FLUX.2 single-file checkpoint does not exist: {model_path}")
         try:
             from diffusers import Flux2Transformer2DModel
+            from diffusers.loaders.single_file_utils import load_single_file_checkpoint
         except Exception as exc:
             raise RuntimeError(
                 "FLUX.2 single-file runtime dependencies are missing. "
@@ -294,8 +295,18 @@ def _load_flux_pipeline(request: dict, dtype, progress_path: Path | None = None,
         detection = request.get("detection") or {}
         quantization = str(detection.get("quantization") or "none").lower()
 
+        checkpoint = load_single_file_checkpoint(model_path)
+        prefix = "model.diffusion_model."
+        if any(key.startswith(prefix) for key in checkpoint):
+            # ComfyUI exports wrap otherwise-canonical FLUX.2 keys in this
+            # prefix. Diffusers 0.39's converter expects bare block names.
+            checkpoint = {
+                key.removeprefix(prefix): value
+                for key, value in checkpoint.items()
+            }
+
         transformer = Flux2Transformer2DModel.from_single_file(
-            model_path,
+            checkpoint,
             config=component_model,
             subfolder="transformer",
             torch_dtype=dtype,
@@ -411,7 +422,10 @@ def _prompt_sequence_length(pipe, prompt: str) -> tuple[int, int]:
         except ValueError:
             pass
 
-    token_count = 128
+    # Default to the full context when the prompt cannot be measured: an
+    # under-count silently truncates the prompt (and drops the scene
+    # description), which is far worse than paying for extra Qwen padding.
+    token_count = 512
     tokenizer = getattr(pipe, "tokenizer", None)
     if tokenizer is not None:
         try:
@@ -427,13 +441,15 @@ def _prompt_sequence_length(pipe, prompt: str) -> tuple[int, int]:
                 truncation=False,
                 add_special_tokens=False,
             )
-            ids = encoded.get("input_ids") if isinstance(encoded, dict) else None
+            # transformers >= 5 returns a BatchEncoding (UserDict, not dict),
+            # so duck-type the lookup instead of an isinstance(dict) check.
+            ids = encoded.get("input_ids") if hasattr(encoded, "get") else None
             if ids and isinstance(ids[0], list):
                 ids = ids[0]
             if ids:
                 token_count = int(len(ids))
         except Exception:
-            token_count = 128
+            token_count = 512
 
     needed = min(512, max(32, token_count + 16))
     for bucket in (64, 96, 128, 192, 256, 384, 512):
@@ -599,6 +615,13 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
 
     pipe, runtime = _load_flux_pipeline(request, dtype, progress_path, inpaint=use_inpaint)
     pipeline_load_seconds = time.monotonic() - load_started
+
+    mask_blur = max(0, int(request.get("mask_blur") or 0))
+    if use_inpaint and mask_blur:
+        try:
+            mask_image = pipe.mask_processor.blur(mask_image, blur_factor=mask_blur)
+        except Exception as exc:
+            print(f"[flux] mask blur unavailable ({exc}); using prepared mask", flush=True)
 
     raw_loras = request.get("loras") or []
 
