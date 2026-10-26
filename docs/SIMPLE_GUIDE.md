@@ -42,7 +42,7 @@ Your newest result appears in the preview area when the job finishes.
 - `Width` and `Height`: image size.
 - `Steps`: how long the model works.
 - `CFG`: how strongly the prompt is followed.
-- `Scheduler`: the generation method.
+- `Scheduler`: the generation method. `LCM` is for LCM LoRAs and low-step models (about 4-8 steps, CFG 1-2).
 - `Seed`: repeatable starting point; blank means random.
 - `Batch Size`: how many images to make in one job.
 
@@ -56,10 +56,20 @@ Upload an image to unlock edit tools.
   - `Replace` changes the masked area.
   - `Keep` protects the mask and edits around it.
 - `Smart Extend`: makes the canvas bigger and fills the new space.
+  - `Auto Step Outpaint` is on by default and should stay on. It grows the canvas
+    in small steps, so each new strip of picture is generated next to real detail
+    from the previous step. With it off, WebbDuck instead does a single pass over
+    the whole new area, which has to invent the entire continuation in one go and
+    often comes back looking soft, stretched, or like a repeat of the original.
+    This setting is now enabled in every layer, including sessions saved by older
+    builds, so a stale saved value can no longer keep the single-pass mode on.
+  - `Step Growth` controls how much each step adds. Lower is safer for big expansions.
 
 ## 7. Queue and Gallery
 
 - Open `Queue` to see pending and running jobs.
+- Use `Pause Queue` to let the current job finish, free the GPU, and hold the rest.
+  Use `Resume Queue` to keep going.
 - Open `Gallery` to browse saved images.
 - Search Gallery with simple keywords like `forest night`.
 - Use the `Thumb` slider to change gallery thumbnail size.
@@ -75,7 +85,6 @@ You can:
 - upscale
 - edit
 - send to inpaint
-- send to the Studio Input Image
 - download
 - delete
 

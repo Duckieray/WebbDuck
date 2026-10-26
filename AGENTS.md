@@ -159,6 +159,7 @@ Key folders:
 - `WEBBDUCK_CATALOG_POLL_SECONDS` (default: `3.0`)
 - `WEBBDUCK_IDLE_UNLOAD_SECONDS` (default: `300.0`)
 - `WEBBDUCK_THUMB_CONCURRENCY` (default: `2`)
+- `WEBBDUCK_SMART_EXTEND_INITIALIZER` (optional; smart-extend canvas initializer override: `noise` (default), `mirror`, `edge_strips`, `soft_context`)
 - `WEBBDUCK_DEVICE` (`cuda` or `cpu`)
 - `WEBBDUCK_DTYPE` (`float16`, `bfloat16`, `float32`)
 - `WEBBDUCK_STRICT_DEVICE=1` (fail fast instead of auto fallback)
@@ -171,6 +172,9 @@ Isolated backend runtimes (see `runtime_requirements/*.txt` and `docs/DEVELOPMEN
 - `WEBBDUCK_SDXL_WORKER`, `WEBBDUCK_SDXL_PYTHON`, `WEBBDUCK_SDXL_TIMEOUT_SECONDS`, `WEBBDUCK_SDXL_TOKENIZE_TIMEOUT_SECONDS`
 - `WEBBDUCK_QWEN_IMAGE_PYTHON`, `WEBBDUCK_QWEN_IMAGE_OFFLOAD`, `WEBBDUCK_QWEN_IMAGE_TIMEOUT_SECONDS`
 - `WEBBDUCK_KREA`, `WEBBDUCK_KREA2_COMPONENT_MODEL`, `WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL`, `WEBBDUCK_KREA2_BASE_COMPONENT_MODEL`, `WEBBDUCK_KREA2_OFFLOAD`, `WEBBDUCK_KREA2_BLOCKS_PER_GROUP`, `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM`
+- Krea realism decoder: `WEBBDUCK_KREA2_DECODER` (`stock`|`realism`), `WEBBDUCK_KREA2_DECODER_OUTPUT` (`requested`|`2x`), `WEBBDUCK_KREA2_REALISM_DECODER`, `WEBBDUCK_KREA2_REALISM_DECODER_SUBFOLDER` (see `docs/KREA2_PERFORMANCE.md`)
+- Krea 2 face/skin detailer: `WEBBDUCK_KREA2_FACE_DETECTOR` (YuNet ONNX path override; default `weights/faces/`, downloaded from `opencv/opencv_zoo`), `WEBBDUCK_KREA2_FACE_SCORE`, `WEBBDUCK_KREA2_FACE_NMS`, `WEBBDUCK_KREA2_FACE_TOP_K`
+
 - Krea identity:
 
   - `WEBBDUCK_KREA2_IDENTITY_WEIGHT` (local `krea2-identity-edit` LoRA safetensors override)
@@ -378,7 +382,8 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 
 ### Pipeline
 - `apply_identity_adapter()`: resolves ref paths via `resolve_web_path()` before `cv2.imread()`
-- FaceID LoRA loaded internally by `load_ip_adapter()` as adapter `faceid_0`
+- FaceID SDXL auto-pairs `ip-adapter-faceid_sdxl.bin` with `ip-adapter-faceid_sdxl_lora.safetensors` (adapter name `faceid_<timestamp>`); the companion LoRA carries most identity consistency. Explicit `lora_weight` overrides it; empty string disables it.
+- Identity generation should use a normal SDXL schedule (~20-30 steps, CFG 3-7). Low-step LCM/CFG 1 weakens likeness; the UI warns about this combination.
 
 ## 13. Source-of-Truth Docs
 

@@ -106,7 +106,7 @@ Most of this code can remain, but it should become the implementation of an SDXL
 
 `run_generation()` currently asks the global SDXL `pipeline_manager` for several concrete pipelines and then calls `select_mode(settings, pipe, img2img, base_img2img, base_inpaint)`.
 
-The mode interface is therefore coupled to the pipeline arrangement of SDXL. Smart Extend, inpaint, img2img, and two-pass logic are valuable and should be preserved, but they should initially live inside/alongside the SDXL adapter instead of defining the universal backend interface.
+The mode interface is therefore coupled to the pipeline arrangement of SDXL. Smart Extend, inpaint, img2img, and two-pass logic are valuable and should be preserved, but they should initially live inside/alongside the SDXL adapter instead of defining the universal backend interface. CPU-side source/mask preparation is shared in `core/image_operations.py`: FLUX.2 Klein uses it to construct native masked inpaint/outpaint requests, while SDXL retains its backend-specific staged refinement behavior. Krea 2 has no trained masked-edit pipeline and deliberately does not advertise these capabilities.
 
 #### `server/app.py`
 
@@ -223,6 +223,8 @@ Effective settings should be derived in this order:
 4. WebbDuck generic fallback.
 
 When switching models in the UI, WebbDuck should not blindly destroy deliberate user choices. A control should be replaced when it was still using the previous model's derived default, when the new model marks the old value invalid, or when the user explicitly asks to load defaults.
+
+**Every generatable architecture must declare explicit `steps` and `cfg` defaults.** The UI restores a control on checkpoint switch only when the incoming architecture publishes a default for it. If an architecture has no entry in `models/model_descriptor._DEFAULTS`, the form silently keeps the previously selected model's values, so a user who switches from a distilled architecture to a base one can end up running it far outside its inference contract. This is not a cosmetic problem: SDXL inherits FLUX.2's `steps=4` / `cfg=1.0`, barely denoises, and returns a blurry image that reads as "outpainting is broken". `tests/test_model_descriptor.py::test_every_generatable_architecture_declares_explicit_inference_defaults` enforces the invariant, and per-checkpoint entries in `checkpoints.json` may still override the architecture default. Per-checkpoint defaults may also set `scheduler`; the UI applies it once the scheduler options have loaded. Note that low-step distilled checkpoints legitimately need few steps, so the invariant is that a default is *declared*, not that it exceeds some floor.
 
 ## Model Introspection
 

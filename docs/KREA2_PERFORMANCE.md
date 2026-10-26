@@ -188,6 +188,193 @@ This is post-hoc magnification, not recovery: the native generation is still the
 missing detail. For true native sharpness at 832x1216+ the token budget must be
 raised (see tiers above) or the GPU's VRAM increased.
 
+## Img2img (optional)
+
+Krea 2 supports img2img. The staged source image is VAE-encoded and normalized
+into Krea's packed latent space, then noised to the sigma implied by the denoise
+strength (`x_t = (1 - s) * x0 + s * noise`) and only the tail of the sigma
+schedule is executed via `pipe(latents=..., sigmas=...)`.
+
+- **Strength.** `1.0` is plain text-to-image. Below `1.0` the request runs as
+  img2img against the staged image. The executed step count is
+  `floor(steps * strength)` (floored at 1), and progress reporting is scaled to
+  that count so the UI reaches 100% rather than stalling at a fraction.
+- **Dynamic shifting.** Krea's scheduler uses `use_dynamic_shifting=True`, so the
+  sigma list must *not* be truncated and handed back naively - the scheduler would
+  apply its exponential shift a second time. The implementation generates the full
+  post-shift schedule, truncates it, then inverse-shifts the retained values before
+  passing them as `sigmas`. Turbo uses a fixed `mu=1.15`; Raw derives `mu` from the
+  packed image sequence length (resolution shift).
+- **Batching.** Multi-image requests encode the source once and reuse the clean
+  latent with a distinct noise seed per image. The OOM retry ladder replays the
+  same initial latents rather than re-noising.
+- **Planner.** The host reports the packed latent shape and truncated step count to
+  the adaptive planner, so tokens and VRAM are budgeted from the real numbers.
+- **Conflicts.** Krea identity edit is itself image-driven and consumes its own
+  reference as the denoise anchor, so identity and img2img cannot run together.
+  The combination is rejected with an explicit error rather than silently dropping
+  the staged image. Krea inpaint and outpaint remain unsupported.
+
+## Automatic realism routing
+
+Most requests need no configuration at all. Before generation the host resolves a
+realism profile (`core/realism_profile.py`) and, when it resolves to `realistic`,
+selects the photographic decoder and enables the face/skin detailer automatically.
+Two passes that were previously behind opt-in switches now happen on their own.
+
+- **Signals.** Curated model metadata first (`modes` / `recommended_mode` in
+  `webbduck_meta/`), then prompt wording: photographic terms (`portrait photograph`,
+  `skin pores`, `85mm`, `natural lighting`, `bokeh`) accumulate a score, and stylized
+  terms (`anime`, `cel shading`, `lineart`, `manga`) cancel it.
+- **Conservative default.** An ambiguous prompt resolves to `unknown` and changes
+  nothing. Silent is safer than wrong: the photographic decoder and face pass both
+  damage line art.
+- **Hard veto.** An explicit stylized request (`anime`, `manga`, `cel shading`,
+  `lineart`, `pixel art`, `chibi`) wins even when the prompt also says
+  `photorealistic`.
+- **Neutral words.** `cinematic`, `portrait`, `masterpiece` and similar artistic
+  terms are ignored rather than counted as evidence either way.
+- **Override.** **Advanced Settings** in the Studio exposes `realism_mode`
+  (`auto` | `always` | `never`). `always` forces the photographic path, `never`
+  disables it. The override is sent on every request, and unchecking the Advanced
+  **Refine faces** box sets `face_detailer_explicit`, which stops automatic
+  detailer enablement without affecting the decoder choice.
+- **Reporting.** The resolved mode, its reasons and the confidence are recorded as
+  `realism` in the run metadata; the Parameters section shows a one-line status.
+
+## Face/skin detailer (automatic)
+
+A face that is small in the final image covers only a handful of 16 px latent
+tokens, so no decoder - including the 2x realism decoder - can recover pore detail
+that was never generated. This pass fixes the generation rather than the decode:
+
+1. Detect faces on the decoded image with OpenCV YuNet (`FaceDetectorYN`), which
+   still resolves faces around 32 px where Haar cascades fail.
+2. Crop each face with padding so hair and jaw context are included.
+3. Upscale the crop to roughly one megapixel, making it an ordinary normal-sized
+   Krea job that fits a 16 GB card.
+4. Re-denoise the crop with the same prompt on its **own** schedule
+   (`refine_steps` / `refine_strength`, see below), reusing the already-loaded
+   transformer.
+5. Downscale to the crop's original pixel size, color-match against the original
+   crop, and composite back **only inside a feathered facial ellipse**.
+
+- **Automatic for realistic prompts.** Enabled by the realism router above, with no
+  user action. Advanced Settings exposes the overrides for models advertising the
+  `face_detailer` capability (Krea 2). The API field is `face_detailer` (a JSON
+  object with `enabled`, `refine_strength`, `refine_steps`, `min_face_px`,
+  `max_faces`, `max_face_fraction`, `pad_ratio`, `feather_px`, and `detector_path`).
+- **The refine has its own schedule, on purpose.** `refine_strength` is *not* a
+  percentage of noise. `img2img_schedule` derives its floor from the *time-shifted*
+  schedule, so for Krea's `linspace(1, 1/steps, steps)` base sigmas pushed through
+  the Turbo shift (`mu=1.15`, `shift~3.158`), `steps=10, strength=0.30` starts at
+  **shifted sigma 0.575**. Reusing the main pass's step count therefore re-noised
+  the crop past halfway and re-rendered it rather than refining it. The default
+  `refine_steps=24` / `refine_strength=0.16` lands at sigma ~0.26 for 3 executed
+  steps - the same compute, but a genuine refinement. `steps` and `strength` are
+  still honoured when supplied explicitly, so saved presets keep working.
+- **Latent normalization is an exact inverse pair.** `encode_source_latent` must
+  emit `(latent - latents_mean) / config.latents_std`, because Krea's decode is
+  `latents / (1/latents_std) + latents_mean`. Encoding with `* latents_std` instead
+  inflates the latent by `latents_std**2` - for Krea-2-Turbo, 2.1x-7.9x per channel -
+  and the transformer discards a latent that far outside its unit-variance working
+  space and re-renders from scratch. Symptom: the composite leaves hard-edged,
+  oddly coloured discs on faces, because the elliptical paste exposes an
+  independently generated crop. This encoder is shared with latent-init img2img, so
+  the same inversion degraded img2img. `tests/test_krea2_img2img.py` pins both
+  directions.
+- **Facial-interior mask.** Step 5 is the quality safeguard. Pasting the refined crop
+  back wholesale replaces hair, ears, clothing and background with whatever the model
+  redrew, which is what makes faces drift and can turn a good image uncanny. The
+  composite is restricted to a feathered ellipse fitted to the detected box, so a
+  regenerated jaw does not silently rewrite the rest of the head. Measured on a real
+  Krea 2 run, 44.6% of pixels inside the facial region changed versus 0.16% outside.
+- **Cost.** Roughly one extra generation per detected face. Automatic enablement is
+  limited to prompts that actually look photographic, and the face-selection gates
+  below skip faces that would gain little.
+- **Face selection.** Faces smaller than `min_face_px` (default 32) or wider than
+  40% of the frame are skipped: an already-resolved close-up gains little and only
+  risks shifting the likeness. The largest `max_faces` detections win.
+- **Detector model.** Resolved from an explicit request value, then
+  `WEBBDUCK_KREA2_FACE_DETECTOR`, then `weights/faces/`. If nothing is cached it is
+  downloaded once (~227 KB) from `opencv/opencv_zoo`
+  (`models/face_detection_yunet/face_detection_yunet_2023mar.onnx`). Set
+  `WEBBDUCK_WEIGHTS_DIR` to relocate the cache.
+- **Memory.** While the detailer is enabled the transformer and prompt embeds are
+  deliberately kept resident past the decode, since the crop pass needs them; both
+  are released afterwards. VAE tiling is forced on in that path to bound decode
+  memory.
+- **Never fatal.** No faces, a missing detector, a detector that fails to load, and
+  a crop that blows up mid-pass all return the unrefined image with a note. The
+  reason, the detected/refined counts, the face and crop boxes, and per-pass timing
+  are recorded in `face_detailer` in the run metadata.
+- **Verified on hardware.** Two-friend photoreal prompt, production entry point
+  (`krea2_worker_adaptive`), realism decoder on, compared against a matched
+  no-detailer control. Before the normalization fix: 84.3% of facial pixels changed
+  by >12/255 with a +12.9 blue bias, and the error survived a 4 px blur (21.4 mean),
+  i.e. a large tone rewrite rather than detail. After: 13.8% of pixels changed, the
+  tone error fell to 3.5, and the per-channel bias is neutral (-0.2/+0.4/+0.7).
+  Change outside the ellipse is unchanged at 0.78, confirming the mask still
+  contains the pass.
+
+## Realism 2x decoder (optional)
+
+Krea 2 latents use the Qwen-Image VAE latent space, which is identical to
+Wan2.1's (same 16 channels, same `latents_mean`/`latents_std`).
+[`spacepxl/Wan2.1-VAE-upscale2x`](https://huggingface.co/spacepxl/Wan2.1-VAE-upscale2x)
+is a decoder-only finetune trained on real photos. Its last layer emits 12
+channels that pixel-shuffle into a **2x** RGB image. Compared with the stock
+decoder it renders sharper skin pores and hair, without the speckle or
+airbrushed look. (The Civitai "Krea 2 Real VAE" is the same decoder with its 2x
+head averaged back to 3 channels, which throws away the extra resolution.
+WebbDuck uses the 2x head directly.)
+
+- **Automatic for realistic prompts.** Selected by the realism router above. The API
+  fields are `vae_decoder` (`stock` | `realism`) and `vae_decoder_output`
+  (`requested` | `2x`).
+- **Precedence.** Advanced Settings `realism_mode` (`always` / `never`) >
+  deployment defaults > the automatic router > an explicit per-request value that
+  the router did not set. `WEBBDUCK_KREA2_DECODER` and
+  `WEBBDUCK_KREA2_DECODER_OUTPUT` supply the deployment default.
+- **Measured trade-off.** At a matched 832x1216 output, the realism decoder measured
+  about 13% more high-frequency energy than the stock decoder on a photoreal
+  prompt. Some of that is the intended pore/hair detail, but it is not a free
+  win, and the automatic router is the thing to revisit if results read grainy.
+- **Output sizing.**
+  - `requested` downsamples the 2x decode with Lanczos to the requested size,
+    *after* the face pass so refinement runs at full decode detail. This also
+    replaces the reduced-size output that otherwise appeared when the adaptive
+    planner shrank the grid to fit the token budget. The resample matters for
+    appearance, not just size: shipping the raw 2x buffer meant the gallery
+    displayed it magnified, so every artifact read as coarse grain.
+  - `2x` keeps the full decoder resolution (2x the effective grid).
+  - Identity runs that use the realism decoder skip the Real-ESRGAN restore
+    above.
+- **Cost.** On a 5070 Ti, the latent for a 1024x1024 image decodes to 2048x2048 in about
+  0.5 s, the same as the stock decoder. Peak decode memory is about 4.6 GB, and
+  the stock VAE stays on the CPU. The first use downloads about 508 MB into
+  the Hugging Face cache; after that, loading takes about 0.1 s.
+- **Weights override.**
+  - `WEBBDUCK_KREA2_REALISM_DECODER` takes a repo id or a local diffusers
+    folder. The default is `spacepxl/Wan2.1-VAE-upscale2x`.
+  - `WEBBDUCK_KREA2_REALISM_DECODER_SUBFOLDER` sets the subfolder; use `.` for
+    the root. The default is `diffusers/Wan2.1_VAE_upscale2x_imageonly_real_v1`
+    for the default repo.
+- **Failure handling.** If the decoder cannot load or decode (offline, latent
+  mismatch, OOM), the worker decodes with the stock VAE instead and records
+  `error` and `fallback: "stock-vae"`. The generation does not fail.
+- **Metadata.**
+  - `krea_decoder` records
+    `{mode, decoder, output, source, applied, decoded, to, resize?, load_seconds?, error?, fallback?}`.
+  - `performance_timing.krea_decoder_load_seconds` records the decoder load time.
+  - `width`/`height` record the saved artifact size, and `requested_*` records
+    the original request.
+- **Limits.** It is trained on real photos, so it can over-sharpen or slightly
+  shift colours on anime, line art, and text. It improves how latents are
+  rendered, but it cannot add detail that the latent grid never contained.
+  Distant faces that cover only a few 16 px tokens need a detailer pass
+  (backlog TASK-013).
+
 ## Measurements
 
 Each Krea generation records backend timings in generation metadata:

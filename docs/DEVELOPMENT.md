@@ -106,6 +106,11 @@ python run.py --output ./outputs --port 8010
 - `ui/core/state.js`: persisted Studio state.
 - `ui/core/events.js`: local event bus.
 - `ui/core/modelCapabilities.js`: capability-driven gating from `/model-catalog`.
+- `core/realism_profile.py`: automatic realism routing (`resolve_realism`). The host
+  calls it at submit time; `GET /realism/preview?prompt=...` exposes the same
+  classification to the UI so the automatic choice is visible before generating.
+  Add prompt cues to `_PHOTO_CUES`/`_STYLIZED_CUES` rather than branching on model
+  names, and cover new cues in `tests/test_realism_profile.py`.
 - `ui/modules/*.js`: feature modules like Gallery, Lightbox, LoRAs, embeddings, masks, progress, Identity/Persona, and provider credentials.
 - `ui/styles/`: tokens, layout, components, and theme styles.
 
@@ -136,6 +141,26 @@ python run.py --output ./outputs --port 8010
 4. Run focused tests such as `tests/test_embedding_loading.py` and `tests/test_server.py`.
 
 Canonical display titles: LoRAs and embeddings carry an optional `title` (the human-facing name) in `webbduck_meta/`; the file-stem `name` stays the generation/persistence key. Backfill titles from CivitAI pages plus safetensors metadata with `python tools/backfill_canonical_titles.py` (`--dry-run`, `--offline-only`, `--force`).
+
+Manifest image dimensions: the gallery derives each tile's `aspect-ratio` from the manifest's `width`/`height`, so any process that writes a differently-sized image must record its real pixel size (see `store_edited_upload()` in `server/image_edit.py` and the input-upscale path in `server/app.py`). Recompute sizes from the files on disk with `python tools/repair_edited_image_dimensions.py` (`--dry-run` to preview, `--all` to include non-edited entries); it only rewrites dimensions that disagree with the actual image and skips unreadable files.
+
+### UI asset caching (why mobile can miss new features)
+
+`ui/index.html` cache-busts only the entry script (`/ui/app.js?v=...`), but the app imports the rest of
+the UI as unversioned ES modules (`app.js` -> `./modules/*.js`). The `/ui` mount is therefore served through
+`NoCacheStaticFiles` in `server/app.py`, which sends `Cache-Control: no-cache` so browsers revalidate every
+code asset while still getting cheap `304`s. Media mounts (`/outputs`, `/inputs`) are left on the default
+policy because they are large and safe to cache.
+
+Without this, a phone can keep running a pre-update module after a pull and silently miss a new feature while
+a hard-refreshed desktop shows it. This actually happened: a stale `LightboxManager.js` kept the old
+`includes('/outputs/')` source gate, so `Edit` never appeared on mobile. If a browser seems stuck on old
+behaviour after an update, hard-reload once to discard anything cached before this policy landed.
+
+There is no separate mobile UI. The single `ui/index.html` is served to every viewport; mobile behaviour is
+responsive CSS in `ui/styles/layouts/responsive.css` / `theme-nova.css` plus a small Studio pane toggle in
+`ui/app_main.js`. Any new UI control must therefore be checked against the narrow breakpoints, not added
+behind a mobile-only code path.
 
 ### Change Gallery Behavior
 
@@ -240,6 +265,14 @@ Krea 2 (see `docs/KREA2_PERFORMANCE.md`):
 - `WEBBDUCK_KREA2_OFFLOAD`
 - `WEBBDUCK_KREA2_BLOCKS_PER_GROUP`
 - `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM`
+- `WEBBDUCK_KREA2_DECODER` (`stock` | `realism`; default when a request leaves `vae_decoder` empty)
+- `WEBBDUCK_KREA2_DECODER_OUTPUT` (`requested` | `2x`)
+- `WEBBDUCK_KREA2_REALISM_DECODER` (repo id or local diffusers folder; default `spacepxl/Wan2.1-VAE-upscale2x`)
+- `WEBBDUCK_KREA2_REALISM_DECODER_SUBFOLDER` (`.` for the root)
+- `WEBBDUCK_KREA2_FACE_DETECTOR` (YuNet ONNX path; default `weights/faces/`, auto-downloaded from `opencv/opencv_zoo`)
+- `WEBBDUCK_KREA2_FACE_SCORE` (YuNet confidence threshold; default `0.6`)
+- `WEBBDUCK_KREA2_FACE_NMS` (YuNet NMS threshold; default `0.3`)
+- `WEBBDUCK_KREA2_FACE_TOP_K` (YuNet candidate cap; default `5000`)
 - `WEBBDUCK_KREA2_IDENTITY_WEIGHT`
 - `WEBBDUCK_KREA2_IDENTITY_REPO`
 - `WEBBDUCK_KREA2_IDENTITY_PROCESSOR`

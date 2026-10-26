@@ -54,15 +54,17 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `server/app.py` | main application, route registration, queue entrypoints, plugin endpoints |
 | `server/events.py` | broadcast helpers for UI realtime updates |
 | `server/state.py` | runtime status snapshot shared with the UI |
+| `server/queue_control.py` | queue pause/resume coordination: pause flag, resume wakeup event, and GPU release while paused |
 | `server/storage.py` | output persistence, metadata files, gallery manifest management |
 | `server/thumbnails.py` | thumbnail generation and caching |
 | `server/image_edit.py` | non-destructive storage for gallery edits: path containment, `<stem>_edit[_N].png` allocation, manifest lineage (the browser does the pixel work) |
 | `server/model_catalog_api.py` | architecture-free model profile API from the runtime catalog (capabilities/defaults; the payload also exposes a display-only `arch` hint so the checkpoint dropdown can group entries by architecture type) |
 | `server/provider_credentials_api.py` | Hugging Face/Civitai provider credential configuration endpoints |
 | `server/runtime_readiness_api.py` | non-loading runtime readiness surface for checkpoint-driven generation |
-| `core/worker.py` | queued execution of GPU-heavy jobs |
+| `core/worker.py` | queued execution of GPU-heavy jobs; honors the queue pause gate (finishes the current job, releases the GPU, then holds) |
 | `core/generation.py` | request normalization, runtime routing, and mode dispatch |
 | `core/model_runtime.py` | checkpoint-driven runtime routing for generation jobs |
+| `core/image_operations.py` | CPU-side canvas/mask preparation for image operations, including smart-extend outpaint placement |
 | `core/pipeline.py` | Diffusers pipeline load/unload and LoRA application |
 | `core/runtime.py` | runtime profile helpers and device/dtype detection |
 | `core/gpu_lease.py` | shared in-process GPU ownership across core and plugins |
@@ -82,6 +84,43 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `models/upscaler.py` | upscaler discovery/loading helpers |
 | `models/metastore.py` | canonical metadata store |
 | `modes/base.py` | base class for generation modes |
+| `modes/inpaint.py` | SDXL inpaint and smart-extend orchestration (staged and repeat passes) |
+| `modes/outpaint.py` | pyramid outpaint staging helpers and canvas builders |
+
+#### Smart-extend canvas construction
+
+Two paths build the expanded outpaint canvas, and they must stay scale-consistent:
+
+- `core/image_operations.py::build_smart_extend_inputs` runs before the mode and
+  seeds the canvas for the **repeat** path.
+- `modes/inpaint.py` and `modes/outpaint.py` build per-stage canvases for the
+  **staged** and **pyramid** paths.
+
+### Smart-extend canvas initialization
+
+Inpainting treats everything outside the mask as ground-truth context, so whatever
+`core/image_operations.py` places in the new canvas area is a promise the model will
+faithfully keep. That single rule explains the three observed outpaint failure
+modes, each of which looked like a different bug:
+
+| Initializer | What it puts in the new area | Observed result |
+| --- | --- | --- |
+| `soft_context` | `ImageOps.fit` (scale-to-**cover** + centre crop) + blur | A multi-magnified phantom of the source sits beside the real full-size source; the model cannot reconcile two scales and generates an **unrelated scene**. |
+| `edge_strips` | A one-pixel border row/column stretched outward | A constant row repeat that reads as the image **smeared or stretched**. |
+| `mirror` | The edge band reflected outward | Correct 1:1 scale and real structure, but visibly mirrored. |
+| `noise` (default) | Edge-tinted Gaussian noise, no structure | Nothing to copy, so the source plus the model's prior decide the continuation. |
+
+Two invariants hold for every initializer:
+
+- **Never rescale the source.** Use border-band extrapolation at 1:1, never a
+  scale-to-cover fit and never a resize of the whole source to the target.
+- **Never let the seeded area read as structure.** Prefer `noise` for large single-pass
+  expansions.
+
+Override for diagnosis with `WEBBDUCK_SMART_EXTEND_INITIALIZER`
+(`noise`|`mirror`|`edge_strips`|`soft_context`) or the `smart_extend_initializer`
+request field. `tests/test_outpaint_regression.py` pins the default and asserts every
+initializer stays 1:1 and mutually distinct.
 
 #### `core/backends/` — generation backend adapters
 
@@ -104,9 +143,9 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 | `krea2.py` | Krea 2 isolated-runtime backend: identity payload normalization, component resolution, worker launch |
 | `krea2_host_impl.py` | Krea 2 image backend entrypoint for an isolated Python runtime |
 | `krea2_worker.py` | Krea phased GPU worker; identity edit run, FP8 LoRA residuals, OOM demotion |
-| `krea2_worker_impl.py` | shared Krea worker implementation |
+| `krea2_worker_impl.py` | the single Krea generation loop: img2img, face detailer, output resampling, safety policy and OOM ladder |
 | `krea2_worker_adaptive.py` | request-level adaptive planning incl. identity token accounting and geometry scaling |
-| `krea2_worker_safe.py` | safe-runtime wrapper dispatching identity runs to the phased worker |
+| `krea2_worker_safe.py` | thin delegating wrapper over the canonical loop; keeps the safety-policy names importable. It must not define its own generation loop |
 | `krea2_identity.py` | Krea identity contract layer: validation, preset snapshot, weight resolution, edit geometry helpers |
 | `krea2_identity_face.py` | Krea identity face-crop / face-focus reference handling |
 | `krea2_identity_multiref.py` | Krea multi-reference identity handling |
@@ -115,6 +154,9 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 | `krea2_identity_stability.py` | Krea identity stability handling |
 | `krea2_lora.py` | Krea LoRA normalization/loading |
 | `krea2_native_fp8.py` | native FP8 GEMM kernel + post-GEMM LoRA residual overlay |
+| `krea2_img2img.py` | Krea 2 img2img: strength resolution, resolution/mu shift, inverse dynamic-shift round trip for truncated sigma schedules, latent encode + noise, VAE detach |
+| `krea2_face_detailer.py` | Krea 2 opt-in face/skin detailer: YuNet detection, crop/target geometry, face selection, feathering, color match, compositing; never raises (returns the unrefined image plus a note) |
+| `krea2_realism_decoder.py` | optional 2x realism VAE decoder (Wan2.1 upscale2x): host request/output sizing + worker `_decode_latents` patch with stock-VAE fallback |
 | `krea2_weights.py` | Krea single-file/GGUF weight loading and metadata overlay |
 
 ### Frontend Map

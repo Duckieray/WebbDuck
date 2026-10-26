@@ -7,6 +7,9 @@ Use this file when working in `server/`, `core/`, `models/`, `modes/`, or `promp
 - `server/app.py`: main FastAPI app, route registration, queue management, plugin endpoints, `/docs/simple-guide`, `/ws`, `/health`, `/caption*`, gallery APIs, queue controls, and shutdown/unload actions.
 - `server/events.py`: broadcasts JSON events to connected WebSocket clients.
 - `server/state.py`: shared in-memory progress, stage, and VRAM snapshot for UI updates.
+- `server/queue_control.py`: queue pause/resume coordination. `set_queue_paused()` clears/sets a
+  resume event, `wait_for_queue_resume()` blocks the worker, and `release_gpu_for_pause()` unloads
+  host-resident models (captioners, in-process pipeline) so the GPU is genuinely idle while paused.
 - `server/storage.py`: saves images, run metadata, manifest entries, and favorites.
 - `server/thumbnails.py`: on-demand thumbnail generation with per-path locking.
 - `server/image_edit.py`: non-destructive gallery image editing. `resolve_output_image()`
@@ -22,7 +25,7 @@ Use this file when working in `server/`, `core/`, `models/`, `modes/`, or `promp
 
 ## Worker And Pipeline Layer
 
-- `core/worker.py`: serial GPU worker for generation and Real-ESRGAN upscaling; acquires and releases GPU leases around jobs.
+- `core/worker.py`: serial GPU worker for generation and Real-ESRGAN upscaling; acquires and releases GPU leases around jobs. Before dequeuing and before starting each job it honors the queue pause gate: the in-flight job is never interrupted, and while paused the worker frees the GPU and holds (`server/queue_control.py`).
 - `core/generation.py`: normalizes dimensions, prepares input/mask state, injects LoRA triggers, selects generation mode, and records timing.
 - `core/pipeline.py`: runtime profile resolution, SDXL pipeline build/load/unload, scheduler swaps, LoRA application, embedding loading, and second-pass attachment.
 - `core/runtime.py`: device and dtype resolution with CUDA compatibility probing and strict-mode fail-fast behavior.
@@ -92,10 +95,28 @@ decoded). The module owns:
 
 The GPU runtime lives in `core/backends/krea2_worker.py`: a request carrying a
 top-level `identity` dict dispatches out of the shared phased `_run` into
-`_run_identity` before any text2img encode (same dispatch mirrored in
-`krea2_worker_safe._run`). Sequence is text encode -> reference encode -> LoRA
-install -> bordered denoise loop, with an OOM ladder that reconfigures
-resident->`transformer-block` mode. The Qwen3-VL grounded encode
+`_run_identity` before any text2img encode. Sequence is text encode -> reference
+encode -> LoRA install -> bordered denoise loop.
+
+`krea2_worker_safe._run` **delegates** to that same function. It used to rebind
+`base._run` with a text-to-image-only copy of the loop, which silently disabled
+every feature later added to the base worker - img2img and the face detailer never
+ran in production while their unit tests passed. Its safety policy (conditioning
+dtype coercion, desktop-aware activation reserve, post-placement headroom
+revalidation, progressive CUDA OOM ladder via `_retry_profiles`/`_fresh_denoiser`)
+now lives in `krea2_worker_impl`, and the wrapper aliases those names. Do not
+reintroduce a second generation loop; `tests/test_krea2_production_entry.py`
+enforces this.
+
+Latent-init img2img and the face detailer share `encode_source_latent` in
+`krea2_img2img`. Its normalization must be the exact inverse of `_decode_latents`
+(and therefore of `Krea2Pipeline.__call__`'s decode): encode
+`(latent - latents_mean) / config.latents_std`, decode
+`latents / (1 / config.latents_std) + latents_mean`. Using `* latents_std` on the
+encode side scales the latent by `latents_std**2` (2.1x-7.9x on Krea-2-Turbo), the
+transformer treats it as out-of-distribution noise and re-renders instead of
+refining, and the face detailer's elliptical paste turns that into coloured discs on
+faces. `tests/test_krea2_img2img.py` pins the pair. The Qwen3-VL grounded encode
 (`_grounded_encode_krea`) uses the processor from `_vlm_processor_source`
 (`WEBBDUCK_KREA2_IDENTITY_PROCESSOR`, default `Qwen/Qwen3-VL-4B-Instruct`),
 the pipeline's `text_encoder_select_layers` (12) and

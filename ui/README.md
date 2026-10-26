@@ -53,7 +53,11 @@ ui/
 - `ui/core/state.js`: persisted Studio state and DOM sync.
 - `ui/core/utils.js`: DOM, toast, async, and form-data helpers used across the app.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, thumbnail sizing, and batch delete in selection mode.
-- `ui/modules/LightboxManager.js`: full-screen viewer, metadata display, and the `Edit` / `Input Image` actions.
+- `ui/modules/LightboxManager.js`: full-screen viewer, metadata display, and the `Edit` / `Inpaint` actions. `Inpaint` loads the image into the Studio input slot (it was duplicated as `Input Image`, which ran the identical funnel and was removed).
+  Paging: the lightbox is opened with the tiles currently rendered, so it fetches the next gallery page
+  ~3 slides from the end (`_maybeExtendPages`, reusing `galleryManager.loadMoreAuto()`) and appends the new
+  slides to PhotoSwipe's `dataSource`. PhotoSwipe's `loop` is off until the last page is loaded, otherwise it
+  wraps to slide 1 mid-browse; filtered/searched galleries are complete sets, so they are never paged.
 - `ui/modules/ImageEditor.js`: self-mounting crop/rotate/flip/resize/adjust overlay, opened from
   the lightbox `Edit` button. Renders the edit on a `<canvas>` (full-resolution offscreen source,
   downscaled preview) so previews cost no network or GPU. The preview always paints the whole
@@ -82,7 +86,7 @@ This keeps queue and catalog state fresh without extra polling loops in the brow
 
 `ui/core/state.js` stores Studio settings in `localStorage` under `webbduck_state_v2`.
 
-Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings. Identity persona state adds reference selection plus the FLUX.2 persona tuning keys (`face_crop`, `flux2_anchor_dup`, `face_focus`).
+Persisted state includes prompt fields, dimensions, scheduler, second-pass options, img2img settings, smart-extend options, selected LoRAs, and selected embeddings. Model-capability-gated Krea 2 controls persist alongside them: the VAE decoder pair (`vaeDecoder`, `vaeDecoderOutput`) and the face detailer (`faceDetailerEnabled`, `faceDetailerStrength`, `faceDetailerMinFacePx`, `faceDetailerMaxFaces`, `faceDetailerDetectorPath`). Identity persona state adds reference selection plus the FLUX.2 persona tuning keys (`face_crop`, `flux2_anchor_dup`, `face_focus`).
 
 Provider credentials are deliberately excluded from this state. They are stored by the WebbDuck host under `~/.webbduck/provider_credentials.json`; the browser receives configuration status only and never reads a saved token back.
 
@@ -123,6 +127,7 @@ Provider credentials are deliberately excluded from this state. They are stored 
 - LoRA and embedding management.
 - Inpaint mask editor and smart extend controls.
 - Lightbox metadata panel and image actions.
+- Capability-gated Krea 2 controls: VAE decoder choice and the opt-in face/skin detailer.
 - Settings modal, optional model-provider credentials, in-app help modal, and remote plugin connection UI.
 - Queue detail cards, compare view, and plugin iframe tabs.
 

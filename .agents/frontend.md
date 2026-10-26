@@ -23,7 +23,7 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
 - `ui/modules/LoraManager.js`: LoRA loading, selection, weights, and restore-from-state behavior. Options and cards display the canonical `title` from the API (fallback to the file-stem `name`); the `name` key is always the identity used in the generation payload.
 - `ui/modules/EmbeddingManager.js`: embedding loading, selection, token editing, and restore-from-state behavior. Same `title`-first display rule as the LoRA manager.
 - `ui/modules/GalleryManager.js`: gallery paging, search, filters, favorites, selection mode, and batch delete.
-- `ui/modules/LightboxManager.js`: PhotoSwipe integration, metadata panel, compare mode, HD toggle, and image actions. `Edit` and `Input Image` are only shown for `/outputs/` sources; its global Delete/Backspace handler is suppressed while `body.image-editor-open` is set.
+- `ui/modules/LightboxManager.js`: PhotoSwipe integration, metadata panel, compare mode, HD toggle, and image actions. `Edit` is only shown for `outputs/` sources (`Inpaint` is capability-gated instead); its global Delete/Backspace handler is suppressed while `body.image-editor-open` is set.
 - `ui/modules/ImageEditor.js`: self-mounting full-screen editor overlay. Crop/rotate/flip happen on
   an offscreen `<canvas>` at full resolution. The preview always paints the *whole* oriented frame
   with the crop drawn as an overlay, so the excluded area stays visible while dragging; the crop

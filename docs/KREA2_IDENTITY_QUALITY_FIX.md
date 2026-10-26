@@ -23,8 +23,12 @@ Changes:
 - Resolve the identity LoRA rank with host GPU VRAM when available. Set
   `WEBBDUCK_KREA2_IDENTITY_QUALITY_BASELINE=1` to force the full v1.2 weight for
   parity testing.
-- Post-hoc Real-ESRGAN is disabled by default while identity parity is being
-  validated. Explicitly set `WEBBDUCK_KREA2_IDENTITY_UPSCALE=1` to re-enable it.
+- Post-hoc Real-ESRGAN is the default again: identity artifacts are upscaled back
+  to the requested size with Real-ESRGAN (host env, not the isolated runtime),
+  falling back to plain LANCZOS when the upscaler or its weights are missing.
+  Set `WEBBDUCK_KREA2_IDENTITY_UPSCALE=0` to keep the native decode instead. It
+  had been pinned off during identity parity validation, which left the common
+  case on a soft ~1.7x LANCZOS stretch.
 - Identity LoRA installation on dense checkpoints (diffusers-format, INT8
   convrot dequant) now computes the fused delta in fp32 before down-casting into
   the bf16 weight. A direct bf16 CPU `mm` dispatches to a slow fallback kernel
