@@ -188,12 +188,13 @@ function applyDefaults(profile, { force = false } = {}) {
 }
 
 function clearUnsupportedSourceState(caps) {
-    if (caps?.img2img === false) {
-        window._uploadedImage = null;
-        window._uploadedImageDims = null;
-        const input = byId('input-image');
-        if (input) input.value = '';
-    }
+    // The staged source image is intentionally NOT cleared when `img2img` is false.
+    // Staging a picture and then choosing the checkpoint is a supported order, so a
+    // switch to a non-image checkpoint must not destroy the upload. Generate stays
+    // the enforcement point: `validateCurrentOperation()` blocks the run and says
+    // why, and the server re-checks via `core.model_runtime._validate_operation`.
+    // Mask and Smart Extend placement are still reset, because they only mean
+    // something for a workflow that is currently unavailable.
     if (caps?.inpaint === false) {
         window._maskBlob = null;
         window._previewMaskCanvas = null;
@@ -209,22 +210,25 @@ function clearUnsupportedSourceState(caps) {
 
 function applyOperationControls(profile) {
     const caps = profile?.capabilities || {};
-    const supportsSource = capabilityAllowed(caps, 'img2img')
-        || capabilityAllowed(caps, 'inpaint')
-        || capabilityAllowed(caps, 'outpaint');
+    // Loading a picture into the Studio input is deliberately never capability-gated.
+    // It only stages a source image; the user routinely stages first and switches
+    // checkpoints afterwards, and `requestedOperation()` re-checks the real workflow
+    // when Generate is pressed. Hiding the control made that staging impossible on
+    // any checkpoint that cannot inpaint, and the staged image was unreachable
+    // because the input section was hidden with it.
+    const supportsSource = true;
     const drop = byId('upload-drop');
     const sourceSection = drop?.closest('.section, .nova-block');
-    if (sourceSection) sourceSection.classList.toggle('hidden', !supportsSource);
-    setCapabilityDisabled(byId('input-image'), !supportsSource);
+    if (sourceSection) sourceSection.classList.remove('hidden');
+    setCapabilityDisabled(byId('input-image'), false);
 
     setHidden(byId('inpaint-options'), !capabilityAllowed(caps, 'inpaint'));
     setHidden(byId('smart-extend-group'), !capabilityAllowed(caps, 'outpaint'));
     for (const id of ['preview-inpaint', 'lightbox-inpaint']) {
         const button = byId(id);
         if (button) {
-            const available = capabilityAllowed(caps, 'inpaint');
-            button.disabled = !available;
-            button.classList.toggle('hidden', !available);
+            button.disabled = false;
+            button.classList.remove('hidden');
         }
     }
     clearUnsupportedSourceState(caps);

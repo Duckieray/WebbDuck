@@ -24,13 +24,16 @@ const FILTER_SUPPORTED = (() => {
     }
 })();
 
+// Crop ratio presets. `free` is the unconstrained option surfaced as "Custom"; it
+// stays the default so opening the editor never imposes a ratio on the user.
 const ASPECT_PRESETS = [
-    { key: 'free', label: 'Free', ratio: 0 },
     { key: '1:1', label: '1:1', ratio: 1 },
-    { key: '3:4', label: '3:4', ratio: 3 / 4 },
-    { key: '4:5', label: '4:5', ratio: 4 / 5 },
+    { key: '4:3', label: '4:3', ratio: 4 / 3 },
+    { key: '3:2', label: '3:2', ratio: 3 / 2 },
     { key: '16:9', label: '16:9', ratio: 16 / 9 },
+    { key: '2:3', label: '2:3', ratio: 2 / 3 },
     { key: '9:16', label: '9:16', ratio: 9 / 16 },
+    { key: 'free', label: 'Custom', ratio: 0 },
 ];
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -61,6 +64,38 @@ function clamp(value, min, max) {
 
 function roundTo(value, step) {
     return step > 0 ? Math.round(value / step) * step : Math.round(value);
+}
+
+/**
+ * Snap both axes to multiples of `step` while disturbing the aspect ratio as
+ * little as possible. Exact aspect preservation is impossible when both axes
+ * must land on a multiple, so search the 3x3 neighbourhood of the naive rounding
+ * and keep the pair with the smallest relative error.
+ *
+ * The error metric is deliberately linear rather than logarithmic: the export
+ * stretches the crop into the output box, so what the eye sees is
+ * `|(W/H) / (w/h) - 1|`. Minimizing log error is not equivalent and can pick a
+ * visibly worse pair once the deviation is large.
+ */
+function snapPairPreservingAspect(width, height, aspect, step = 8) {
+    if (!(aspect > 0) || !Number.isFinite(aspect)) {
+        return { width: Math.max(step, roundTo(width, step)), height: Math.max(step, roundTo(height, step)) };
+    }
+    const baseW = Math.max(step, roundTo(width, step));
+    const baseH = Math.max(step, roundTo(height, step));
+    // Seed with the naive rounding so an already-valid size (both axes multiples of
+    // step, zero aspect error) is left alone instead of being nudged by a tie.
+    let best = { width: baseW, height: baseH, error: Math.abs((baseW / baseH) / aspect - 1) };
+    for (const dw of [-step, 0, step]) {
+        for (const dh of [-step, 0, step]) {
+            const w = baseW + dw;
+            const h = baseH + dh;
+            if (w < step || h < step) continue;
+            const error = Math.abs((w / h) / aspect - 1);
+            if (error < best.error) best = { width: w, height: h, error };
+        }
+    }
+    return { width: best.width, height: best.height };
 }
 
 function readFileAsImage(url) {
@@ -381,8 +416,11 @@ export class ImageEditor {
         height = clamp(Math.round(height), 8, 8192);
 
         if (this.state.snapEight) {
-            width = Math.max(8, roundTo(width, 8));
-            height = Math.max(8, roundTo(height, 8));
+            // Backends need both axes divisible by 8, which cannot be satisfied while
+            // also holding an arbitrary aspect ratio exactly. Round each axis
+            // independently and the crop gets visibly stretched (260x170 -> 264x168
+            // is 2.7% off), so pick the pair that distorts the least instead.
+            ({ width, height } = snapPairPreservingAspect(width, height, crop.width / crop.height));
         }
         return { width, height };
     }
@@ -963,10 +1001,13 @@ export class ImageEditor {
             const file = new File([blob], 'edit.png', { type: 'image/png' });
             const result = await api.saveImageEdit(this.sourceSrc, file, this.opsSummary());
             const newPath = result?.path;
+            // Read the export size before close() resets state: it is the saved copy's
+            // true pixel size, so the lightbox can show it unstretched.
+            const exported = this.outputSize();
 
             toast('Saved edited copy to the gallery', 'success');
             this.close();
-            if (newPath) this.callbacks.onSaved(newPath);
+            if (newPath) this.callbacks.onSaved({ path: newPath, width: exported.width, height: exported.height });
         } catch (error) {
             console.error('Image edit save failed:', error);
             toast(error.message || 'Failed to save the edited image', 'error');

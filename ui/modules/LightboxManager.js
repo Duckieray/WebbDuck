@@ -27,7 +27,6 @@ export class LightboxManager {
             onUpscale: callbacks.onUpscale || (() => { }),
             onInpaint: callbacks.onInpaint || (() => { }),
             onEdit: callbacks.onEdit || (() => { }),
-            onUseAsInput: callbacks.onUseAsInput || (() => { }),
             onDuckMotion: callbacks.onDuckMotion || (() => { }),
             onRegenerate: callbacks.onRegenerate || (() => { }),
             onStageSettings: callbacks.onStageSettings || (() => { }),
@@ -40,6 +39,15 @@ export class LightboxManager {
         this.pendingReopen = null;
         this.pendingDeleteRun = null;
         this.infoVisible = true;
+
+        // Paging: the lightbox only knows about the tiles currently rendered, so it
+        // fetches the next gallery page as the user nears the end. PhotoSwipe wraps to
+        // the first slide by default, which would teleport them to 1/N mid-browse, so
+        // looping is held off until the end of the collection is genuinely reached.
+        this.pageAhead = 3;
+        this.isLoadingNextPage = false;
+        this.pagingEnabled = false;
+        this.galleryGrid = null;
 
         this.initActions();
         document.addEventListener('keydown', this._onLightboxKeyDown.bind(this));
@@ -124,19 +132,18 @@ export class LightboxManager {
             });
         });
 
+        // Single "load this image into the Studio input" action. This used to be two
+        // buttons ("Inpaint" and "Input Image"), but they ran the same funnel: the
+        // upload handler clears `_maskBlob`, so the resolved operation is img2img
+        // until the user draws a mask. The duplicate was removed and the surviving
+        // button now prefers the full-size `originalSrc`, which the old Inpaint
+        // handler did not.
         listen(byId('lightbox-inpaint'), 'click', () => {
-            if (!this.currentPswpInstance?.pswp) return;
-            const curr = this.currentPswpInstance.pswp.currSlide.data;
-            this.currentPswpInstance.pswp.close();
-            this.callbacks.onInpaint(curr.src);
-        });
-
-        listen(byId('lightbox-input-image'), 'click', () => {
             if (!this.currentPswpInstance?.pswp) return;
             const curr = this.currentPswpInstance.pswp.currSlide.data;
             const src = curr?.originalSrc || curr?.src;
             this.currentPswpInstance.pswp.close();
-            this.callbacks.onUseAsInput(src);
+            this.callbacks.onInpaint(src);
         });
 
         listen(byId('lightbox-edit'), 'click', () => {
@@ -311,42 +318,14 @@ export class LightboxManager {
     open(dataSource, startIndex = 0, options = {}) {
         let items;
 
-        if (dataSource.length > 0 && (dataSource[0].tagName || dataSource[0] instanceof Element)) {
-            items = Array.from(dataSource).map(img => {
-                const item = img.closest('.image-item');
-                const sessionGroup = img.closest('.session-group');
-                let sessionMeta = sessionGroup ? this.extractSessionMeta(sessionGroup) : {};
-                if (!sessionMeta || Object.keys(sessionMeta).length === 0) {
-                    const rawMeta = item?.dataset?.meta;
-                    if (rawMeta) {
-                        try {
-                            sessionMeta = JSON.parse(decodeURIComponent(rawMeta));
-                        } catch (_) {
-                            sessionMeta = {};
-                        }
-                    }
-                }
-                const variantUrl = item?.dataset.variant || null;
+        const openedFromTiles = dataSource.length > 0 &&
+            (dataSource[0].tagName || dataSource[0] instanceof Element);
+        // Remember the grid so a newly fetched page can be picked up mid-browse.
+        this.pagingEnabled = Boolean(openedFromTiles);
+        this.galleryGrid = openedFromTiles ? (dataSource[0].closest('.gallery-grid') || null) : null;
 
-                const datasetSrc = item?.dataset.src;
-                const src = datasetSrc || img.src.replace('/thumbs/', '/').replace('_thumb', '');
-
-                const width = item?.dataset.width ? parseInt(item.dataset.width, 10) : (img.naturalWidth || 1024);
-                const height = item?.dataset.height ? parseInt(item.dataset.height, 10) : (img.naturalHeight || 1024);
-
-                return {
-                    src,
-                    width,
-                    height,
-                    msrc: img.src,
-                    alt: img.alt || '',
-                    meta: sessionMeta,
-                    originalSrc: src,
-                    variant: variantUrl,
-                    isShowingVariant: false,
-                    isFavorite: item?.dataset.favorite === '1'
-                };
-            });
+        if (openedFromTiles) {
+            items = Array.from(dataSource).map((img) => this._slideFromTile(img)).filter(Boolean);
         } else {
             items = Array.isArray(dataSource) ? dataSource.map((item) => ({ ...item })) : [];
         }
@@ -359,6 +338,8 @@ export class LightboxManager {
             bgOpacity: 0.95,
             showHideAnimationType: 'fade',
             closeOnVerticalDrag: true,
+            // Re-enabled in _maybeExtendPages() once the last page is loaded.
+            loop: false,
             padding: { top: 20, bottom: 280, left: 20, right: 20 },
             imageClickAction: false,
             tapAction: false,
@@ -456,11 +437,105 @@ export class LightboxManager {
             const curr = lightbox.pswp.currSlide.data;
             this.updateMeta(curr.meta);
             this.updateButtons(curr);
+            this._maybeExtendPages();
         });
 
         lightbox.init();
         lightbox.loadAndOpen(startIndex);
         this.currentPswpInstance = lightbox;
+        // The lightbox may have been opened near the end of a partly loaded gallery.
+        this._maybeExtendPages();
+    }
+
+    /** Map a rendered gallery tile to a lightbox slide. */
+    _slideFromTile(img) {
+        if (!img) return null;
+        const item = img.closest('.image-item');
+        const sessionGroup = img.closest('.session-group');
+        let sessionMeta = sessionGroup ? this.extractSessionMeta(sessionGroup) : {};
+        if (!sessionMeta || Object.keys(sessionMeta).length === 0) {
+            const rawMeta = item?.dataset?.meta;
+            if (rawMeta) {
+                try {
+                    sessionMeta = JSON.parse(decodeURIComponent(rawMeta));
+                } catch (_) {
+                    sessionMeta = {};
+                }
+            }
+        }
+        const variantUrl = item?.dataset.variant || null;
+        const datasetSrc = item?.dataset.src;
+        const src = datasetSrc || img.src.replace('/thumbs/', '/').replace('_thumb', '');
+        const width = item?.dataset.width ? parseInt(item.dataset.width, 10) : (img.naturalWidth || 1024);
+        const height = item?.dataset.height ? parseInt(item.dataset.height, 10) : (img.naturalHeight || 1024);
+
+        return {
+            src,
+            width,
+            height,
+            msrc: img.src,
+            alt: img.alt || '',
+            meta: sessionMeta,
+            originalSrc: src,
+            variant: variantUrl,
+            isShowingVariant: false,
+            isFavorite: item?.dataset.favorite === '1',
+        };
+    }
+
+    /**
+     * Whether this gallery view is a paged feed. A filtered or searched gallery shows
+     * one complete set, so there is nothing to extend with and wrapping is fine.
+     */
+    _pagingEligible(gallery) {
+        if (gallery.activeFilter !== 'all') return false;
+        return !(byId('gallery-search')?.value || '').trim();
+    }
+
+    /**
+     * Fetch the next gallery page as the user approaches the end of the loaded tiles so
+     * browsing continues past the last image instead of wrapping back to the first.
+     */
+    async _maybeExtendPages() {
+        const pswp = this.currentPswpInstance?.pswp;
+        const gallery = window.galleryManager;
+        if (!pswp || !this.pagingEnabled || !gallery) return;
+        if (this.isLoadingNextPage) return;
+
+        if (!this._pagingEligible(gallery) || !gallery.hasMore) {
+            // The end of the collection is now the real end, so wrapping is the
+            // friendlier behaviour and matches what the lightbox always did.
+            pswp.options.loop = true;
+            return;
+        }
+        // A scroll-driven load may already be in flight; let that one finish.
+        if (gallery.isLoadingPage) return;
+
+        const source = pswp.options.dataSource;
+        if (!Array.isArray(source)) return;
+        if (source.length - 1 - pswp.currIndex > this.pageAhead) return;
+
+        this.isLoadingNextPage = true;
+        try {
+            await gallery.loadMoreAuto();
+            this._appendFreshTiles(source);
+        } catch (error) {
+            console.error('Failed to extend the lightbox with more images:', error);
+        } finally {
+            this.isLoadingNextPage = false;
+        }
+    }
+
+    /** Append slides for tiles the refreshed gallery added, skipping ones already open. */
+    _appendFreshTiles(source) {
+        const seen = new Set(source.map((item) => item.src));
+        for (const img of this.galleryGrid?.querySelectorAll('.image-item img') || []) {
+            const slide = this._slideFromTile(img);
+            if (!slide || seen.has(slide.src)) continue;
+            seen.add(slide.src);
+            source.push(slide);
+        }
+        return source.length;
     }
 
     extractSessionMeta(sessionGroup) {
@@ -607,12 +682,10 @@ export class LightboxManager {
         if (viewHdBtn) viewHdBtn.style.display = curr.variant ? 'inline-flex' : 'none';
         if (compareBtn) compareBtn.style.display = curr.variant ? 'inline-flex' : 'none';
 
-        // Editing and input-image import only make sense for a stored output file.
+        // Editing only makes sense for a stored output file.
         const isOutput = isOutputImageSrc(curr?.originalSrc || curr?.src);
         const editBtn = byId('lightbox-edit');
         if (editBtn) editBtn.style.display = isOutput ? 'inline-flex' : 'none';
-        const inputBtn = byId('lightbox-input-image');
-        if (inputBtn) inputBtn.style.display = isOutput ? 'inline-flex' : 'none';
 
         if (favoriteBtn) {
             const canFavorite = isOutput;

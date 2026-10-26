@@ -6,9 +6,14 @@ browser test would otherwise be needed for: module registration, API wrappers,
 the lightbox/gallery entry points, and the markup the JS binds to by id.
 """
 
+import json
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,15 +125,29 @@ def test_lightbox_edit_sits_between_upscale_and_duckmotion():
 
 
 def test_lightbox_actions_are_present_and_output_scoped():
-    for element_id in ("lightbox-edit", "lightbox-input-image"):
-        assert element_id in INDEX
-    # Both start hidden and are revealed per-slide, since they only make sense for
+    assert "lightbox-edit" in INDEX
+    # Edit starts hidden and is revealed per-slide, since it only makes sense for
     # images that actually live under the outputs directory.
-    for element_id in ("lightbox-edit", "lightbox-input-image"):
-        assert "display:none" in _tag_of(INDEX, element_id)
+    assert "display:none" in _tag_of(INDEX, "lightbox-edit")
     assert "onEdit" in LIGHTBOX
-    assert "onUseAsInput" in LIGHTBOX
     assert "includes('/outputs/')" in LIGHTBOX
+
+
+def test_duplicate_input_image_button_was_removed():
+    """Regression: "Inpaint" and "Input Image" ran the same funnel.
+
+    ``sendToInpaint`` was a one-line wrapper over ``sendToInputImage`` and the upload
+    handler clears ``_maskBlob``, so both landed in img2img. Only the toast differed.
+    The duplicate "Input Image" button is gone; the surviving "Inpaint" button is what
+    loads a gallery image into the Studio input slot.
+    """
+    assert "lightbox-input-image" not in INDEX
+    assert "lightbox-input-image" not in LIGHTBOX
+    assert "lightbox-inpaint" in INDEX
+    # The dead callback plumbing goes with it.
+    assert "onUseAsInput" not in LIGHTBOX, (
+        "the removed Input Image handler was the only consumer of this callback"
+    )
 
 
 def test_editor_module_is_registered_and_imported():
@@ -162,9 +181,25 @@ def test_editor_exposes_the_documented_controls():
 
 
 def test_editor_aspect_presets_are_offered():
-    """Free crop plus the common ratios the user guide advertises."""
-    for ratio in ("1:1", "3:4", "4:5", "16:9", "9:16"):
-        assert ratio in EDITOR, f"editor is missing the {ratio} aspect preset"
+    """The crop presets, in the advertised order, with Custom as the free option."""
+    table = EDITOR[EDITOR.index("const ASPECT_PRESETS = ["):]
+    table = table[:table.index("];") + 2]
+    order = re.findall(r"label: '([^']+)'", table)
+    assert order == ["1:1", "4:3", "3:2", "16:9", "2:3", "9:16", "Custom"], (
+        f"crop presets are {order}"
+    )
+    # Each named preset's ratio must actually match its label.
+    for key, ratio in re.findall(r"key: '([^']+)', label: '[^']+', ratio: ([\d./ ]+)", table):
+        # The table stores arithmetic expressions (e.g. "4 / 3"), so evaluate rather
+        # than trying to parse them as literals.
+        value = eval(ratio, {"__builtins__": {}}, {})  # noqa: S307 - test-only arithmetic
+        if key == "free":
+            assert value == 0, "Custom must be the unconstrained option"
+            continue
+        a, b = (int(x) for x in key.split(":"))
+        assert abs(value - a / b) < 1e-12, f"{key} has ratio {ratio}"
+    # Custom stays the default so opening the editor never imposes a ratio.
+    assert "aspect: 'free'" in EDITOR
 
 
 def test_editor_state_round_trips_through_the_backend_contract():
@@ -264,7 +299,7 @@ def test_output_source_gate_accepts_the_real_gallery_path_shape():
 
     predicate = _output_src_predicate()
     assert predicate.search(gallery_path), (
-        f"gate rejects the real gallery path {gallery_path!r}; Edit/Input Image/Favorite would stay hidden"
+        f"gate rejects the real gallery path {gallery_path!r}; Edit/Favorite would stay hidden"
     )
     # The rooted form returned by POST /image/edit must match too.
     assert predicate.search("/" + gallery_path)
@@ -279,19 +314,20 @@ def test_output_source_gate_accepts_the_real_gallery_path_shape():
     assert body, "the typeof-string guard is gone; isOutputImageSrc(undefined) would throw"
 
 
-def test_output_source_gate_drives_edit_and_input_image_visibility():
-    # The buttons must be wired to the shared helper, not an inline substring test.
+def test_output_source_gate_drives_edit_visibility():
+    # The button must be wired to the shared helper, not an inline substring test.
     assert "const isOutput = isOutputImageSrc(" in LIGHTBOX
     assert "editBtn.style.display = isOutput" in LIGHTBOX
-    assert "inputBtn.style.display = isOutput" in LIGHTBOX
     # Ignore comments: the helper's docblock names the old bug it replaced.
     code = re.sub(r"/\*.*?\*/", "", LIGHTBOX, flags=re.S)
     code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
     assert "includes('/outputs/')" not in code, (
         "the old substring gate is back and will hide the buttons for gallery images"
     )
-    # The handler reads the full-size source, not the thumbnail.
-    assert "originalSrc || curr?.src" in LIGHTBOX
+    # The Inpaint handler reads the full-size source, not the thumbnail, so removing
+    # the old "Input Image" button did not regress the resolution it preferred.
+    inpaint_handler = LIGHTBOX.split("listen(byId('lightbox-inpaint')")[1].split("listen(")[0]
+    assert "originalSrc || curr?.src" in inpaint_handler
 
 
 def _rule_body(css, selector):
@@ -322,9 +358,9 @@ def test_editing_dismisses_the_lightbox_before_opening_the_editor():
     assert "pswp.close()" in handler, (
         "the Edit handler must close PhotoSwipe first, or the editor renders behind the lightbox"
     )
-    # Mirror the Input Image handler, which already dismissed the lightbox.
+    # Mirror the Inpaint handler, which also dismisses the lightbox first.
     assert "this.currentPswpInstance.pswp.close();" in LIGHTBOX.split(
-        "listen(byId('lightbox-input-image')"
+        "listen(byId('lightbox-inpaint')"
     )[1].split("listen(")[0]
 
 
@@ -350,3 +386,123 @@ def test_editor_overlay_stacks_above_photoswipe_but_below_modals():
     assert editor_z > max(docked), (
         f"editor z-index {editor_z} is under the docked lightbox info panel {max(docked)}"
     )
+
+
+def _sized_functions_source() -> str:
+    """Slice the real rounding helpers out of ImageEditor.js.
+
+    ``roundTo`` and ``snapPairPreservingAspect`` are contiguous module-level
+    functions, so the shipped source can be executed as-is rather than
+    reimplemented (a reimplementation would only assert the test's own logic).
+    """
+    start = EDITOR.index("function roundTo(value, step) {")
+    end = EDITOR.index("function readFileAsImage(url) {")
+    return EDITOR[start:end]
+
+
+def test_snap_to_eight_no_longer_rounds_each_axis_independently():
+    """Regression: independent rounding stretched the crop.
+
+    ``width`` and ``height`` were each rounded to the nearest multiple of 8, so a
+    260x170 crop exported as 264x168 and ``drawImage`` stretched it 2.75% off its
+    true aspect ratio.
+    """
+    body = EDITOR[EDITOR.index("    outputSize() {"):EDITOR.index("    async renderExport(")]
+    assert "snapPairPreservingAspect(width, height, crop.width / crop.height)" in body
+    assert "width = Math.max(8, roundTo(width, 8))" not in body, (
+        "rounding each axis independently distorts the aspect ratio"
+    )
+    assert "height = Math.max(8, roundTo(height, 8))" not in body
+    # The aspect handed to the helper must be the crop's, not the output's.
+    assert "crop.width / crop.height" in body
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_snap_pair_keeps_the_aspect_ratio_and_never_worsens_it():
+    """Execute the shipped helper and assert the properties the UI depends on."""
+    script = f"""
+{_sized_functions_source()}
+const out = [];
+for (let w = 8; w <= 512; w++) {{
+  for (let h = 8; h <= 512; h++) {{
+    const aspect = w / h;
+    const naive = {{ width: Math.max(8, roundTo(w, 8)), height: Math.max(8, roundTo(h, 8)) }};
+    const s = snapPairPreservingAspect(w, h, aspect);
+    out.push([w, h, s.width, s.height, naive.width, naive.height]);
+  }}
+}}
+console.log(JSON.stringify(out));
+"""
+    proc = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = json.loads(proc.stdout)
+    assert rows, "helper produced no samples"
+
+    for w, h, sw, sh, nw, nh in rows:
+        aspect = w / h
+        assert sw % 8 == 0 and sh % 8 == 0, f"{w}x{h} -> {sw}x{sh} is not divisible by 8"
+        new_err = abs((sw / sh) / aspect - 1)
+        naive_err = abs((nw / nh) / aspect - 1)
+        assert new_err <= naive_err + 1e-12, (
+            f"{w}x{h}: {sw}x{sh} distorts {new_err:.4%}, worse than naive {naive_err:.4%}"
+        )
+
+    by_crop = {(w, h): (sw, sh) for w, h, sw, sh, _nw, _nh in rows}
+    # Already-valid sizes are left exactly alone (no needless 1024 -> 1016).
+    assert by_crop[(512, 512)] == (512, 512)
+    # The reported case: 2.75% off before, 0.37% off now.
+    assert by_crop[(264, 168)] == (264, 168)
+    assert by_crop[(256, 168)] == (256, 168)
+
+
+def test_flatten_sessions_prefers_per_image_dims_over_run_meta():
+    """Regression: every image in a run inherited the run's dimensions.
+
+    ``/gallery`` returns one ``meta.json`` per run, and the edit is stored as an extra
+    file in that same run. Flattening stamped ``meta.width``/``meta.height`` onto all of
+    them, so the edited pixels were laid out at the *generated* image's aspect ratio and
+    rendered stretched in both the tile and the lightbox.
+    """
+    body = GALLERY[GALLERY.index("    flattenSessions(sessions) {"):]
+    body = body[:body.index("\n    }")]
+    assert "session.dims || {}" in body, "the per-image dims map is ignored"
+    assert "width: Number(own?.[0] || meta.width || 1024)" in body
+    assert "height: Number(own?.[1] || meta.height || 1024)" in body
+    assert "width: Number(meta.width || 1024)" not in body, (
+        "images are back to inheriting the run's dimensions"
+    )
+
+
+def test_save_copy_reports_the_exported_size_to_on_saved():
+    """The lightbox must know the saved copy's real size, not the source's."""
+    save = EDITOR[EDITOR.index("    async save() {"):]
+    save = save[:save.index("\n    }")]
+    assert "const exported = this.outputSize();" in save
+    assert "this.callbacks.onSaved({ path: newPath, width: exported.width," in save
+    # The size has to be read before close() resets the editor state.
+    assert save.index("this.outputSize()") < save.index("this.close()")
+
+
+def test_saved_copy_opens_in_the_lightbox():
+    APP = (ROOT / "ui" / "app_main.js").read_text(encoding="utf-8")
+    handler = APP[APP.index("function handleEditedImageSaved(saved) {"):]
+    handler = handler[:handler.index("\n}\n")]
+    # The gallery must be refreshed (and awaited) before the lightbox opens, or the
+    # new copy would not be in the grid yet.
+    assert "refreshLatest()" in handler
+    assert "Promise.resolve(refreshed).then(() => openSavedEditInLightbox(info))" in handler
+    assert "function openSavedEditInLightbox(info = {}) {" in APP
+
+    opener = APP[APP.index("function openSavedEditInLightbox(info = {}) {"):]
+    opener = opener[:opener.index("\n}\n")]
+    # Reuse the gallery tile so the lightbox gets full session metadata and index.
+    assert '.image-item[data-src=' in opener
+    assert "tile.click();" in opener
+    # Normalise the server's rooted path to the web path the tiles use.
+    assert "replace(/^\\/+/, '')" in opener
+    # Fallback slide must carry the exported size, not a guess.
+    assert "width: Number(width) || 1024" in opener
+    assert "height: Number(height) || 1024" in opener
+    assert "msrc: `/thumbs/${webPath}`" in opener

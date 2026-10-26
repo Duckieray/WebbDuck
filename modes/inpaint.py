@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -395,6 +396,25 @@ def _composite_masked_update(base_image, updated_image, mask_image):
     )
 
 
+def _effective_refine_steps(requested_steps, strength, min_effective_steps: int = 2) -> int:
+    """Clamp a seam-refine pass so diffusers always runs at least one real step.
+
+    Diffusers derives the denoise loop length as ``int(num_inference_steps *
+    strength)``, so a low step count combined with a low ``strength`` floors to
+    zero and the pipeline raises ``ValueError: ... number of pipeline steps is 0
+    which is < 1``. Seam-refine passes intentionally use low step counts and low
+    strengths, which makes the combination easy to hit by accident: 6 refine
+    steps at strength 0.16 gives ``int(0.96) == 0``.
+
+    Solve for the smallest step count whose floored product still clears the
+    floor, and never return less than the requested amount.
+    """
+    steps = max(1, int(requested_steps))
+    strength = max(1e-3, float(strength))
+    needed = int(math.ceil(min_effective_steps / strength))
+    return max(steps, needed)
+
+
 def _inject_clip_skip(kwargs: dict, settings: dict) -> dict:
     """Inject clip_skip only when explicitly enabled (CLIP_SKIP2)."""
     raw = settings.get("clip_skip")
@@ -529,7 +549,6 @@ class InpaintMode(GenerationMode):
         # Apply Mask Blur / Feathering
         mask_blur = int(settings.get("mask_blur", 0))
         if mask_blur > 0:
-            from PIL import ImageFilter
             log.info(f"Applying mask blur: {mask_blur}")
             mask_image = mask_image.filter(ImageFilter.GaussianBlur(mask_blur))
 
@@ -685,7 +704,7 @@ class InpaintMode(GenerationMode):
                         stage_raw = base_inpaint(**_inject_clip_skip(
                                 inject_prompt_conditioning_kwargs(
                                     stage_kwargs,
-                                    active_pipe=base_inpaint,
+                                    active_pipe=original_base_inpaint,
                                     embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
@@ -718,16 +737,21 @@ class InpaintMode(GenerationMode):
                             and len(stage_out) > 0
                             and (not is_final or refine_final_stage)
                         ):
-                            stage_refine_steps = max(
-                                8 if is_final else 6,
-                                int(stage_steps * (0.45 if is_final else 0.30)),
-                            )
                             stage_refine_strength = max(
                                 0.16 if is_final else 0.08,
                                 min(
                                     0.24 if is_final else 0.16,
                                     float(refine_strength_base) * (0.72 if is_final else 0.58),
                                 ),
+                            )
+                            # Low step counts and low strengths floor to zero inside
+                            # diffusers, so derive the smallest safe step count.
+                            stage_refine_steps = _effective_refine_steps(
+                                max(
+                                    8 if is_final else 6,
+                                    int(stage_steps * (0.45 if is_final else 0.30)),
+                                ),
+                                stage_refine_strength,
                             )
                             seam_mask = _build_stage_refine_mask(
                                 stage_img.size,
@@ -762,7 +786,7 @@ class InpaintMode(GenerationMode):
                             stage_refined = base_inpaint(**_inject_clip_skip(
                                 inject_prompt_conditioning_kwargs(
                                     refine_kwargs,
-                                    active_pipe=base_inpaint,
+                                    active_pipe=original_base_inpaint,
                                     embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
@@ -978,6 +1002,7 @@ class InpaintMode(GenerationMode):
                         "strategy": "chunked_two_stage_then_seam" if use_chunked_two_stage else "full_canvas_then_seam",
                         "repeat_seed_initializer": str(settings.get("smart_extend_repeat_seed_initializer", "none")),
                         "repeat_passes": int(repeat_passes),
+                        "num_inference_steps": int(num_inference_steps),
                         "repeat_strength": float(repeat_strength),
                         "repeat_cfg": float(repeat_cfg),
                         "repeat_seam_strength": float(repeat_seam_strength),
@@ -1073,7 +1098,7 @@ class InpaintMode(GenerationMode):
                         raw = base_inpaint(**_inject_clip_skip(
                             inject_prompt_conditioning_kwargs(
                                 pass_kwargs,
-                                active_pipe=base_inpaint,
+                                active_pipe=original_base_inpaint,
                                                 embeddings_active=bool(settings.get("embeddings")),
                                 builder=build_sdxl_conditioning_dispatch,
                                 cache=conditioning_cache,
@@ -1096,6 +1121,7 @@ class InpaintMode(GenerationMode):
                             "pass_mask_mode": "intermediate_outpaint",
                             "repeat_cfg": float(repeat_cfg),
                             "pass_guidance_scale": float(s1_cfg),
+                            "num_inference_steps": int(num_inference_steps),
                             "stage_size": [int(stage_img.size[0]), int(stage_img.size[1])],
                             **_debug_mask_leak_stats(stage_img, curr_full, stage_comp_mask),
                         })
@@ -1148,7 +1174,7 @@ class InpaintMode(GenerationMode):
                         raw = base_inpaint(**_inject_clip_skip(
                             inject_prompt_conditioning_kwargs(
                                 pass_kwargs,
-                                active_pipe=base_inpaint,
+                                active_pipe=original_base_inpaint,
                                                 embeddings_active=bool(settings.get("embeddings")),
                                 builder=build_sdxl_conditioning_dispatch,
                                 cache=conditioning_cache,
@@ -1172,6 +1198,7 @@ class InpaintMode(GenerationMode):
                             "pass_mask_mode": "chunk_to_final",
                             "repeat_cfg": float(repeat_cfg),
                             "pass_guidance_scale": float(s2_cfg),
+                            "num_inference_steps": int(num_inference_steps),
                             "stage_size": [int(stage_img.size[0]), int(stage_img.size[1])],
                             **_debug_mask_leak_stats(stage_img, curr_full, stage_comp_mask),
                         })
@@ -1213,7 +1240,7 @@ class InpaintMode(GenerationMode):
                             raw = base_inpaint(**_inject_clip_skip(
                                 inject_prompt_conditioning_kwargs(
                                     pass_kwargs,
-                                    active_pipe=base_inpaint,
+                                    active_pipe=original_base_inpaint,
                                     embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
@@ -1235,6 +1262,7 @@ class InpaintMode(GenerationMode):
                                 "pass_mask_mode": "seam_refine",
                                 "repeat_cfg": float(repeat_cfg),
                                 "pass_guidance_scale": float(seam_cfg),
+                            "num_inference_steps": int(num_inference_steps),
                                 **_debug_mask_leak_stats(curr_full, composited, repeat_seam_mask),
                             })
                             mask_np = np.array(repeat_seam_mask.convert("L"), dtype=np.uint8)
@@ -1295,7 +1323,7 @@ class InpaintMode(GenerationMode):
                             raw = base_inpaint(**_inject_clip_skip(
                                 inject_prompt_conditioning_kwargs(
                                     pass_kwargs,
-                                    active_pipe=base_inpaint,
+                                    active_pipe=original_base_inpaint,
                                     embeddings_active=bool(settings.get("embeddings")),
                                     builder=build_sdxl_conditioning_dispatch,
                                     cache=conditioning_cache,
@@ -1320,6 +1348,7 @@ class InpaintMode(GenerationMode):
                                 "pass_mask_mode": pass_mask_mode,
                                 "repeat_cfg": float(repeat_cfg),
                                 "pass_guidance_scale": float(pass_guidance_scale),
+                            "num_inference_steps": int(num_inference_steps),
                                 **_debug_mask_leak_stats(curr_full, composited, pass_mask),
                             })
 
@@ -1348,6 +1377,9 @@ class InpaintMode(GenerationMode):
                 _debug_log_event(debug_session, {
                     "type": "repeat_mode_fallback_single",
                     "reason": "repeat_passes<=1",
+                    "num_inference_steps": int(num_inference_steps),
+                    "strength": float(strength),
+                    "guidance_scale": float(guidance_scale),
                 })
 
         if out is None:
@@ -1425,7 +1457,10 @@ class InpaintMode(GenerationMode):
                 if not bool(settings.get("smart_extend_auto_step", True)):
                     target_cleanup_strength = min(target_cleanup_strength, 0.45)
                 refine_strength = max(0.12, min(0.75, target_cleanup_strength))
-                refine_steps = max(10, int(num_inference_steps * 0.45))
+                refine_steps = _effective_refine_steps(
+                    max(10, int(num_inference_steps * 0.45)),
+                    refine_strength,
+                )
 
                 refined = []
                 base_seed = generator.initial_seed()
@@ -1452,7 +1487,7 @@ class InpaintMode(GenerationMode):
                     res = base_inpaint(**_inject_clip_skip(
                         inject_prompt_conditioning_kwargs(
                             refine_kwargs,
-                            active_pipe=base_inpaint,
+                            active_pipe=original_base_inpaint,
                                         embeddings_active=bool(settings.get("embeddings")),
                             builder=build_sdxl_conditioning_dispatch,
                             cache=conditioning_cache,

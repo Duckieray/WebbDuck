@@ -29,6 +29,7 @@ from server.storage import (
     remove_manifest_run,
     update_manifest_variant,
     favorite_map,
+    manifest_image_dims,
     set_favorite,
     remove_favorite_image,
     remove_favorite_run,
@@ -93,7 +94,11 @@ CATALOG_POLL_SECONDS = max(1.0, float(os.getenv("WEBBDUCK_CATALOG_POLL_SECONDS",
 IDLE_UNLOAD_SECONDS = max(30.0, float(os.getenv("WEBBDUCK_IDLE_UNLOAD_SECONDS", "300.0")))
 SMART_EXTEND_FEATHER_DEFAULT = 12
 SMART_EXTEND_STEP_GROWTH_DEFAULT = 1.25
-SMART_EXTEND_AUTO_STEP_DEFAULT = False
+# Auto step grows the canvas in stages so each new strip is generated beside real
+# detail from the previous stage. It is slower than one big pass but avoids the
+# single fabricated context region that a full-canvas pass has to invent from, so
+# it is the default whenever smart extend/outpainting is used.
+SMART_EXTEND_AUTO_STEP_DEFAULT = True
 SMART_EXTEND_REFINE_DEFAULT = True
 SMART_EXTEND_REFINE_EACH_STEP_DEFAULT = True
 SMART_EXTEND_REFINE_WIDTH_DEFAULT = 64
@@ -737,7 +742,25 @@ def reload_plugin_route(plugin_id: str):
     return {"reloaded": True, "id": plugin.plugin_id, "name": plugin.name}
 
 
-app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static assets as ``no-cache`` (revalidate, but keep a 304 path).
+
+    WebbDuck ships unversioned ES-module imports (``app.js?v=...`` only busts the
+    entry script, while ``app.js`` imports ``./modules/*.js`` with no query), so a
+    browser can keep running an old module after an update. That silently hides
+    UI features: a phone holding a pre-fix ``LightboxManager.js`` still used the
+    old ``/outputs/`` path check and never showed the Edit button, while a
+    hard-refreshed desktop did. ``no-cache`` still allows cheap 304s, so updates
+    always land without giving up conditional requests.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/ui", NoCacheStaticFiles(directory=str(Path(__file__).parent.parent / "ui")), name="ui")
 
 # Mount dynamic output directory
 from server.storage import BASE
@@ -1332,6 +1355,17 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
         if not imgs:
             continue
 
+        # Run-level meta describes the generated image only. Edits saved into the same
+        # run have different pixel sizes, so publish each image's own recorded size and
+        # let the client prefer it; otherwise an edited image is laid out at the
+        # original's aspect ratio and renders stretched.
+        manifest_dims = manifest_image_dims()
+        dims = {}
+        for web_path in imgs:
+            size = manifest_dims.get(web_path)
+            if size:
+                dims[Path(web_path).name] = [size[0], size[1]]
+
         if valid_seen < bounded_start:
             valid_seen += 1
             continue
@@ -1339,6 +1373,7 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
         out.append({
             "run": r.name,
             "images": imgs,
+            "dims": dims,
             "variants": variants,
             "favorites": {Path(p).name: True for p in imgs if favorites.get(p)},
             "meta": meta

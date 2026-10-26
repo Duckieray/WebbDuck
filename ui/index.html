@@ -386,7 +386,7 @@
                         <input class="slider" type="range" id="smart-extend-feather" min="0" max="64" step="1" value="12" />
                       </div>
                       <label class="toggle-row" for="smart-extend-auto-step">
-                        <input type="checkbox" id="smart-extend-auto-step" />
+                        <input type="checkbox" id="smart-extend-auto-step" checked />
                         <span>Auto Step Outpaint</span>
                       </label>
                       <div class="form-group">
@@ -488,7 +488,7 @@
                     <line x1="3" y1="21" x2="10" y2="14"></line>
                   </svg>
                 </button>
-                <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" type="button" title="Send to Inpaint" aria-label="Inpaint">
+                <button class="btn btn-secondary btn-icon btn-sm" id="preview-inpaint" type="button" title="Use as Input Image" aria-label="Use as Input Image">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
                     <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
@@ -651,8 +651,8 @@
       <button id="lightbox-stage" class="btn btn-secondary btn-sm" type="button">Stage Settings</button>
       <button id="lightbox-upscale" class="btn btn-secondary btn-sm" type="button">Upscale</button>
       <button id="lightbox-edit" class="btn btn-secondary btn-sm" type="button" style="display:none;">Edit</button>
+      <!-- Loads the image into the Studio input slot (img2img; mask after for inpaint). -->
       <button id="lightbox-inpaint" class="btn btn-secondary btn-sm" type="button">Inpaint</button>
-      <button id="lightbox-input-image" class="btn btn-secondary btn-sm" type="button" style="display:none;">Input Image</button>
       <button id="lightbox-duckmotion" class="btn btn-secondary btn-sm hidden" type="button">DuckMotion</button>
       <button id="lightbox-favorite" class="btn btn-secondary btn-sm" type="button">Favorite</button>
       <button id="lightbox-download" class="btn btn-secondary btn-sm" type="button">Download</button>

@@ -161,6 +161,30 @@ class TestUIEndpoint:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
+    def test_ui_assets_must_revalidate(self, client):
+        """Regression: phones kept running stale UI modules and lost features.
+
+        ``index.html`` only cache-busts the entry script (``/ui/app.js?v=...``), while
+        the app imports ``./modules/*.js`` with no query, so a browser could keep
+        serving a pre-update ``LightboxManager.js``. That silently hid the Edit
+        button on mobile (the old gate required a leading ``/outputs/``) even though a
+        hard-refreshed desktop showed it. Code assets must be revalidated.
+        """
+        for path in ("/ui/index.html", "/ui/app_main.js", "/ui/modules/LightboxManager.js"):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert response.headers.get("Cache-Control") == "no-cache", (
+                f"{path} is served without no-cache, so updates may not reach the browser"
+            )
+
+    def test_ui_assets_still_support_conditional_requests(self, client):
+        """no-cache must not disable the cheap 304 path."""
+        first = client.get("/ui/app_main.js")
+        etag = first.headers.get("etag")
+        assert etag, "assets need an ETag for revalidation to be cheap"
+        again = client.get("/ui/app_main.js", headers={"If-None-Match": etag})
+        assert again.status_code == 304
+
 
 class TestGalleryEndpoint:
     """Test gallery endpoint."""

@@ -146,7 +146,15 @@ def store_edited_upload(source: Path, data: bytes, ops: dict | None = None) -> P
 
     dest = allocate_edit_path(source)
     _atomic_save(converted, dest)
-    _register_edited(dest, _edited_meta(source, ops))
+
+    meta = _edited_meta(source, ops)
+    # The edit changes the pixel dimensions, so the width/height inherited from the
+    # run's meta.json no longer describe this file. The gallery builds each tile's
+    # aspect ratio from these values, so leaving the source dimensions in place
+    # renders the edited PNG stretched. Record the real size, the same way the
+    # input-upscale path does.
+    meta["width"], meta["height"] = converted.size
+    _register_edited(dest, meta)
     return dest
 
 

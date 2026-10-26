@@ -24,7 +24,7 @@ const SMART_EXTEND_MAX_AREA = SMART_EXTEND_MAX_RESOLUTION.width * SMART_EXTEND_M
 const SMART_EXTEND_FIXED = Object.freeze({
     feather: 12,
     stepGrowth: 1.25,
-    autoStep: false,
+    autoStep: true,
     refine: true,
     refineEachStep: true,
     refineWidth: 64,
@@ -757,7 +757,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.lightboxManager = new LightboxManager({
             onUpscale: (src, cb) => startUpscale(src, cb),
             onInpaint: (src) => sendToInpaint(src),
-            onUseAsInput: (src) => sendToInputImage(src),
             onEdit: (payload) => openImageEditor(payload),
             onDuckMotion: (src, curr) => sendToDuckMotion(src, curr),
             onRegenerate: handleRegenerateFromLightbox,
@@ -2523,7 +2522,7 @@ function setupPreviewToolbar() {
     listen(byId('preview-inpaint'), 'click', () => {
         const img = byId('preview-image');
         if (!img?.src) return;
-        sendToInpaint(img.src);
+        sendToInputImage(img.src);
     });
 
     listen(byId('preview-duckmotion'), 'click', async () => {
@@ -2651,10 +2650,49 @@ function openImageEditor(payload = {}) {
     });
 }
 
-function handleEditedImageSaved(newPath) {
+function handleEditedImageSaved(saved) {
+    const info = typeof saved === 'string' ? { path: saved } : (saved || {});
     window.galleryManager?.invalidateFilterCache();
-    window.galleryManager?.refreshLatest();
-    if (newPath) emit(Events.IMAGE_GENERATED, { path: newPath });
+    // The new copy has to exist in the gallery before the lightbox can show it, so let
+    // the refresh settle first. refreshLatest() swallows its own failures.
+    const refreshed = window.galleryManager?.refreshLatest() || Promise.resolve();
+    if (info.path) emit(Events.IMAGE_GENERATED, { path: info.path });
+    Promise.resolve(refreshed).then(() => openSavedEditInLightbox(info));
+}
+
+/**
+ * Open the lightbox on the copy that was just saved, so the edit is what the user is
+ * left looking at instead of having to hunt for it in the grid.
+ */
+function openSavedEditInLightbox(info = {}) {
+    const { path, width, height } = info;
+    if (!path || !window.lightboxManager) return;
+
+    const webPath = String(path).replace(/^\/+/, '');
+
+    // Prefer the freshly rendered tile and reuse the gallery's own click path: the
+    // lightbox then inherits full session metadata, the correct index, and working
+    // next/prev navigation, exactly as clicking the image by hand would.
+    const tile = document.querySelector(`.image-item[data-src="${CSS.escape(webPath)}"]`);
+    if (tile && !window.galleryManager?.selectionMode) {
+        tile.click();
+        return;
+    }
+
+    // No tile (gallery not rendered, or selection mode is on): fall back to a minimal
+    // slide so the new copy still opens rather than the save appearing to do nothing.
+    window.lightboxManager.open([{
+        src: webPath,
+        width: Number(width) || 1024,
+        height: Number(height) || 1024,
+        msrc: `/thumbs/${webPath}`,
+        alt: webPath.split('/').pop() || '',
+        meta: { width: Number(width) || undefined, height: Number(height) || undefined },
+        originalSrc: webPath,
+        variant: null,
+        isShowingVariant: true,
+        isFavorite: false,
+    }], 0);
 }
 
 async function handleRegenerateFromLightbox(curr) {

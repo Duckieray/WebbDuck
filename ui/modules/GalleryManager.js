@@ -316,15 +316,21 @@ export class GalleryManager {
             const variants = session.variants || {};
             const favorites = session.favorites || {};
             const meta = session.meta || {};
+            // Per-image recorded sizes, keyed by filename. A run shares one meta.json,
+            // so meta.width/height only describe the generated image; an edit saved
+            // into the same run has different pixels and must use its own size or the
+            // tile and the lightbox lay it out at the wrong aspect ratio (stretched).
+            const dims = session.dims || {};
             const prompt = meta.prompt || session.prompt || 'No prompt';
             const timestamp = Number(meta.timestamp || session.timestamp || Date.now() / 1000);
 
             images.forEach((imgPath, idx) => {
                 const filename = (imgPath || '').split('/').pop() || '';
+                const own = dims[filename];
                 flat.push({
                     src: imgPath,
-                    width: Number(meta.width || 1024),
-                    height: Number(meta.height || 1024),
+                    width: Number(own?.[0] || meta.width || 1024),
+                    height: Number(own?.[1] || meta.height || 1024),
                     variant: variants[filename] || null,
                     favorite: Boolean(favorites[filename]),
                     prompt,

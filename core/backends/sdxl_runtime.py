@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import torch
+import os
 import random
 import logging
 from PIL import Image, ImageOps, ImageStat, ImageFilter
@@ -9,9 +10,10 @@ from PIL import Image, ImageOps, ImageStat, ImageFilter
 from core.backends.sdxl_pipeline import pipeline_manager
 from core.captioner import unload_captioners
 from core.exceptions import GenerationCancelledError
+from core.image_operations import build_smart_extend_inputs
 from core.perf import reset_metrics, snapshot_metrics, stage_timer
 from modes import select_mode
-from modes.inpaint import _build_step_fractions, _auto_repeat_passes
+from modes.inpaint import _build_step_fractions, _auto_repeat_passes, _effective_refine_steps
 from server.state import update_progress
 
 log = logging.getLogger(__name__)
@@ -109,9 +111,20 @@ def estimate_total_steps(settings):
                 )
                 per_image_total += stage_steps
                 if refine_enabled and refine_each and (not is_final or refine_final_stage):
-                    per_image_total += max(
-                        8 if is_final else 6,
-                        int(stage_steps * (0.45 if is_final else 0.30)),
+                    refine_strength = max(
+                        0.16 if is_final else 0.08,
+                        min(
+                            0.24 if is_final else 0.16,
+                            float(settings.get("smart_extend_refine_strength", 0.28))
+                            * (0.72 if is_final else 0.58),
+                        ),
+                    )
+                    per_image_total += _effective_refine_steps(
+                        max(
+                            8 if is_final else 6,
+                            int(stage_steps * (0.45 if is_final else 0.30)),
+                        ),
+                        refine_strength,
                     )
             total = per_image_total * batch_count
             if refine_enabled and bool(settings.get("smart_extend_post_refine", False)):
@@ -202,30 +215,6 @@ def _normalize_dim8(value, fallback=1024) -> int:
     return max(8, int(round(float(n) / 8.0) * 8))
 
 
-def _anchor_offset(anchor: str, src_w: int, src_h: int, dst_w: int, dst_h: int) -> tuple[int, int]:
-    dx = max(0, dst_w - src_w)
-    dy = max(0, dst_h - src_h)
-    anchor = (anchor or "center").lower()
-
-    if anchor == "top":
-        return dx // 2, 0
-    if anchor == "bottom":
-        return dx // 2, dy
-    if anchor == "left":
-        return 0, dy // 2
-    if anchor == "right":
-        return dx, dy // 2
-    if anchor == "top_left":
-        return 0, 0
-    if anchor == "top_right":
-        return dx, 0
-    if anchor == "bottom_left":
-        return 0, dy
-    if anchor == "bottom_right":
-        return dx, dy
-    return dx // 2, dy // 2
-
-
 def _build_smart_extend_inputs(
     input_image: Image.Image,
     existing_mask: Image.Image | None,
@@ -235,69 +224,28 @@ def _build_smart_extend_inputs(
     feather_px: int = 8,
     offset_x: int | None = None,
     offset_y: int | None = None,
+    initializer: str = "noise",
 ) -> tuple[Image.Image, Image.Image, dict]:
-    src_w, src_h = input_image.size
-    dst_w = max(src_w, int(target_w))
-    dst_h = max(src_h, int(target_h))
+    # Kept as a compatibility seam for tests and existing imports. New backends
+    # use the architecture-neutral helper directly.
+    if input_image.size == (int(target_w), int(target_h)) and existing_mask is not None:
+        return input_image, existing_mask, {
+            "x": 0,
+            "y": 0,
+            "w": input_image.width,
+            "h": input_image.height,
+        }
+    return build_smart_extend_inputs(
+        input_image,
+        target_w,
+        target_h,
+        anchor,
+        feather_px,
+        offset_x,
+        offset_y,
+        initializer,
+    )
 
-    if (dst_w, dst_h) == (src_w, src_h) and existing_mask is not None:
-        return input_image, existing_mask, {"x": 0, "y": 0, "w": src_w, "h": src_h}
-
-    if offset_x is None or offset_y is None:
-        x, y = _anchor_offset(anchor, src_w, src_h, dst_w, dst_h)
-    else:
-        max_x = max(0, dst_w - src_w)
-        max_y = max(0, dst_h - src_h)
-        x = max(0, min(max_x, int(offset_x)))
-        y = max(0, min(max_y, int(offset_y)))
-
-    # Build a context-aware extension initializer.
-    # We keep it very blurred to transfer color/lighting context without hard structure duplication.
-    top = input_image.crop((0, 0, src_w, 1))
-    bottom = input_image.crop((0, src_h - 1, src_w, src_h))
-    left = input_image.crop((0, 0, 1, src_h))
-    right = input_image.crop((src_w - 1, 0, src_w, src_h))
-    border_strip = Image.new("RGB", (src_w * 2 + src_h * 2, 1))
-    cursor = 0
-    for seg in (top, bottom, left.resize((src_h, 1)), right.resize((src_h, 1))):
-        w = seg.width
-        border_strip.paste(seg.resize((w, 1)), (cursor, 0))
-        cursor += w
-    mean = ImageStat.Stat(border_strip).mean
-    fill_rgb = tuple(int(max(0, min(255, round(v)))) for v in mean[:3])
-    flat = Image.new("RGB", (dst_w, dst_h), fill_rgb)
-    context = ImageOps.fit(input_image, (dst_w, dst_h), method=Image.LANCZOS)
-    blur_radius = max(16, min(120, int(min(dst_w, dst_h) * 0.055)))
-    context = context.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-    expanded = Image.blend(flat, context, 0.75)
-    expanded.paste(input_image, (x, y))
-
-    # White = repaint area, black = keep source area.
-    # Start by preserving the full original region.
-    smart_mask = Image.new("L", (dst_w, dst_h), 255)
-    keep_full = Image.new("L", (src_w, src_h), 0)
-    smart_mask.paste(keep_full, (x, y))
-
-    # Repaint only a thin seam strip on sides that actually touch extension area.
-    # Keep this conservative to avoid anatomy drift; heavy blending is handled in final composite.
-    user_feather = max(0, min(64, int(feather_px)))
-    blend_px = max(2, min(12, 2 + (user_feather // 4)))
-
-    if x > 0:
-        smart_mask.paste(255, (x, y, min(dst_w, x + blend_px), y + src_h))
-    if (x + src_w) < dst_w:
-        smart_mask.paste(255, (max(x, x + src_w - blend_px), y, x + src_w, y + src_h))
-    if y > 0:
-        smart_mask.paste(255, (x, y, x + src_w, min(dst_h, y + blend_px)))
-    if (y + src_h) < dst_h:
-        smart_mask.paste(255, (x, max(y, y + src_h - blend_px), x + src_w, y + src_h))
-
-    # For smart extend/outpaint, keep the original region fully protected.
-    # Only newly added canvas area should be repainted.
-    # (User interior mask edits should use regular inpaint mode.)
-    _ = existing_mask
-
-    return expanded, smart_mask, {"x": x, "y": y, "w": src_w, "h": src_h}
 
 
 def run_generation(settings, cancel_event=None):
@@ -376,6 +324,11 @@ def run_generation(settings, cancel_event=None):
 
         if settings.get("smart_extend"):
             anchor = settings.get("smart_extend_anchor", "center")
+            smart_extend_initializer = str(
+                os.environ.get("WEBBDUCK_SMART_EXTEND_INITIALIZER")
+                or settings.get("smart_extend_initializer")
+                or "noise"
+            )
             pil_image, smart_mask, source_box = _build_smart_extend_inputs(
                 pil_image,
                 mask_pil,
@@ -385,7 +338,9 @@ def run_generation(settings, cancel_event=None):
                 settings.get("smart_extend_feather", 8),
                 settings.get("smart_extend_offset_x"),
                 settings.get("smart_extend_offset_y"),
+                smart_extend_initializer,
             )
+            settings["smart_extend_initializer"] = smart_extend_initializer
             settings["width"], settings["height"] = pil_image.size
             settings["inpainting_fill"] = "replace"
             # Smart extend should preserve the source crop edge; avoid over-blurring the auto-mask.

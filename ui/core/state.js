@@ -33,16 +33,27 @@ const DEFAULT_STATE = {
     smartExtendAdvanced: false,
     smartExtendAnchor: 'center',
     smartExtendFeather: 12,
-    smartExtendAutoStep: false,
+    smartExtendAutoStep: true,
     smartExtendStepGrowth: 1.25,
     smartExtendRefine: true,
     smartExtendRefineEachStep: true,
     smartExtendRefineWidth: 64,
     smartExtendRefineStrength: 0.32,
     smartExtendPyramidTriggerRatio: 2.4,
+    // Bumped when a smart-extend default changes so existing sessions are migrated
+    // onto the new default instead of keeping the stale persisted value forever.
+    smartExtendDefaultsVersion: 2,
     smartExtendOffsetX: null,
     smartExtendOffsetY: null,
     clipSkip2: false,
+    vaeDecoder: 'stock', // 'stock' | 'realism' (models advertising realism_decoder)
+    vaeDecoderOutput: 'requested', // 'requested' | '2x'
+    faceDetailerEnabled: false, // Advanced override; auto-selected otherwise
+    realismMode: 'auto', // 'auto' | 'always' | 'never'
+    faceDetailerStrength: 0.30,
+    faceDetailerMinFacePx: 32,
+    faceDetailerMaxFaces: 3,
+    faceDetailerDetectorPath: '',
     selectedLoras: [],
     selectedEmbeddings: [],
     inpaintMode: 'replace', // 'replace' or 'keep'
@@ -124,6 +135,16 @@ export function initState() {
             });
             if ((parsed.denoisingScaleVersion ?? 1) < 5) {
                 state.denoisingScaleVersion = 5;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            }
+            // Migrate sessions saved before auto-step became the outpaint default.
+            // Without this, a persisted `false` from an older build would keep
+            // overriding the new default on every load, which reads as the
+            // Auto Step Outpaint toggle having no effect at all.
+            const savedSmartExtendVersion = Number(parsed.smartExtendDefaultsVersion ?? 1);
+            if (savedSmartExtendVersion < DEFAULT_STATE.smartExtendDefaultsVersion) {
+                state.smartExtendAutoStep = DEFAULT_STATE.smartExtendAutoStep;
+                state.smartExtendDefaultsVersion = DEFAULT_STATE.smartExtendDefaultsVersion;
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             }
         }
@@ -320,6 +341,14 @@ export function syncFromDOM() {
         smartExtendOffsetX: state.smartExtendOffsetX ?? null,
         smartExtendOffsetY: state.smartExtendOffsetY ?? null,
         clipSkip2: getChecked('clip-skip-2-enabled'),
+        vaeDecoder: getValue('vae_decoder') === 'realism' ? 'realism' : 'stock',
+        vaeDecoderOutput: getValue('vae_decoder_output') === '2x' ? '2x' : 'requested',
+        faceDetailerEnabled: getChecked('face_detailer_enabled'),
+        faceDetailerStrength: parseFloat(getValue('face_detailer_strength')) || 0.30,
+        realismMode: getValue('realism_mode') || 'auto',
+        faceDetailerMinFacePx: parseInt(getValue('face_detailer_min_face_px')) || 32,
+        faceDetailerMaxFaces: parseInt(getValue('face_detailer_max_faces')) || 3,
+        faceDetailerDetectorPath: (getValue('face_detailer_detector_path') || '').trim(),
         identityAdapterEnabled: getChecked('ip-adapter-enabled'),
         identityAdapterType: getValue('ip-adapter-type') || 'faceid_sdxl',
         identityAdapterRefs: parseRefsJson(getValue('ip-adapter-refs-json')),
@@ -354,6 +383,14 @@ export function syncToDOM() {
     setValue('batch', state.batch);
     setValue('long-run-warning-minutes', state.longRunWarningMinutes ?? 8);
     setChecked('clip-skip-2-enabled', Boolean(state.clipSkip2));
+    setValue('vae_decoder', state.vaeDecoder === 'realism' ? 'realism' : 'stock');
+    setValue('vae_decoder_output', state.vaeDecoderOutput === '2x' ? '2x' : 'requested');
+    setChecked('face_detailer_enabled', Boolean(state.faceDetailerEnabled));
+    setValue('face_detailer_strength', state.faceDetailerStrength ?? 0.30);
+    setValue('realism_mode', state.realismMode || 'auto');
+    setValue('face_detailer_min_face_px', state.faceDetailerMinFacePx ?? 32);
+    setValue('face_detailer_max_faces', state.faceDetailerMaxFaces ?? 3);
+    setValue('face_detailer_detector_path', state.faceDetailerDetectorPath || '');
     setValue('base_model', state.baseModel);
     setChecked('second_pass_enabled', state.secondPassEnabled);
     setValue('second_pass_model', state.secondPassModel);

@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from PIL import Image
+
 # Check for custom output directory from environment variable
 custom_out = os.environ.get("WEBBDUCK_OUTPUT_DIR")
 if custom_out:
@@ -21,6 +23,8 @@ FAVORITES_FILE = BASE / "favorites.json"
 _manifest_lock = threading.Lock()
 _manifest_cache: list[dict] | None = None
 _manifest_cache_mtime: float = -1.0
+_dims_cache: dict | None = None
+_dims_cache_mtime: float = -1.0
 _favorites_lock = threading.Lock()
 _favorites_cache: dict[str, bool] | None = None
 _favorites_cache_mtime: float = -1.0
@@ -37,10 +41,14 @@ def to_web_path(path: Path) -> str:
 
 def resolve_web_path(path_str: str) -> Path:
     """Convert web-accessible path to filesystem path."""
-    if "outputs/" in path_str:
-        rel = path_str.split("outputs/", 1)[1]
-        return BASE / rel.lstrip("/")
-    return Path(path_str)
+    raw_path = Path(path_str).expanduser()
+    if path_str.startswith("/outputs/"):
+        return BASE / path_str.removeprefix("/outputs/")
+    if raw_path.is_absolute():
+        return raw_path
+    if path_str.startswith("outputs/"):
+        return BASE / path_str.removeprefix("outputs/")
+    return raw_path
 
 
 def sanitize_settings(settings: dict) -> dict:
@@ -211,11 +219,34 @@ def _sort_image_web_paths(images: list[str]) -> list[str]:
     return sorted(images, key=sort_key)
 
 
+def _recorded_image_size(image_path: Path, meta: dict) -> tuple:
+    """Return an image's real pixel size, preferring the file over the run meta.
+
+    A run's ``meta.json`` describes the *generated* image, and every file in the run
+    inherits it. Gallery edits are stored as extra files in the same run at different
+    dimensions, so trusting the run meta stamps the original's size onto them, and the
+    gallery then lays them out at the wrong aspect ratio (rendered stretched). Reading
+    the file keeps the manifest authoritative and survives a ``rebuild_manifest()``.
+    """
+    try:
+        with Image.open(image_path) as opened:
+            return opened.size
+    except Exception:
+        try:
+            return (int(meta.get("width") or 0), int(meta.get("height") or 0))
+        except Exception:
+            return (0, 0)
+
+
 def _make_manifest_entry(image_path: Path, run_dir: Path, meta: dict) -> dict:
     web_image = to_web_path(image_path)
     variant_path = image_path.with_name(f"{image_path.stem}_upscaled.png")
     variant_web = to_web_path(variant_path) if variant_path.exists() else None
     safe_meta = sanitize_settings(meta)
+    width, height = _recorded_image_size(image_path, safe_meta)
+    if width and height:
+        safe_meta["width"] = width
+        safe_meta["height"] = height
     safe_meta["favorite"] = is_favorite(web_image)
     timestamp = float(safe_meta.get("timestamp", 0.0) or 0.0)
     if timestamp <= 0:
@@ -325,9 +356,11 @@ def _load_manifest_entries_cached() -> list[dict]:
 
 
 def _set_manifest_cache(entries: list[dict]):
-    global _manifest_cache, _manifest_cache_mtime
+    global _manifest_cache, _manifest_cache_mtime, _dims_cache, _dims_cache_mtime
     _manifest_cache = entries
     _manifest_cache_mtime = _manifest_mtime()
+    _dims_cache = None
+    _dims_cache_mtime = -1.0
 
 
 def _write_manifest_entries(entries: list[dict]):
@@ -385,6 +418,92 @@ def append_manifest_entries(image_paths: list[Path], run_dir: Path, meta: dict):
         cached = _load_manifest_entries_cached()
         cached.extend(entries)
         _set_manifest_cache(cached)
+
+
+def repair_manifest_image_dimensions(source_filter: str | None = None) -> dict:
+    """Recompute manifest ``width``/``height`` from the image files on disk.
+
+    Derived images (currently gallery edits) can carry a source run's dimensions
+    even though the pixels were cropped or resized, which makes the gallery
+    render them stretched because each tile's aspect ratio comes from these
+    fields. This rewrites the recorded size to the file's real size.
+
+    Args:
+        source_filter: when given, only entries whose ``meta.source`` matches are
+            considered. ``None`` repairs every entry.
+
+    Returns:
+        ``{"checked": int, "repaired": int, "skipped": int, "changes": [...]}``
+    """
+    entries = _load_manifest_entries_cached()
+    changes: list[tuple[str, tuple, tuple]] = []
+    checked = skipped = 0
+
+    for entry in entries:
+        meta = entry.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        if source_filter is not None and meta.get("source") != source_filter:
+            continue
+        web_path = entry.get("image")
+        if not web_path:
+            continue
+        checked += 1
+        path = resolve_web_path(web_path)
+        try:
+            with Image.open(path) as opened:
+                real = opened.size
+        except Exception:
+            skipped += 1
+            continue
+        current = (meta.get("width"), meta.get("height"))
+        if current == real:
+            continue
+        meta["width"], meta["height"] = real
+        changes.append((web_path, current, real))
+
+    if changes:
+        with _manifest_lock:
+            _write_manifest_entries(entries)
+
+    return {
+        "checked": checked,
+        "repaired": len(changes),
+        "skipped": skipped,
+        "changes": changes,
+    }
+
+
+def manifest_image_dims() -> dict[str, tuple[int, int]]:
+    """Map every manifest image's web path to its own recorded ``(width, height)``.
+
+    A run shares one ``meta.json``, so run-level dimensions describe the *generated*
+    image only. Gallery edits are saved as extra files in the same run at different
+    pixel sizes, and the run meta still reports the original size for them. Callers
+    that need per-image dimensions (the gallery listing, the tile aspect ratio, the
+    lightbox) must use this map instead of the run meta, otherwise an edited image
+    is displayed with the wrong aspect ratio and looks stretched.
+
+    Cached against the manifest mtime so repeated gallery paging stays cheap.
+    """
+    global _dims_cache, _dims_cache_mtime
+    mtime = _manifest_mtime()
+    if _dims_cache is not None and _dims_cache_mtime == mtime:
+        return _dims_cache
+
+    dims: dict[str, tuple[int, int]] = {}
+    for entry in _load_manifest_entries_cached():
+        image = entry.get("image")
+        meta = entry.get("meta")
+        if not image or not isinstance(meta, dict):
+            continue
+        width, height = meta.get("width"), meta.get("height")
+        if isinstance(width, (int, float)) and isinstance(height, (int, float)):
+            dims[image] = (int(width), int(height))
+
+    _dims_cache = dims
+    _dims_cache_mtime = mtime
+    return dims
 
 
 def update_manifest_variant(image_web_path: str, variant_web_path: str):
@@ -514,6 +633,10 @@ def _group_entries_to_sessions(entries: list[dict], start: int = 0, limit: int =
             grouped[run] = {
                 "run": run,
                 "images": [],
+                # Per-image recorded size, keyed by filename. The run meta describes
+                # the generated image only, so edits stored in the same run would
+                # otherwise inherit the wrong aspect ratio.
+                "dims": {},
                 "variants": {},
                 "favorites": {},
                 "meta": entry.get("meta", {}),
@@ -523,6 +646,12 @@ def _group_entries_to_sessions(entries: list[dict], start: int = 0, limit: int =
         web_image = entry.get("image")
         if web_image and web_image not in grouped[run]["images"]:
             grouped[run]["images"].append(web_image)
+
+        entry_meta = entry.get("meta")
+        if web_image and isinstance(entry_meta, dict):
+            width, height = entry_meta.get("width"), entry_meta.get("height")
+            if isinstance(width, (int, float)) and isinstance(height, (int, float)):
+                grouped[run]["dims"][Path(web_image).name] = [int(width), int(height)]
 
         variant = entry.get("variant")
         if variant and web_image:

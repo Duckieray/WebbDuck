@@ -165,6 +165,62 @@ class TestStoreEditedUpload:
         # The run's own metadata is copied, not mutated on disk.
         assert meta["prompt"] == "a cat"
 
+    def test_records_the_edited_size_not_the_source_size(self, monkeypatch, tmp_path, recorded_manifest):
+        """Regression: the manifest inherited the source's width/height.
+
+        The gallery builds each tile's aspect-ratio style from meta.width/meta.height,
+        so a crop saved under the source's dimensions rendered visibly stretched even
+        though the PNG itself was correct.
+        """
+        run = _redirect_output_root(monkeypatch, tmp_path)
+        (run / "meta.json").write_text(
+            json.dumps({"prompt": "a cat", "seed": 7, "width": 1024, "height": 1024}),
+            encoding="utf-8",
+        )
+        source = _make_run_image(run)
+
+        payload = io.BytesIO()
+        Image.new("RGB", (800, 450)).save(payload, "PNG")
+        dest = image_edit.store_edited_upload(source, payload.getvalue(), {"crop": [0, 0, 800, 450]})
+
+        with Image.open(dest) as saved:
+            assert saved.size == (800, 450)
+        assert len(recorded_manifest) == 1
+        _path, meta = recorded_manifest[0]
+        assert meta["width"] == 800
+        assert meta["height"] == 450
+        assert (meta["width"], meta["height"]) == Image.open(dest).size
+        # Inherited prompt/seed lineage is still preserved.
+        assert meta["prompt"] == "a cat"
+        assert meta["seed"] == 7
+
+    def test_records_the_true_size_even_when_source_metadata_has_none(
+        self, monkeypatch, tmp_path, recorded_manifest
+    ):
+        run = _redirect_output_root(monkeypatch, tmp_path)
+        (run / "meta.json").write_text(json.dumps({"prompt": "no dims"}), encoding="utf-8")
+        source = _make_run_image(run)
+
+        payload = io.BytesIO()
+        Image.new("RGB", (123, 45)).save(payload, "PNG")
+        image_edit.store_edited_upload(source, payload.getvalue())
+
+        _path, meta = recorded_manifest[0]
+        assert (meta["width"], meta["height"]) == (123, 45)
+
+    def test_does_not_mutate_the_runs_meta_file(self, monkeypatch, tmp_path, recorded_manifest):
+        run = _redirect_output_root(monkeypatch, tmp_path)
+        original = json.dumps({"prompt": "a cat", "width": 1024, "height": 1024})
+        meta_file = run / "meta.json"
+        meta_file.write_text(original, encoding="utf-8")
+        source = _make_run_image(run)
+
+        payload = io.BytesIO()
+        Image.new("RGB", (64, 32)).save(payload, "PNG")
+        image_edit.store_edited_upload(source, payload.getvalue())
+
+        assert meta_file.read_text(encoding="utf-8") == original
+
     def test_rejects_unreadable_payload(self, monkeypatch, tmp_path, recorded_manifest):
         run = _redirect_output_root(monkeypatch, tmp_path)
         source = _make_run_image(run)
@@ -298,3 +354,181 @@ class TestGalleryNotification:
         reason, images = calls[0]
         assert reason == "edit"
         assert images == [result["path"]]
+
+
+# ── manifest dimension repair ────────────────────────────────────────────────
+
+@pytest.fixture
+def redirected_manifest(monkeypatch, tmp_path):
+    """Point ``storage`` at a throwaway manifest + output root, cache cleared."""
+    from server import storage
+
+    root = tmp_path / "outputs"
+    run = root / "run_fix"
+    run.mkdir(parents=True)
+    monkeypatch.setattr(storage, "BASE", root)
+    monkeypatch.setattr(storage, "MANIFEST_FILE", root / "manifest.jsonl")
+    monkeypatch.setattr(storage, "_manifest_cache", None)
+    monkeypatch.setattr(storage, "_manifest_cache_mtime", -1.0)
+    return storage, root / "run_fix"
+
+
+def _write_manifest(storage, rows):
+    storage.MANIFEST_FILE.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+    )
+
+
+def _manifest_rows(storage):
+    return [json.loads(line) for line in storage.MANIFEST_FILE.read_text().splitlines() if line.strip()]
+
+
+class TestRepairManifestImageDimensions:
+    def test_repairs_an_edit_that_kept_the_source_dimensions(self, redirected_manifest):
+        storage, run = redirected_manifest
+        Image.new("RGB", (800, 450)).save(run / "0_edit.png")
+        _write_manifest(storage, [{
+            "image": "outputs/run_fix/0_edit.png",
+            "meta": {"source": "image_edit", "width": 1024, "height": 1024, "prompt": "a duck"},
+        }])
+
+        report = storage.repair_manifest_image_dimensions(source_filter="image_edit")
+
+        assert report["repaired"] == 1
+        assert report["changes"] == [("outputs/run_fix/0_edit.png", (1024, 1024), (800, 450))]
+        rows = _manifest_rows(storage)
+        assert (rows[0]["meta"]["width"], rows[0]["meta"]["height"]) == (800, 450)
+        # Sibling metadata must survive untouched.
+        assert rows[0]["meta"]["prompt"] == "a duck"
+
+    def test_leaves_already_correct_entries_alone(self, redirected_manifest):
+        storage, run = redirected_manifest
+        Image.new("RGB", (800, 450)).save(run / "0_edit.png")
+        _write_manifest(storage, [{
+            "image": "outputs/run_fix/0_edit.png",
+            "meta": {"source": "image_edit", "width": 800, "height": 450},
+        }])
+
+        report = storage.repair_manifest_image_dimensions(source_filter="image_edit")
+
+        assert report["repaired"] == 0
+        assert report["checked"] == 1
+
+    def test_source_filter_leaves_generated_images_untouched(self, redirected_manifest):
+        storage, run = redirected_manifest
+        Image.new("RGB", (300, 200)).save(run / "0.png")
+        _write_manifest(storage, [{
+            "image": "outputs/run_fix/0.png",
+            "meta": {"source": None, "width": 4096, "height": 4096},
+        }])
+
+        report = storage.repair_manifest_image_dimensions(source_filter="image_edit")
+
+        assert report["checked"] == 0
+        assert report["repaired"] == 0
+        assert _manifest_rows(storage)[0]["meta"]["width"] == 4096
+
+    def test_missing_files_are_skipped_not_raised(self, redirected_manifest):
+        storage, run = redirected_manifest
+        _write_manifest(storage, [{
+            "image": "outputs/run_fix/does_not_exist.png",
+            "meta": {"source": "image_edit", "width": 1024, "height": 1024},
+        }])
+
+        report = storage.repair_manifest_image_dimensions(source_filter="image_edit")
+
+        assert report["repaired"] == 0
+        assert report["skipped"] == 1
+
+    def test_repairs_a_mixed_manifest_in_one_pass(self, redirected_manifest):
+        storage, run = redirected_manifest
+        Image.new("RGB", (640, 480)).save(run / "0_edit.png")
+        Image.new("RGB", (500, 500)).save(run / "0_edit2.png")
+        _write_manifest(storage, [
+            {"image": "outputs/run_fix/0_edit.png",
+             "meta": {"source": "image_edit", "width": 1024, "height": 1024}},
+            {"image": "outputs/run_fix/0_edit2.png",
+             "meta": {"source": "image_edit", "width": 1024, "height": 1024}},
+            {"image": "outputs/run_fix/missing.png",
+             "meta": {"source": "image_edit", "width": 8, "height": 8}},
+        ])
+
+        report = storage.repair_manifest_image_dimensions(source_filter="image_edit")
+
+        assert report["checked"] == 3
+        assert report["repaired"] == 2
+        assert report["skipped"] == 1
+        rows = _manifest_rows(storage)
+        assert [(r["meta"]["width"], r["meta"]["height"]) for r in rows] == [(640, 480), (500, 500), (8, 8)]
+
+
+# ── per-image dimensions through the gallery API ─────────────────────────────
+
+class TestGalleryPublishesPerImageDimensions:
+    """Regression: a run shares one meta.json, so edits inherited the original size.
+
+    ``/gallery`` returned only run-level ``meta``, and ``flattenSessions`` stamped it
+    onto every image in the run, so an edit saved as an extra file in that run was laid
+    out at the *generated* image's aspect ratio. The tile and the lightbox then
+    rendered the edited pixels stretched. The recorded per-image size must be
+    published alongside the run meta.
+    """
+
+    def _run_with_edit(self, monkeypatch, tmp_path):
+        from server import app as appmod
+
+        root = tmp_path / "outputs"
+        run = root / "2026-01-01_00-00-00"
+        run.mkdir(parents=True)
+        Image.new("RGB", (896, 1344)).save(run / "0.png")
+        Image.new("RGB", (888, 944)).save(run / "0_edit.png")
+        (run / "meta.json").write_text(
+            json.dumps({"prompt": "a duck", "timestamp": 1, "width": 896, "height": 1344}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(appmod, "BASE", root)
+        from server import storage
+
+        monkeypatch.setattr(storage, "BASE", root)
+        monkeypatch.setattr(storage, "MANIFEST_FILE", root / "manifest.jsonl")
+        monkeypatch.setattr(storage, "_manifest_cache", None)
+        monkeypatch.setattr(storage, "_manifest_cache_mtime", -1.0)
+        monkeypatch.setattr(storage, "_dims_cache", None)
+        monkeypatch.setattr(storage, "_dims_cache_mtime", -1.0)
+        storage.rebuild_manifest()
+        return root, run
+
+    def test_gallery_returns_per_image_dims(self, monkeypatch, tmp_path):
+        from server import app as appmod
+
+        self._run_with_edit(monkeypatch, tmp_path)
+        sessions = appmod.gallery(start=0, limit=10)
+        assert len(sessions) == 1
+        session = sessions[0]
+        assert session["dims"] == {"0.png": [896, 1344], "0_edit.png": [888, 944]}
+        # The run meta is still the generated image's size, untouched.
+        assert session["meta"]["width"] == 896
+        assert session["meta"]["height"] == 1344
+
+    def test_manifest_image_dims_maps_each_image_to_its_own_size(self, monkeypatch, tmp_path):
+        from server import storage
+
+        self._run_with_edit(monkeypatch, tmp_path)
+        dims = storage.manifest_image_dims()
+        assert dims["outputs/2026-01-01_00-00-00/0.png"] == (896, 1344)
+        assert dims["outputs/2026-01-01_00-00-00/0_edit.png"] == (888, 944)
+
+
+    def test_manifest_rebuild_keeps_each_images_real_size(self, monkeypatch, tmp_path):
+        """Regression: rebuild_manifest() stamped the run meta onto every file.
+
+        A rebuild overwrote an edit's recorded size with the original's, so the edit
+        reverted to the wrong aspect ratio without any user action.
+        """
+        from server import storage
+
+        self._run_with_edit(monkeypatch, tmp_path)
+        storage.rebuild_manifest()
+        dims = storage.manifest_image_dims()
+        assert dims["outputs/2026-01-01_00-00-00/0.png"] == (896, 1344)
+        assert dims["outputs/2026-01-01_00-00-00/0_edit.png"] == (888, 944)
