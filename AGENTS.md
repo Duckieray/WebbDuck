@@ -106,9 +106,9 @@ Key folders:
 
 - Instruction precedence: system/developer instructions first, then explicit user request, then this file and repo conventions.
 - No silent failure: never claim a command/test/check ran when it did not; explicitly report what was run and what was skipped.
-- Strict scope control: implement only the requested task; if you find unrelated issues, create/follow up with a separate backlog task.
+- Strict scope control: implement only the requested task; if you find unrelated issues, report them in the final summary instead of expanding scope.
 - Stop and report when requirements are ambiguous, credentials are missing, a requested action is destructive/irreversible, or instructions conflict.
-- Read-only mode: for analysis/planning/review-only requests, inspect and explain without editing files or changing backlog state.
+- Read-only mode: for analysis/planning/review-only requests, inspect and explain without editing files.
 
 ## 5. Git + Workspace Rules
 
@@ -116,28 +116,14 @@ Key folders:
 - Do not revert user-owned or unrelated changes.
 - Commit only relevant files.
 - Exclude local artifacts/debug data from commits (examples: `outputs/`, `inpaint_input/`, local checkpoints, local LoRA/embedding/model binaries).
+- Never commit secrets, tokens, hostnames, or machine-specific paths in tracked files.
 - Keep commit messages descriptive and scoped.
 - Do not amend commits unless explicitly requested.
 - Do not force-push unless explicitly requested.
 - Worktrees are recommended (not required) for parallel work or high-conflict changes.
 - If not using a dedicated worktree, verify `git status` before and after edits and keep touched files tightly scoped.
 
-## 5.1 Backlog Privacy Rules
-
-- Public backlog tasks live in `backlog/` and are commit-safe by default.
-- Personal/environment-specific details must NOT be written to public Backlog.md task fields.
-- Store personal/local details in `backlog-private/` only (this directory is gitignored).
-- If a task needs local context, keep the public task high level and reference a local note like `backlog-private/TASK-<id>.local.md`.
-- Never commit secrets, local paths, hostnames, tokens, or machine-specific instructions to `backlog/` or other tracked files.
-
-## 5.2 Backlog Execution Rules
-
-- Search existing backlog tasks before creating a new task.
-- Create a task for non-trivial implementation work that requires planning/decisions.
-- Skip task creation for trivial/mechanical edits unless the user explicitly requests task tracking.
-- Keep public backlog entries outcome-focused and collaborator-safe; move personal execution details to `backlog-private/`.
-
-## 5.3 Verification Policy (Tiered)
+## 5.1 Verification Policy (Tiered)
 
 - Tier 0 (default): run fast targeted checks for touched areas (focused `pytest` modules/tests, quick smoke checks).
 - Tier 1 (feature-level): run broader integration validation when behavior crosses API/UI/worker boundaries.
@@ -433,32 +419,3 @@ Doc ownership notes:
 - List verification commands run and whether they passed/failed/skipped.
 - Call out risk areas, trade-offs, and any follow-up tasks created.
 - For UI changes, include screenshots or a short recording in the PR description when practical.
-
-<!-- BACKLOG.MD MCP GUIDELINES START -->
-
-<CRITICAL_INSTRUCTION>
-
-## BACKLOG WORKFLOW INSTRUCTIONS
-
-This project uses Backlog.md MCP for all task and project management activities.
-
-**CRITICAL GUIDANCE**
-
-- If your client supports MCP resources, read `backlog://workflow/overview` to understand when and how to use Backlog for this project.
-- If your client only supports tools or the above request fails, call `backlog.get_workflow_overview()` tool to load the tool-oriented overview (it lists the matching guide tools).
-
-- **First time working here?** Read the overview resource IMMEDIATELY to learn the workflow
-- **Already familiar?** You should have the overview cached ("## Backlog.md Overview (MCP)")
-- **When to read it**: BEFORE creating tasks, or when you're unsure whether to track work
-
-These guides cover:
-- Decision framework for when to create tasks
-- Search-first workflow to avoid duplicates
-- Links to detailed guides for task creation, execution, and finalization
-- MCP tools reference
-
-You MUST read the overview resource to understand the complete workflow. The information is NOT summarized here.
-
-</CRITICAL_INSTRUCTION>
-
-<!-- BACKLOG.MD MCP GUIDELINES END -->

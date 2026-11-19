@@ -372,8 +372,8 @@ WebbDuck uses the 2x head directly.)
 - **Limits.** It is trained on real photos, so it can over-sharpen or slightly
   shift colours on anime, line art, and text. It improves how latents are
   rendered, but it cannot add detail that the latent grid never contained.
-  Distant faces that cover only a few 16 px tokens need a detailer pass
-  (backlog TASK-013).
+  Distant faces that cover only a few 16 px tokens need the face/skin detailer
+  pass described above.
 
 ## Measurements
 

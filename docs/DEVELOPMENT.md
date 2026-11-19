@@ -67,6 +67,24 @@ python run.py --output ./outputs --port 8010
 - `server/provider_credentials_api.py`: provider credential configuration endpoints.
 - `server/runtime_readiness_api.py`: non-loading runtime readiness surface.
 
+### API Job Status and Errors
+
+Waited generation endpoints (`/generate`, `/upscale`, `/test`, `/image/erase`)
+return a JSON failure payload instead of a generic error when an enqueued job
+fails: HTTP 500 with `{"status": "failed", "job_id": "<id>", "error": "<message>"}`.
+Successful responses are unchanged.
+
+Async clients can poll job status without waiting on the original request:
+
+- `GET /queue/{job_id}` returns the job's registry entry, including `status`,
+  `error` when failed, and `queue_position`; unknown ids return 404.
+- `GET /queue/by-client-request/{client_request_id}` resolves the same status
+  using the `client_request_id` supplied at submission time.
+- `GET /queue` lists active jobs and recent completions.
+
+These endpoints are the supported way for third-party clients to retrieve
+failure details for jobs submitted without waiting.
+
 ### Runtime and Generation
 
 `server/app.py` runs a background watcher that checks:
