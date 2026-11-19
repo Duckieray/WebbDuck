@@ -27,7 +27,7 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 4. `core/worker.py` processes generation and upscale jobs serially.
 5. `core/generation.py` selects the mode and calls the pipeline/runtime helpers.
 6. `server/storage.py` writes files, metadata, and gallery manifest entries.
-7. `server/image_edit.py` stores non-destructive edits and writes derived images.
+7. `server/image_edit.py` stores non-destructive edits, writes derived images, and persists per-image editor sessions.
 8. `server/events.py` pushes `state`, `queue`, `catalog`, and `gallery` updates to connected clients.
 
 ## Repo Map
@@ -57,7 +57,7 @@ Read `docs/ARCHITECTURE_AGNOSTIC_GENERATION.md` before implementing new model ar
 | `server/queue_control.py` | queue pause/resume coordination: pause flag, resume wakeup event, and GPU release while paused |
 | `server/storage.py` | output persistence, metadata files, gallery manifest management |
 | `server/thumbnails.py` | thumbnail generation and caching |
-| `server/image_edit.py` | non-destructive storage for gallery edits: path containment, `<stem>_edit[_N].png` allocation, manifest lineage (the browser does the pixel work) |
+| `server/image_edit.py` | non-destructive storage for gallery edits: path containment, `<stem>_edit[_N].png` allocation, manifest lineage, and per-image editor sessions (mask + tool state) in the run's `meta.json` (the browser does the pixel work) |
 | `server/model_catalog_api.py` | architecture-free model profile API from the runtime catalog (capabilities/defaults; the payload also exposes a display-only `arch` hint so the checkpoint dropdown can group entries by architecture type) |
 | `server/provider_credentials_api.py` | Hugging Face/Civitai provider credential configuration endpoints |
 | `server/runtime_readiness_api.py` | non-loading runtime readiness surface for checkpoint-driven generation |
@@ -176,7 +176,7 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 | `ui/modules/LoraManager.js` | LoRA picker, weights, persistence |
 | `ui/modules/EmbeddingManager.js` | embedding picker and token editing |
 | `ui/modules/MaskEditor.js` | inpaint mask editing |
-| `ui/modules/ImageEditor.js` | browser canvas crop/rotate/flip/resize/adjust editor, opened from the lightbox |
+| `ui/modules/ImageEditor.js` | browser canvas crop/rotate/flip/resize/adjust editor plus the mask-based Erase tool, opened from the lightbox |
 | `ui/modules/ProgressManager.js` | progress card and cancel flow |
 | `ui/modules/PersonaIdentityUI.js` | Identity / Persona presentation over the shared reference + preset manager |
 | `ui/modules/PersonaIdentityUI_impl.js` | PersonaIdentityUI implementation details |
@@ -219,6 +219,16 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 4. Run focused tests like `tests/test_thumbnails.py` and gallery-related server tests.
 5. For crop/rotate/flip/resize/adjust changes, update `server/image_edit.py` and
    `ui/modules/ImageEditor.js` together, and run `tests/test_image_edit.py`.
+6. For Erase changes, keep the browser mask rendering (`ui/modules/ImageEditor.js`), the
+   GPU-backed `/image/erase` endpoint (`server/app.py`), the erase prompt defaults
+   (`core/erase.py`), and the inpaint fill branch (`modes/inpaint.py`) aligned. Erase
+   results are written beside the source by `save_erased_images()` in `server/image_edit.py`
+   and run `tests/test_image_erase.py`.
+7. For editor session persistence, keep `GET/POST /image/edit-session` (`server/app.py`),
+   `load_edit_session()`/`save_edit_session()` (`server/image_edit.py`), and the
+   `_snapshotSession()`/`_restoreMask()` browser side aligned. Sessions live under
+   `edit_sessions` in the run's `meta.json` and are stripped from manifest/gallery
+   metadata; run `tests/test_image_edit_session.py`.
 
 ### Change Plugin Integration
 

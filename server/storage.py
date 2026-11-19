@@ -107,6 +107,8 @@ def sanitize_settings(settings: dict) -> dict:
     clean.pop("input_image", None)
     clean.pop("mask_image", None)
     clean.pop("image", None)
+    # Editor sessions live in the run's meta.json but are not gallery metadata.
+    clean.pop("edit_sessions", None)
     return clean
 
 

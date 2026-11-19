@@ -6,7 +6,7 @@ WebbDuck is a local-first image generation studio with a FastAPI backend, a queu
 
 1. `run.py` parses CLI flags and launches `webbduck.server.app:app` with Uvicorn.
 2. `server/app.py` mounts the UI, registers HTTP and WebSocket routes, and starts background tasks.
-3. Heavy work from `/generate`, `/test`, and `/upscale` is enqueued onto `generation_queue`.
+3. Heavy work from `/generate`, `/test`, and `/upscale` is enqueued onto `generation_queue`. Upscales are inserted at the front so they run next (after the in-flight job).
 4. `core/worker.py` processes jobs serially, acquires the shared GPU lease, and calls generation or upscaling code.
 5. `core/generation.py` prepares inputs, chooses a mode, and drives the pipeline.
 6. `server/storage.py` saves outputs, metadata, favorites state, and manifest entries.

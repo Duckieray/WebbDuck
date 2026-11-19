@@ -64,7 +64,10 @@ ui/
   oriented frame and draws the crop as an overlay, so you can still see what you are cutting away.
   The crop rect is normalized (0..1) in the oriented frame so rotate/flip carry it across
   correctly. `Save Copy` posts the PNG to `/image/edit`; `Use as Input Image` feeds the same blob
-  into `handleImageUpload()`.
+  into `handleImageUpload()`. The `Erase` tool paints a mask on the oriented frame, exports the
+  mask through the same crop/resize mapping, and posts the image + mask to the GPU-backed
+  `/image/erase` endpoint; the erased result is saved as a new copy. The editor restores its saved
+  session (mask, crop/rotation, model, prompts) for the same image and saves it back on close.
 - `ui/modules/LoraManager.js`: LoRA list, weights, and compatibility filtering.
 - `ui/modules/EmbeddingManager.js`: embedding selection and token editing.
 - `ui/modules/MaskEditor.js`: inpaint mask interactions.

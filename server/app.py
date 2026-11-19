@@ -19,6 +19,7 @@ from server.state import snapshot, update_stage, update_progress
 from server.events import broadcast, broadcast_state, active_sockets
 from server.queue_control import (
     is_queue_paused,
+    put_job_front,
     release_gpu_for_pause,
     set_queue_paused,
 )
@@ -42,7 +43,11 @@ from server.storage import (
 from server.thumbnails import ensure_thumbnail, get_thumbnail_path
 from server.image_edit import (
     ImageEditError,
+    grow_mask,
+    load_edit_session,
+    remove_edit_session,
     resolve_output_image,
+    save_edit_session,
     store_edited_upload,
     web_path as edit_web_path,
 )
@@ -79,6 +84,13 @@ from core.web_plugins import (
 )
 from core.gpu_lease import get_gpu_lease
 from core.realism_profile import resolve_realism
+from core.erase import (
+    ERASE_DEFAULT_MASK_BLUR,
+    ERASE_DEFAULT_MASK_GROW,
+    ERASE_DEFAULT_STRENGTH,
+    ERASE_NEGATIVE_PROMPT,
+    ERASE_PROMPT,
+)
 
 INPUTS_DIR = Path("inpaint_input")
 INPUTS_DIR.mkdir(exist_ok=True)
@@ -118,6 +130,11 @@ class RemotePluginConnectRequest(BaseModel):
 
 class DeleteImagesRequest(BaseModel):
     paths: list[str]
+
+
+class EditSessionRequest(BaseModel):
+    path: str
+    session: dict
 
 
 def _resolve_smart_extend_settings(
@@ -266,6 +283,8 @@ def summarize_settings(settings: dict) -> dict:
         mode = "inpaint"
     elif image_path:
         mode = "img2img"
+    if settings.get("inpainting_fill") == "erase":
+        mode = "erase"
 
     mode_details = []
     strength = settings.get("strength")
@@ -353,6 +372,45 @@ def summarize_settings(settings: dict) -> dict:
         "has_mask": bool(settings.get("mask_image")),
         "input_image_url": input_image_url,
         "mode_details": mode_details[:14],
+    }
+
+
+def _queue_image_url(path: str | Path) -> str | None:
+    """Return a web-served URL for a queued job's source image, if possible."""
+    try:
+        resolved = Path(str(path)).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+
+    for root, prefix in ((BASE, "/outputs"), (INPUTS_DIR, "/inputs")):
+        try:
+            rel = resolved.relative_to(Path(root).resolve())
+        except (OSError, ValueError):
+            continue
+        return f"{prefix}/{rel.as_posix()}"
+    return None
+
+
+def summarize_upscale_settings(image_path: str | Path, scale: int) -> dict:
+    """Build queue metadata for an upscale job."""
+    return {
+        "prompt": "Upscaling image",
+        "mode": "upscale",
+        "is_upscale": True,
+        "input_image_url": _queue_image_url(image_path),
+        "scale": scale,
+        "width": None,
+        "height": None,
+        "steps": None,
+        "cfg": None,
+        "num_images": 1,
+        "base_model": None,
+        "scheduler": None,
+        "seed": None,
+        "negative_prompt": "",
+        "loras": [],
+        "embeddings": [],
+        "mode_details": [f"{scale}x"],
     }
 
 
@@ -520,11 +578,15 @@ def _job_error_response(job_id: str, exc: Exception, prefix: str = "Generation f
     )
 
 
-async def enqueue(job, wait_for_result: bool = True):
-    """Enqueue job. Optionally wait for result."""
+async def enqueue(job, wait_for_result: bool = True, front: bool = False):
+    """Enqueue job. Optionally wait for result or jump to the front."""
     if "cancel_event" not in job or job.get("cancel_event") is None:
         job["cancel_event"] = threading.Event()
-    await generation_queue.put(job)
+    if front:
+        job["front_of_queue"] = True
+        put_job_front(generation_queue, job)
+    else:
+        await generation_queue.put(job)
     job_id = job["job_id"]
     meta = job_registry[job_id]
     meta["status"] = "queued"
@@ -1226,6 +1288,11 @@ def _delete_image_artifacts(target: Path) -> list[str]:
         if _unlink_file(thumb):
             deleted_paths.append(to_web_path(thumb))
 
+    try:
+        remove_edit_session(target)
+    except Exception as exc:  # pragma: no cover - session cleanup is best effort
+        print(f"[Warn] Could not remove the edit session for {target}: {exc}")
+
     _cleanup_run_if_empty(target.parent)
     return deleted_paths
 
@@ -1397,6 +1464,10 @@ def gallery(start: int = 0, limit: int = 50, after: float = 0.0):
             valid_seen += 1
             continue
 
+        # Editor sessions are per-image state, not gallery metadata. Keep them out of
+        # the gallery payload so large mask data URLs are never sent with every run.
+        meta.pop("edit_sessions", None)
+
         out.append({
             "run": r.name,
             "images": imgs,
@@ -1498,6 +1569,167 @@ async def save_image_edit(
     new_path = edit_web_path(dest)
     _notify_gallery_changed("edit", [new_path])
     return {"status": "ok", "path": new_path, "source": to_web_path(source)}
+
+
+@app.post("/image/erase")
+async def erase_image(
+    path: str = Form(...),
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...),
+    base_model: str = Form(...),
+    prompt: str = Form(""),
+    negative_prompt: str = Form(""),
+    strength: float = Form(ERASE_DEFAULT_STRENGTH),
+    mask_blur: int = Form(ERASE_DEFAULT_MASK_BLUR),
+    mask_grow: int = Form(ERASE_DEFAULT_MASK_GROW),
+    steps: int = Form(None),
+    cfg: float = Form(None),
+    seed: int = Form(None),
+    wait_for_result: bool = Form(True),
+):
+    """Erase a masked region through the GPU queue and store a new gallery copy.
+
+    The editor renders the current crop/rotate/adjust result and the painted mask in the
+    browser, so this endpoint only needs to hand both to the existing inpaint pipeline.
+    Unlike ``/image/edit`` this is GPU work, so it is enqueued at the front of the queue
+    (same as a gallery upscale) instead of running in the request handler.
+    """
+    import io
+
+    from PIL import Image
+
+    try:
+        source = resolve_output_image(path)
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    image_payload = await image.read()
+    mask_payload = await mask.read()
+    if not image_payload:
+        return JSONResponse(status_code=400, content={"error": "Erase image payload is empty"})
+    if not mask_payload:
+        return JSONResponse(status_code=400, content={"error": "Erase mask payload is empty"})
+
+    # Decode before queueing so malformed uploads fail fast, and grow the mask here so
+    # every backend (SDXL inpaint, FLUX.2 native inpaint) gets the same coverage.
+    try:
+        with Image.open(io.BytesIO(image_payload)) as opened:
+            base_image = opened.convert("RGB")
+        with Image.open(io.BytesIO(mask_payload)) as opened:
+            mask_image = grow_mask(opened.convert("L"), mask_grow)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"Invalid erase payload: {exc}"})
+
+    width, height = base_image.size
+    image_name = f"{uuid.uuid4()}_erase_input.png"
+    mask_name = f"{uuid.uuid4()}_erase_mask.png"
+    image_path = INPUTS_DIR / image_name
+    mask_path = INPUTS_DIR / mask_name
+    base_image.save(image_path, "PNG")
+    mask_image.save(mask_path, "PNG")
+
+    erase_prompt = (prompt or "").strip() or ERASE_PROMPT
+    erase_negative = (negative_prompt or "").strip() or ERASE_NEGATIVE_PROMPT
+    settings = {
+        "base_model": base_model,
+        "prompt": erase_prompt,
+        "negative_prompt": erase_negative,
+        "erase_prompt": erase_prompt,
+        "erase_negative_prompt": erase_negative,
+        "inpainting_fill": "erase",
+        "strength": max(float(strength), 0.95),
+        "mask_blur": max(0, int(mask_blur)),
+        "image": str(image_path.absolute()),
+        "mask_image": str(mask_path.absolute()),
+        "width": width,
+        "height": height,
+        "num_images": 1,
+    }
+    if steps is not None:
+        settings["steps"] = int(steps)
+    if cfg is not None:
+        settings["cfg"] = float(cfg)
+    if seed is not None:
+        settings["seed"] = int(seed)
+
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
+    job_id = str(uuid.uuid4())
+    job = {
+        "job_id": job_id,
+        "type": "erase",
+        "settings": settings,
+        "source_image": str(source),
+        "erase_ops": {
+            "prompt": erase_prompt,
+            "strength": settings["strength"],
+            "mask_blur": settings["mask_blur"],
+            "mask_grow": int(mask_grow),
+        },
+        "future": future,
+        "cancel_event": threading.Event(),
+        "on_start": _mark_job_start,
+        "on_finish": _mark_job_finish,
+    }
+    job_registry[job_id] = {
+        "job_id": job_id,
+        "type": "erase",
+        "status": "created",
+        "created_at": time.time(),
+        "settings": summarize_settings(settings),
+    }
+
+    try:
+        result = await enqueue(job, wait_for_result=wait_for_result, front=True)
+    except Exception as exc:
+        return _job_error_response(job_id, exc, prefix="Erase failed")
+
+    if isinstance(result, dict) and result.get("images"):
+        new_paths = list(result["images"])
+        _notify_gallery_changed("erase", new_paths)
+        return {
+            "status": "ok",
+            "path": new_paths[0],
+            "paths": new_paths,
+            "source": to_web_path(source),
+        }
+    return result
+
+
+@app.get("/image/edit-session")
+async def get_image_edit_session(path: str):
+    """Return the editor session (mask + tool state) saved for a gallery image."""
+    try:
+        source = resolve_output_image(path)
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    loop = asyncio.get_event_loop()
+    session = await loop.run_in_executor(None, load_edit_session, source)
+    return {"status": "ok", "session": session}
+
+
+@app.post("/image/edit-session")
+async def save_image_edit_session(payload: EditSessionRequest):
+    """Persist the editor session for a gallery image in its run's ``meta.json``."""
+    try:
+        source = resolve_output_image(payload.path)
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    loop = asyncio.get_event_loop()
+    try:
+        saved = await loop.run_in_executor(
+            None, save_edit_session, source, payload.session
+        )
+    except ImageEditError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Could not save the edit session: {exc}"},
+        )
+    return {"status": "ok", "session": saved}
 
 
 @app.get("/models")
@@ -1741,11 +1973,12 @@ async def upscale(
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
+    source_path = resolve_web_path(image)
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
         "type": "upscale",
-        "image": str(resolve_web_path(image)),
+        "image": str(source_path),
         "scale": scale,
         "future": future,
         "cancel_event": threading.Event(),
@@ -1757,11 +1990,11 @@ async def upscale(
         "type": "upscale",
         "status": "created",
         "created_at": time.time(),
-        "settings": {"image": image, "scale": scale},
+        "settings": summarize_upscale_settings(source_path, scale),
     }
 
     try:
-        result = await enqueue(job, wait_for_result=wait_for_result)
+        result = await enqueue(job, wait_for_result=wait_for_result, front=True)
     except Exception as exc:
         return _job_error_response(job_id, exc, prefix="Upscale failed")
 

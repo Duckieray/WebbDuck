@@ -754,6 +754,12 @@ body::before {
   color: #fde68a;
 }
 
+.queue-badge.mode-upscale {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(6, 78, 59, 0.24);
+  color: #a7f3d0;
+}
+
 .queue-badge.status-running {
   border-color: rgba(96, 165, 250, 0.55);
   background: rgba(30, 58, 138, 0.28);

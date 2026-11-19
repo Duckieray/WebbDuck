@@ -31,7 +31,12 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
   any pixel floor is applied *after* converting back to pixels. Brightness/contrast/saturation use `ctx.filter`
   (feature-detected; sliders disable if unsupported). `Save Copy` posts the rendered PNG to
   `/image/edit`; `Use as Input Image` hands the same blob to `handleImageUpload()` so it lands in
-  the Studio through the normal funnel.
+  the Studio through the normal funnel. The `Erase` tool paints a full-resolution mask over the
+  oriented frame, renders the mask through the same crop/resize mapping as the image, and posts both
+  blobs to the GPU-backed `/image/erase` endpoint; the result is saved as a new `_edit` copy and the
+  editor closes onto it. On open the editor fetches `/image/edit-session` and restores the saved
+  mask, crop/rotation, brush/feather, model, and prompts for that image; on close it snapshots the
+  same state back (with a per-source in-memory cache so an immediate reopen does not race the save).
 - `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section (IP-Adapter FaceID is the SDXL `faceid_sdxl` provider).
 - `ui/modules/PersonaIdentityUI_impl.js`: implementation details behind `PersonaIdentityUI.js`.
 - `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into Settings; token values are never persisted in browser state.

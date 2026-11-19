@@ -18,9 +18,11 @@ from core.exceptions import GenerationCancelledError
 from core.gpu_lease import get_gpu_lease, release_gpu_lease, wait_for_gpu_lease_async
 from core.runtime import runtime_error_hint
 from server.storage import save_images, append_session_entry, to_web_path
+from server.image_edit import save_erased_images
 from server.events import broadcast_state
 from server.queue_control import (
     is_queue_paused,
+    put_job_front,
     release_gpu_for_pause,
     wait_for_queue_resume,
 )
@@ -249,7 +251,10 @@ async def gpu_worker(queue):
             # A pause arrived while we were blocked waiting for work. Keep the
             # job in the queue (and cancellable) instead of starting it now.
             queue.task_done()
-            await queue.put(job)
+            if job.get("front_of_queue"):
+                put_job_front(queue, job)
+            else:
+                await queue.put(job)
             continue
         on_start = job.get("on_start")
         on_finish = job.get("on_finish")
@@ -375,7 +380,16 @@ async def gpu_worker(queue):
             update_progress(0.995)
             await broadcast_state(snapshot())
 
-            paths = save_images(images, job["settings"])
+            if job.get("type") == "erase" and job.get("source_image"):
+                # Erase copies are written beside the source image (like a crop),
+                # not into a new generation run folder.
+                paths = save_erased_images(
+                    images,
+                    Path(job["source_image"]),
+                    job.get("erase_ops"),
+                )
+            else:
+                paths = save_images(images, job["settings"])
 
             update_progress(1.0)
             update_stage("Idle")

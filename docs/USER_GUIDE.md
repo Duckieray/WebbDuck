@@ -50,13 +50,23 @@ already generated is lost.
   `Snap to multiples of 8` rounds to a size every backend accepts. `Reset Size` returns to the cropped size.
 - `Adjust` applies brightness, contrast, and saturation. Browsers without canvas filter support disable
   these sliders automatically.
+- `Erase` paints a mask over an object and repaints that area from the surrounding background. Switch
+  the tool to `Erase`, brush over what you want gone, then press `Erase`. It uses the selected
+  inpaint-capable model (SDXL or FLUX.2), runs at the front of the queue, and saves the result as a new
+  copy like `Save Copy`. Use `Clear Mask` to start over, `Brush` to resize the brush, and `Feather` to
+  soften the seam. The fill prompt and negative prompt can be edited if the default background fill is
+  not what you want.
 - The readout shows the source size on the left and the resulting size on the right.
+- The editor remembers your work per image. Reopening the same image restores the mask, crop,
+  rotation/flips, resize, adjustments, selected erase model, and fill prompts, so you can continue
+  where you left off. The state is stored in the run's `meta.json` next to the image.
 
 Editor actions:
 
 - `Use as Input Image` loads the edited pixels straight into the Studio Input Image and switches to the
   Studio view, so you can immediately img2img, inpaint, or outpaint from your edit.
 - `Save Copy` writes the edit into the gallery as a new image.
+- `Erase` (inside the Erase tool) writes the erased result into the gallery as a new image.
 - `Reset All` clears every adjustment; `Cancel` closes without saving.
 
 The lightbox `Inpaint` button does the same import without opening the editor, sending the full-size
@@ -189,7 +199,10 @@ automatic behaviour.
 ### Upscale
 
 - You can upscale from the Studio preview or from the lightbox.
-- Upscaling runs through the job queue like other GPU-heavy actions.
+- Upscaling runs through the job queue like other GPU-heavy actions, but jumps
+  ahead of pending generations so it finishes next.
+- Queue cards for upscales show an `Upscaling` badge, the scale factor, and a
+  thumbnail of the source image instead of generation settings.
 
 ## Settings and Persistence
 

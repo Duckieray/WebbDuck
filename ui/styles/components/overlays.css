@@ -590,6 +590,14 @@
     color: var(--text-secondary, #b6bcc8);
 }
 
+#image-editor-erase-group .image-editor-dim {
+    margin-top: var(--space-2, 8px);
+}
+
+#image-editor-erase-group .image-editor-buttons {
+    margin-top: var(--space-3, 12px);
+}
+
 .image-editor-footer {
     display: flex;
     align-items: center;

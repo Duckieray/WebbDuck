@@ -22,6 +22,15 @@ Use this file when working in `server/`, `core/`, `models/`, `modes/`, or `promp
 - `/image/edit` (multipart `path` + `image` + `ops`) runs its CPU work in a thread executor
   bounded by `thumb_semaphore` and broadcasts a `{"type": "gallery"}` websocket event so other
   tabs refresh.
+- `/image/erase` (multipart `path` + `image` + `mask` + `base_model`) is the one GPU-backed
+  edit path. It grows the mask, builds an inpaint settings payload with `inpainting_fill="erase"`
+  (background-only prompt/negative defaults from `core/erase.py`), and enqueues a `type="erase"`
+  job at the front of the queue. `core/worker.py` calls `save_erased_images()` so the result is
+  written beside the source as a new `_edit` copy with `edited_from` lineage, never as a new run.
+- `/image/edit-session` (GET query `path`, POST JSON `{path, session}`) persists the editor's
+  working state per image. The session (mask PNG data URL, crop/rotation, brush/feather, model,
+  prompts) is stored under `edit_sessions[<image filename>]` in the run's `meta.json`; the
+  manifest and gallery payloads strip that key.
 
 ## Worker And Pipeline Layer
 

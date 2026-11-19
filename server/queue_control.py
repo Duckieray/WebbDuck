@@ -52,6 +52,20 @@ async def wait_for_queue_resume() -> None:
     await _resume_signal().wait()
 
 
+def put_job_front(queue: asyncio.Queue, job: dict) -> None:
+    """Insert ``job`` at the front of an asyncio queue and wake a getter.
+
+    Used for jobs that should run next (for example a gallery upscale), ahead of
+    already-queued generations. Mirrors ``asyncio.Queue.put_nowait`` accounting
+    so ``task_done``/``join`` stay balanced.
+    """
+
+    queue._queue.appendleft(job)
+    queue._unfinished_tasks += 1
+    queue._finished.clear()
+    queue._wakeup_next(queue._getters)
+
+
 def release_gpu_for_pause() -> bool:
     """Best-effort release of host-resident GPU models while paused.
 

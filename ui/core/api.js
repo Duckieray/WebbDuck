@@ -302,3 +302,35 @@ export async function saveImageEdit(sourcePath, file, ops = null) {
     if (ops) formData.append('ops', JSON.stringify(ops));
     return postForm('/image/edit', formData);
 }
+
+export async function getEditSession(imagePath) {
+    return get(`/image/edit-session?path=${encodeURIComponent(imagePath)}`);
+}
+
+export async function saveEditSession(imagePath, session) {
+    return post('/image/edit-session', { path: imagePath, session });
+}
+
+export async function eraseImage({
+    sourcePath,
+    image,
+    mask,
+    baseModel,
+    prompt = '',
+    negativePrompt = '',
+    strength = 0.99,
+    maskBlur = 12,
+    maskGrow = 6,
+} = {}) {
+    const formData = new FormData();
+    formData.append('path', sourcePath);
+    formData.append('image', image, 'erase_base.png');
+    formData.append('mask', mask, 'erase_mask.png');
+    formData.append('base_model', baseModel || '');
+    formData.append('prompt', prompt || '');
+    formData.append('negative_prompt', negativePrompt || '');
+    formData.append('strength', String(strength));
+    formData.append('mask_blur', String(maskBlur));
+    formData.append('mask_grow', String(maskGrow));
+    return postForm('/image/erase', formData);
+}

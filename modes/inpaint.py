@@ -15,6 +15,7 @@ from . import outpaint as pyramid_outpaint
 from prompt.experimental import build_sdxl_conditioning_dispatch
 from prompt.conditioning import inject_prompt_conditioning_kwargs
 from server.state import update_stage
+from core.erase import ERASE_NEGATIVE_PROMPT, ERASE_PROMPT
 
 log = logging.getLogger(__name__)
 
@@ -539,7 +540,18 @@ class InpaintMode(GenerationMode):
         
         
         inpainting_fill = settings.get("inpainting_fill", "replace")
-        
+
+        # Erase repaints the masked region from a background-only prompt so the
+        # removed object is replaced by its surroundings. The HTTP layer already
+        # supplies these defaults; the fallbacks keep direct inpaint calls sensible.
+        if inpainting_fill == "erase":
+            prompt = settings.get("erase_prompt") or prompt or ERASE_PROMPT
+            negative_prompt = (
+                settings.get("erase_negative_prompt") or negative_prompt or ERASE_NEGATIVE_PROMPT
+            )
+            strength = max(float(strength), 0.95)
+            log.info("Erase mode: repainting masked region from background prompt")
+
         # Handle "Keep Masked" (Protect Mode)
         if inpainting_fill == "keep":
              # Invert mask so we paint what we want to PROTECT

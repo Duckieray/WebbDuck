@@ -54,6 +54,10 @@ function defaultState() {
         targetH: null,
         lockAspect: true,
         snapEight: true,
+        // 'crop' paints the crop rectangle; 'erase' paints a mask for object removal.
+        tool: 'crop',
+        brushSize: 48,
+        feather: 12,
     };
 }
 
@@ -136,6 +140,15 @@ function editorMarkup() {
 
         <aside class="image-editor-panel">
           <section class="image-editor-group">
+            <h4 class="image-editor-group-title">Tool</h4>
+            <div class="nova-segmented-row" id="image-editor-tools">
+              <button class="preset-chip active" type="button" data-tool="crop">Crop &amp; Adjust</button>
+              <button class="preset-chip" type="button" data-tool="erase">Erase</button>
+            </div>
+            <div class="image-editor-hint" id="image-editor-tool-hint">Drag on the image to draw a crop. Once one exists, drag inside it to move it, or drag a handle to resize.</div>
+          </section>
+
+          <section class="image-editor-group">
             <h4 class="image-editor-group-title">Crop</h4>
             <div class="image-editor-chips" id="image-editor-aspects">
               ${ASPECT_PRESETS.map(p => `<button class="preset-chip${p.key === 'free' ? ' active' : ''}" type="button" data-aspect="${p.key}">${p.label}</button>`).join('')}
@@ -198,6 +211,37 @@ function editorMarkup() {
               <output id="image-editor-saturation-value">1.00</output>
             </label>
           </section>
+
+          <section class="image-editor-group hidden" id="image-editor-erase-group">
+            <h4 class="image-editor-group-title">Erase</h4>
+            <div class="image-editor-hint">Paint over the object, then Erase. The result is saved as a new copy and the original is never modified.</div>
+            <label class="image-editor-slider">
+              <span>Brush</span>
+              <input class="slider" type="range" id="image-editor-brush" min="8" max="160" step="2" value="48" />
+              <output id="image-editor-brush-value">48</output>
+            </label>
+            <label class="image-editor-slider">
+              <span>Feather</span>
+              <input class="slider" type="range" id="image-editor-feather" min="0" max="48" step="1" value="12" />
+              <output id="image-editor-feather-value">12</output>
+            </label>
+            <label class="image-editor-dim">
+              <span>Model</span>
+              <select class="input" id="image-editor-erase-model"></select>
+            </label>
+            <label class="image-editor-dim">
+              <span>Fill prompt</span>
+              <input class="input" type="text" id="image-editor-erase-prompt" placeholder="empty background, seamless continuation of the scene" />
+            </label>
+            <label class="image-editor-dim">
+              <span>Negative</span>
+              <input class="input" type="text" id="image-editor-erase-negative" placeholder="object, subject, text, watermark, seam" />
+            </label>
+            <div class="image-editor-buttons">
+              <button class="btn btn-secondary btn-sm" id="image-editor-mask-clear" type="button">Clear Mask</button>
+              <button class="btn btn-primary btn-sm" id="image-editor-erase" type="button">Erase</button>
+            </div>
+          </section>
         </aside>
       </div>
 
@@ -244,6 +288,18 @@ export class ImageEditor {
         this.drag = null;
         this.isOpen = false;
         this.supportsFilters = FILTER_SUPPORTED;
+
+        this.maskCanvas = null;
+        this.maskCtx = null;
+        this.maskPreviewCanvas = null;
+        this.maskHasPaint = false;
+        this._lastMaskPoint = null;
+        this._erasing = false;
+        this.eraseModels = null;
+        this.defaultEraseModel = '';
+        // Last-known editor session per source image. This keeps a just-closed mask
+        // available even if the async save has not reached the server yet.
+        this._sessionCache = new Map();
     }
 
     get overlay() {
@@ -268,6 +324,7 @@ export class ImageEditor {
         this.state = defaultState();
         this.sourceSrc = src;
         this.baseImage = null;
+        this.defaultEraseModel = options.baseModel || '';
         this.isOpen = true;
 
         const overlay = this.overlay;
@@ -282,8 +339,14 @@ export class ImageEditor {
         this._setLoading(true);
         this._renderEmpty();
 
+        let session = null;
         try {
-            this.baseImage = await readFileAsImage(src);
+            const [loadedSession, image] = await Promise.all([
+                this._loadSession(src),
+                readFileAsImage(src),
+            ]);
+            session = loadedSession;
+            this.baseImage = image;
         } catch (error) {
             this._setLoading(false);
             toast(error.message || 'Could not load the image for editing', 'error');
@@ -291,15 +354,39 @@ export class ImageEditor {
             return;
         }
 
+        // The user may have closed the editor while the image/session was loading.
+        if (!this.isOpen) return;
+
+        this._applySession(session);
+        this.defaultEraseModel = session?.model || options.baseModel || '';
+
         this._setLoading(false);
         this.rebuildOriented();
-        this.state.crop = null;
+        if (session?.mask) {
+            await this._restoreMask(session.mask);
+        }
+        this._applyEraseInputs(session);
+        if (this.state.tool === 'erase') {
+            void this._loadEraseModels();
+        }
         this._renderPreview();
         this._syncControls();
     }
 
     close() {
         if (!this.isOpen) return;
+
+        // Persist the working state before tearing down, so reopening the same image
+        // restores the mask, crop, model, and prompts exactly where they were left.
+        if (this.baseImage && this.sourceSrc) {
+            const session = this._snapshotSession();
+            const key = String(this.sourceSrc);
+            this._cacheSession(key, session);
+            void api.saveEditSession(this.sourceSrc, session).catch((error) => {
+                console.warn('Could not save the edit session:', error);
+            });
+        }
+
         this.isOpen = false;
         this.drag = null;
 
@@ -318,6 +405,119 @@ export class ImageEditor {
 
     isActive() {
         return this.isOpen;
+    }
+
+    // ── edit session persistence ────────────────────────────────────────────
+
+    _cacheSession(key, session) {
+        this._sessionCache.delete(key);
+        this._sessionCache.set(key, session);
+        // Masks are large data URLs; keep only the most recent handful in memory.
+        while (this._sessionCache.size > 20) {
+            this._sessionCache.delete(this._sessionCache.keys().next().value);
+        }
+    }
+
+    async _loadSession(src) {
+        const key = String(src);
+        if (this._sessionCache.has(key)) {
+            return this._sessionCache.get(key);
+        }
+        try {
+            const response = await api.getEditSession(src);
+            const session = response?.session;
+            if (session && typeof session === 'object') {
+                this._cacheSession(key, session);
+                return session;
+            }
+        } catch (error) {
+            console.warn('Could not load the saved edit session:', error);
+        }
+        return null;
+    }
+
+    _applySession(session) {
+        if (!session || typeof session !== 'object') return;
+        const state = this.state;
+
+        if (session.tool === 'erase' || session.tool === 'crop') state.tool = session.tool;
+        if (Number.isFinite(Number(session.rot))) {
+            state.rot = ((Math.trunc(Number(session.rot)) % 4) + 4) % 4;
+        }
+        if (typeof session.flipH === 'boolean') state.flipH = session.flipH;
+        if (typeof session.flipV === 'boolean') state.flipV = session.flipV;
+        if (session.crop && typeof session.crop === 'object') {
+            const { x, y, w, h } = session.crop;
+            if ([x, y, w, h].every(value => Number.isFinite(Number(value))) && Number(w) > 0 && Number(h) > 0) {
+                state.crop = { x: Number(x), y: Number(y), w: Number(w), h: Number(h) };
+            }
+        }
+        if (typeof session.aspect === 'string') state.aspect = session.aspect;
+        for (const key of ['brightness', 'contrast', 'saturation']) {
+            if (Number.isFinite(Number(session[key]))) state[key] = Number(session[key]);
+        }
+        for (const key of ['targetW', 'targetH']) {
+            if (session[key] == null) {
+                state[key] = null;
+            } else if (Number.isFinite(Number(session[key]))) {
+                state[key] = Math.round(Number(session[key]));
+            }
+        }
+        if (typeof session.lockAspect === 'boolean') state.lockAspect = session.lockAspect;
+        if (typeof session.snapEight === 'boolean') state.snapEight = session.snapEight;
+        if (Number.isFinite(Number(session.brushSize))) state.brushSize = Number(session.brushSize);
+        if (Number.isFinite(Number(session.feather))) state.feather = Number(session.feather);
+    }
+
+    _applyEraseInputs(session) {
+        const prompt = byId('image-editor-erase-prompt');
+        const negative = byId('image-editor-erase-negative');
+        if (prompt) prompt.value = typeof session?.prompt === 'string' ? session.prompt : '';
+        if (negative) {
+            negative.value = typeof session?.negativePrompt === 'string' ? session.negativePrompt : '';
+        }
+    }
+
+    _snapshotSession() {
+        const state = this.state;
+        const model = byId('image-editor-erase-model');
+        const prompt = byId('image-editor-erase-prompt');
+        const negative = byId('image-editor-erase-negative');
+        return {
+            version: 1,
+            tool: state.tool,
+            rot: state.rot,
+            flipH: state.flipH,
+            flipV: state.flipV,
+            crop: state.crop ? { x: state.crop.x, y: state.crop.y, w: state.crop.w, h: state.crop.h } : null,
+            aspect: state.aspect,
+            brightness: state.brightness,
+            contrast: state.contrast,
+            saturation: state.saturation,
+            targetW: state.targetW,
+            targetH: state.targetH,
+            lockAspect: state.lockAspect,
+            snapEight: state.snapEight,
+            brushSize: state.brushSize,
+            feather: state.feather,
+            model: model?.value || this.defaultEraseModel || '',
+            prompt: prompt?.value || '',
+            negativePrompt: negative?.value || '',
+            mask: this.maskHasPaint && this.maskCanvas ? this.maskCanvas.toDataURL('image/png') : null,
+            updatedAt: Date.now(),
+        };
+    }
+
+    async _restoreMask(dataUrl) {
+        try {
+            const img = await readFileAsImage(dataUrl);
+            this._ensureMaskCanvas();
+            this.maskCtx.drawImage(img, 0, 0, this.maskCanvas.width, this.maskCanvas.height);
+            this.maskHasPaint = true;
+        } catch (error) {
+            console.warn('Could not restore the saved mask:', error);
+            this.maskHasPaint = false;
+        }
     }
 
     // ── geometry ────────────────────────────────────────────────────────────
@@ -348,6 +548,53 @@ export class ImageEditor {
         this.orientedCtx.scale(flipX, flipY);
         this.orientedCtx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
         this.orientedCtx.restore();
+
+        // Rotating/flipping invalidates any painted mask, so start clean.
+        this._resetMask();
+    }
+
+    _resetMask() {
+        this.maskCanvas = null;
+        this.maskCtx = null;
+        this.maskHasPaint = false;
+        this._lastMaskPoint = null;
+    }
+
+    _ensureMaskCanvas() {
+        const { width, height } = this.orientedSize;
+        if (!this.maskCanvas || this.maskCanvas.width !== width || this.maskCanvas.height !== height) {
+            this.maskCanvas = document.createElement('canvas');
+            this.maskCanvas.width = width;
+            this.maskCanvas.height = height;
+            this.maskCtx = this.maskCanvas.getContext('2d');
+            // Keep the canvas transparent: white strokes are the mask, and the
+            // preview tints only their alpha. An opaque black background would
+            // make `source-in` cover the whole image with the tint.
+            this.maskCtx.clearRect(0, 0, width, height);
+            this.maskHasPaint = false;
+            this._lastMaskPoint = null;
+        }
+        return this.maskCanvas;
+    }
+
+    _clearMask() {
+        if (this.maskCtx && this.maskCanvas) {
+            this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
+        }
+        this.maskHasPaint = false;
+        this._lastMaskPoint = null;
+        this._renderPreview();
+    }
+
+    _setTool(tool) {
+        if (tool !== 'crop' && tool !== 'erase') return;
+        this.state.tool = tool;
+        if (tool === 'erase') {
+            this._ensureMaskCanvas();
+            void this._loadEraseModels();
+        }
+        this._syncControls();
+        this._renderPreview();
     }
 
     cropAspect() {
@@ -462,8 +709,44 @@ export class ImageEditor {
         ctx.drawImage(this.oriented, 0, 0, viewW, viewH);
         ctx.filter = 'none';
 
-        this._drawCropOverlay(ctx, viewW, viewH);
+        if (this.state.tool === 'erase') {
+            this._drawMaskOverlay(ctx, viewW, viewH);
+        } else {
+            this._drawCropOverlay(ctx, viewW, viewH);
+        }
         this._updateReadout();
+    }
+
+    _drawMaskOverlay(ctx, viewW, viewH) {
+        if (this.maskCanvas && this.maskHasPaint) {
+            if (!this.maskPreviewCanvas) this.maskPreviewCanvas = document.createElement('canvas');
+            const tint = this.maskPreviewCanvas;
+            if (tint.width !== viewW) tint.width = viewW;
+            if (tint.height !== viewH) tint.height = viewH;
+
+            const tctx = tint.getContext('2d');
+            tctx.clearRect(0, 0, viewW, viewH);
+            tctx.drawImage(this.maskCanvas, 0, 0, viewW, viewH);
+            tctx.globalCompositeOperation = 'source-in';
+            tctx.fillStyle = 'rgba(255, 64, 64, 0.55)';
+            tctx.fillRect(0, 0, viewW, viewH);
+            tctx.globalCompositeOperation = 'source-over';
+
+            ctx.drawImage(tint, 0, 0);
+        }
+
+        // Keep the crop boundary visible while painting: only pixels inside it are
+        // exported, so painting outside would otherwise look like it did nothing.
+        if (this.state.crop) {
+            const crop = this.resolveCrop();
+            const s = this.viewScale;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.setLineDash([6, 4]);
+            ctx.lineWidth = 1;
+            ctx.strokeRect(crop.x * s + 0.5, crop.y * s + 0.5, crop.width * s - 1, crop.height * s - 1);
+            ctx.restore();
+        }
     }
 
     _drawCropOverlay(ctx, viewW, viewH) {
@@ -551,6 +834,31 @@ export class ImageEditor {
         return canvasToBlob(canvas);
     }
 
+    /** Render the painted mask at the same size/crop as the exported image. */
+    async renderMaskExport() {
+        if (!this.baseImage) throw new Error('No image loaded');
+
+        const crop = this.resolveCrop();
+        const out = this.outputSize();
+        const canvas = document.createElement('canvas');
+        canvas.width = out.width;
+        canvas.height = out.height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, out.width, out.height);
+        if (this.maskCanvas && this.maskHasPaint) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(
+                this.maskCanvas,
+                crop.x, crop.y, crop.width, crop.height,
+                0, 0, out.width, out.height,
+            );
+        }
+
+        return canvasToBlob(canvas);
+    }
+
     opsSummary() {
         const crop = this.resolveCrop();
         const out = this.outputSize();
@@ -576,11 +884,11 @@ export class ImageEditor {
 
     // ── control sync ────────────────────────────────────────────────────────
 
-    _setLoading(isLoading) {
+    _setLoading(isLoading, message = 'Loading image...') {
         const el = byId('image-editor-loading');
         if (!el) return;
         el.classList.toggle('hidden', !isLoading);
-        el.textContent = isLoading ? 'Loading image...' : '';
+        el.textContent = isLoading ? message : '';
     }
 
     _updateReadout() {
@@ -602,6 +910,26 @@ export class ImageEditor {
         for (const button of document.querySelectorAll(`#${ROOT_ID} [data-aspect]`)) {
             button.classList.toggle('active', button.dataset.aspect === this.state.aspect);
         }
+
+        for (const button of document.querySelectorAll(`#${ROOT_ID} [data-tool]`)) {
+            button.classList.toggle('active', button.dataset.tool === this.state.tool);
+        }
+        byId('image-editor-erase-group')?.classList.toggle('hidden', this.state.tool !== 'erase');
+        const toolHint = byId('image-editor-tool-hint');
+        if (toolHint) {
+            toolHint.textContent = this.state.tool === 'erase'
+                ? 'Paint over the object to remove. Use the brush slider to resize, then press Erase.'
+                : 'Drag on the image to draw a crop. Once one exists, drag inside it to move it, or drag a handle to resize.';
+        }
+
+        const brush = byId('image-editor-brush');
+        if (brush && document.activeElement !== brush) brush.value = String(this.state.brushSize);
+        const brushValue = byId('image-editor-brush-value');
+        if (brushValue) brushValue.textContent = String(this.state.brushSize);
+        const feather = byId('image-editor-feather');
+        if (feather && document.activeElement !== feather) feather.value = String(this.state.feather);
+        const featherValue = byId('image-editor-feather-value');
+        if (featherValue) featherValue.textContent = String(this.state.feather);
 
         const widthInput = byId('image-editor-width');
         const heightInput = byId('image-editor-height');
@@ -656,6 +984,21 @@ export class ImageEditor {
                 this._syncControls();
             });
         }
+
+        for (const button of document.querySelectorAll(`#${ROOT_ID} [data-tool]`)) {
+            listen(button, 'click', () => this._setTool(button.dataset.tool));
+        }
+
+        listen(byId('image-editor-brush'), 'input', (e) => {
+            this.state.brushSize = Number(e.target.value);
+            this._syncControls();
+        });
+        listen(byId('image-editor-feather'), 'input', (e) => {
+            this.state.feather = Number(e.target.value);
+            this._syncControls();
+        });
+        listen(byId('image-editor-mask-clear'), 'click', () => this._clearMask());
+        listen(byId('image-editor-erase'), 'click', () => this.erase());
 
         listen(byId('image-editor-crop-reset'), 'click', () => {
             this.state.crop = null;
@@ -842,6 +1185,17 @@ export class ImageEditor {
             if (!this.isOpen || !this.baseImage) return;
             const point = toView(e);
             const s = this.viewScale;
+
+            if (this.state.tool === 'erase') {
+                this._ensureMaskCanvas();
+                this._lastMaskPoint = null;
+                this._paintMask(point, false);
+                this.drag = { mode: 'erase' };
+                canvas.setPointerCapture?.(e.pointerId);
+                e.preventDefault();
+                this._renderPreview();
+                return;
+            }
             // `point` is in backing pixels, so scale the on-screen handle target up to match.
             // Otherwise the grab area shrinks as the preview is downscaled.
             const tolerance = HANDLE_HIT_PX * point.scaleX;
@@ -887,6 +1241,13 @@ export class ImageEditor {
             const W = this.orientedSize.width;
             const H = this.orientedSize.height;
 
+            if (this.drag.mode === 'erase') {
+                this._paintMask(point, true);
+                this._renderPreview();
+                e.preventDefault();
+                return;
+            }
+
             if (this.drag.mode === 'new') {
                 const x0 = Math.min(this.drag.start.x, point.x) / s;
                 const y0 = Math.min(this.drag.start.y, point.y) / s;
@@ -919,6 +1280,15 @@ export class ImageEditor {
         const onUp = (e) => {
             if (!this.drag) return;
             canvas.releasePointerCapture?.(e.pointerId);
+
+            if (this.drag.mode === 'erase') {
+                this.drag = null;
+                this._lastMaskPoint = null;
+                this._renderPreview();
+                this._syncControls();
+                return;
+            }
+
             this.drag = null;
 
             const crop = this.state.crop;
@@ -940,6 +1310,36 @@ export class ImageEditor {
         listen(canvas, 'pointermove', onMove);
         listen(canvas, 'pointerup', onUp);
         listen(canvas, 'pointercancel', onUp);
+    }
+
+    _paintMask(point, connect) {
+        if (!this.maskCtx) return;
+        const s = this.viewScale || 1;
+        const x = point.x / s;
+        const y = point.y / s;
+        // The slider is a preview-space diameter; convert to oriented pixels so the
+        // on-screen brush stays the same size regardless of preview downscaling.
+        const radius = Math.max(1, (this.state.brushSize / s) / 2);
+        const ctx = this.maskCtx;
+        ctx.strokeStyle = '#ffffff';
+        ctx.fillStyle = '#ffffff';
+        ctx.lineWidth = radius * 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (connect && this._lastMaskPoint) {
+            ctx.beginPath();
+            ctx.moveTo(this._lastMaskPoint.x, this._lastMaskPoint.y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+        } else {
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        this._lastMaskPoint = { x, y };
+        this.maskHasPaint = true;
     }
 
     _resizeCrop(handle, startCrop, point, s) {
@@ -1013,6 +1413,107 @@ export class ImageEditor {
             toast(error.message || 'Failed to save the edited image', 'error');
         } finally {
             if (button) button.disabled = false;
+        }
+    }
+
+    async _loadEraseModels() {
+        if (this.eraseModels) {
+            this._populateEraseModels();
+            return this.eraseModels;
+        }
+        try {
+            // Fetch the raw catalog rather than api.getModels(): the latter also
+            // republishes the catalog event, which resets Studio control defaults.
+            const catalog = await api.get('/model-catalog');
+            const models = Array.isArray(catalog) ? catalog : [];
+            this.eraseModels = models.filter(
+                model => model && model.supported !== false && model.capabilities?.inpaint === true,
+            );
+        } catch (error) {
+            console.warn('Could not load models for erase:', error);
+            this.eraseModels = [];
+        }
+        this._populateEraseModels();
+        return this.eraseModels;
+    }
+
+    _populateEraseModels() {
+        const select = byId('image-editor-erase-model');
+        if (!select) return;
+
+        const models = this.eraseModels || [];
+        const previous = select.value;
+        select.innerHTML = '';
+
+        for (const model of models) {
+            const option = document.createElement('option');
+            option.value = model.name;
+            option.textContent = model.name;
+            select.appendChild(option);
+        }
+
+        if (!models.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No inpaint-capable model';
+            select.appendChild(option);
+            return;
+        }
+
+        const preferred = [this.defaultEraseModel, previous]
+            .filter(Boolean)
+            .find(name => models.some(model => model.name === name));
+        select.value = preferred || models[0].name;
+    }
+
+    async erase() {
+        if (!this.baseImage || this._erasing) return;
+        if (!this.maskHasPaint) {
+            toast('Paint over the area you want to erase first', 'error');
+            return;
+        }
+
+        const model = byId('image-editor-erase-model')?.value || '';
+        if (!model) {
+            toast('Select an inpaint-capable model to erase with', 'error');
+            return;
+        }
+
+        const button = byId('image-editor-erase');
+        if (button) button.disabled = true;
+        this._erasing = true;
+        this._setLoading(true, 'Erasing...');
+
+        try {
+            const imageBlob = await this.renderExport();
+            const maskBlob = await this.renderMaskExport();
+            const result = await api.eraseImage({
+                sourcePath: this.sourceSrc,
+                image: imageBlob,
+                mask: maskBlob,
+                baseModel: model,
+                prompt: byId('image-editor-erase-prompt')?.value || '',
+                negativePrompt: byId('image-editor-erase-negative')?.value || '',
+                strength: 0.99,
+                maskBlur: Number(this.state.feather) || 0,
+                maskGrow: 6,
+            });
+
+            const newPath = result?.path;
+            // Read the export size before close() resets state: it is the saved
+            // copy's true pixel size, so the lightbox can show it unstretched.
+            const exported = this.outputSize();
+
+            toast('Saved erased copy to the gallery', 'success');
+            this.close();
+            if (newPath) this.callbacks.onSaved({ path: newPath, width: exported.width, height: exported.height });
+        } catch (error) {
+            console.error('Image erase failed:', error);
+            toast(error.message || 'Failed to erase the masked area', 'error');
+        } finally {
+            this._erasing = false;
+            if (button) button.disabled = false;
+            this._setLoading(false);
         }
     }
 

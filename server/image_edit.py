@@ -13,10 +13,11 @@ Only new files are ever written; existing outputs are never overwritten.
 
 import io
 import json
+import threading
 import time
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from server.storage import (
     BASE,
@@ -156,6 +157,185 @@ def store_edited_upload(source: Path, data: bytes, ops: dict | None = None) -> P
     meta["width"], meta["height"] = converted.size
     _register_edited(dest, meta)
     return dest
+
+
+def grow_mask(mask: Image.Image, pixels: int) -> Image.Image:
+    """Dilate a white-on-black mask so object edges are fully covered."""
+    try:
+        grow = int(pixels)
+    except (TypeError, ValueError):
+        grow = 0
+    if grow <= 0:
+        return mask
+    # MaxFilter needs an odd kernel and gets very expensive above ~100px.
+    size = min(101, max(3, grow * 2 + 1))
+    if size % 2 == 0:
+        size += 1
+    return mask.convert("L").filter(ImageFilter.MaxFilter(size))
+
+
+def save_erased_images(images, source: Path, ops: dict | None = None) -> list[str]:
+    """Persist generated erase results as new ``_edit`` copies beside ``source``.
+
+    Erase behaves like a crop: the original is never touched and the result becomes a
+    new gallery image in the same run folder, carrying ``edited_from`` lineage.
+    """
+    saved: list[str] = []
+    for image in images:
+        converted = image if image.mode in ("RGB", "RGBA") else image.convert("RGB")
+        dest = allocate_edit_path(source)
+        _atomic_save(converted, dest)
+
+        erase_ops = {"erase": True}
+        if ops:
+            erase_ops.update({k: v for k, v in ops.items() if v not in (None, "")})
+        meta = _edited_meta(source, erase_ops)
+        meta["source"] = "image_erase"
+        meta["width"], meta["height"] = converted.size
+        _register_edited(dest, meta)
+        saved.append(to_web_path(dest))
+    return saved
+
+
+EDIT_SESSION_KEY = "edit_sessions"
+_EDIT_SESSION_LOCK = threading.Lock()
+_MAX_MASK_DATA_URL = 24 * 1024 * 1024
+_MAX_SESSION_TEXT = 2000
+
+
+def _write_run_meta(run_dir: Path, meta: dict) -> None:
+    """Atomically replace a run's ``meta.json`` so readers never see a partial file."""
+    meta_file = run_dir / "meta.json"
+    tmp = meta_file.with_name(f".{meta_file.name}.{time.time_ns()}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(meta, handle, indent=2)
+        tmp.replace(meta_file)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _finite_number(value, default=None):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number or number in (float("inf"), float("-inf")):
+        return default
+    return number
+
+
+def _clean_crop(value):
+    if not isinstance(value, dict):
+        return None
+    x = _finite_number(value.get("x"))
+    y = _finite_number(value.get("y"))
+    w = _finite_number(value.get("w"))
+    h = _finite_number(value.get("h"))
+    if None in (x, y, w, h) or w <= 0 or h <= 0:
+        return None
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def _clean_text(value, limit: int = _MAX_SESSION_TEXT) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value[:limit]
+
+
+def _clean_mask(value):
+    if not value:
+        return None
+    if not isinstance(value, str):
+        raise ImageEditError("Edit mask must be a PNG data URL")
+    if not value.startswith("data:image/png;base64,"):
+        raise ImageEditError("Edit mask must be a PNG data URL")
+    if len(value) > _MAX_MASK_DATA_URL:
+        raise ImageEditError("Edit mask is too large to store")
+    return value
+
+
+def _sanitize_edit_session(session: dict) -> dict:
+    """Keep only the known, serializable editor fields and clamp their ranges."""
+    if not isinstance(session, dict):
+        raise ImageEditError("Edit session must be an object")
+
+    clean = {
+        "version": int(_finite_number(session.get("version"), 1) or 1),
+        "tool": "erase" if session.get("tool") == "erase" else "crop",
+        "rot": int(_finite_number(session.get("rot"), 0) or 0) % 4,
+        "flipH": bool(session.get("flipH")),
+        "flipV": bool(session.get("flipV")),
+        "crop": _clean_crop(session.get("crop")),
+        "aspect": _clean_text(session.get("aspect"), 40) or "free",
+        "brightness": min(max(_finite_number(session.get("brightness"), 1.0), 0.0), 2.0),
+        "contrast": min(max(_finite_number(session.get("contrast"), 1.0), 0.0), 2.0),
+        "saturation": min(max(_finite_number(session.get("saturation"), 1.0), 0.0), 2.0),
+        "targetW": None,
+        "targetH": None,
+        "lockAspect": bool(session.get("lockAspect", True)),
+        "snapEight": bool(session.get("snapEight", True)),
+        "brushSize": min(max(_finite_number(session.get("brushSize"), 48.0), 1.0), 400.0),
+        "feather": min(max(_finite_number(session.get("feather"), 12.0), 0.0), 200.0),
+        "model": _clean_text(session.get("model"), 500),
+        "prompt": _clean_text(session.get("prompt")),
+        "negativePrompt": _clean_text(session.get("negativePrompt")),
+        "mask": _clean_mask(session.get("mask")),
+        "updatedAt": _finite_number(session.get("updatedAt"), time.time()),
+    }
+    for key in ("targetW", "targetH"):
+        number = _finite_number(session.get(key))
+        if number is not None and number > 0:
+            clean[key] = int(number)
+    return clean
+
+
+def load_edit_session(source: Path) -> dict | None:
+    """Return the saved editor session for ``source``, or ``None``."""
+    meta = _read_run_meta(source.parent)
+    sessions = meta.get(EDIT_SESSION_KEY)
+    if not isinstance(sessions, dict):
+        return None
+    session = sessions.get(source.name)
+    return dict(session) if isinstance(session, dict) else None
+
+
+def save_edit_session(source: Path, session: dict) -> dict:
+    """Persist the editor session for ``source`` in the run's ``meta.json``.
+
+    Sessions are stored under a per-image ``edit_sessions`` map so a run with several
+    images can remember a different mask and tool state for each one. The map is
+    stripped from manifest/gallery metadata to keep it out of search and payloads.
+    """
+    clean = _sanitize_edit_session(session)
+    with _EDIT_SESSION_LOCK:
+        meta = _read_run_meta(source.parent)
+        sessions = meta.get(EDIT_SESSION_KEY)
+        if not isinstance(sessions, dict):
+            sessions = {}
+        sessions[source.name] = clean
+        meta[EDIT_SESSION_KEY] = sessions
+        _write_run_meta(source.parent, meta)
+    return clean
+
+
+def remove_edit_session(source: Path) -> None:
+    """Drop a deleted image's saved editor session from its run's ``meta.json``."""
+    with _EDIT_SESSION_LOCK:
+        meta = _read_run_meta(source.parent)
+        sessions = meta.get(EDIT_SESSION_KEY)
+        if not isinstance(sessions, dict) or source.name not in sessions:
+            return
+        sessions.pop(source.name, None)
+        if sessions:
+            meta[EDIT_SESSION_KEY] = sessions
+        else:
+            meta.pop(EDIT_SESSION_KEY, None)
+        _write_run_meta(source.parent, meta)
 
 
 def web_path(path: Path) -> str:

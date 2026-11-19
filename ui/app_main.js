@@ -2720,6 +2720,7 @@ function openImageEditor(payload = {}) {
 
     editor.open({
         src: payload.src,
+        baseModel: byId('base_model')?.value || '',
         onSaved: handleEditedImageSaved,
         onUseAsInput: (file) => useFileAsInputImage(file, 'edited image'),
     });
@@ -3321,13 +3322,18 @@ function renderQueuePanel(data) {
     const recent = jobs.slice(0, 32);
     listEl.innerHTML = recent.map(job => {
         const status = job.status || 'unknown';
-        const mode = job.settings?.mode || 'txt2img';
+        const isUpscale = job.type === 'upscale' || job.settings?.is_upscale === true;
+        const mode = isUpscale ? 'upscale' : (job.settings?.mode || 'txt2img');
+        const modeLabel = isUpscale ? 'Upscaling' : mode;
         const prompt = (job.settings?.prompt || '').trim();
-        const title = prompt ? escapeHtml(prompt.slice(0, 160)) : '(no prompt)';
+        const title = isUpscale
+            ? 'Upscaling image'
+            : (prompt ? escapeHtml(prompt.slice(0, 160)) : '(no prompt)');
         const dims = `${job.settings?.width || '-'}x${job.settings?.height || '-'}`;
         const steps = job.settings?.steps ?? '-';
         const cfg = job.settings?.cfg ?? '-';
         const batch = job.settings?.num_images ?? '-';
+        const scale = job.settings?.scale ?? 2;
         const model = escapeHtml(job.settings?.base_model || '-');
         const scheduler = escapeHtml(job.settings?.scheduler || '-');
         const pos = job.queue_position ? `#${job.queue_position}` : '';
@@ -3350,7 +3356,11 @@ function renderQueuePanel(data) {
                     ? 'Cancelling'
                     : status;
         const isExpanded = expandedQueueJobs.has(job.job_id);
-        const hasExtraDetails = seed !== null || negative.length > 0 || loras.length > 0 || embeddings.length > 0 || modeDetails.length > 0;
+        const hasExtraDetails = !isUpscale && (seed !== null || negative.length > 0 || loras.length > 0 || embeddings.length > 0 || modeDetails.length > 0);
+        const metaHtml = isUpscale
+            ? `<div class="queue-item-meta">${escapeHtml(String(scale))}x upscale | ${escapeHtml(startedAt)}</div>`
+            : `<div class="queue-item-meta">${escapeHtml(dims)} | steps ${escapeHtml(String(steps))} | cfg ${escapeHtml(String(cfg))} | batch ${escapeHtml(String(batch))}</div>
+                   <div class="queue-item-meta">${model} | ${scheduler} | ${escapeHtml(startedAt)}</div>`;
         const detailsHtml = hasExtraDetails
             ? `
                 <div class="queue-item-details ${isExpanded ? '' : 'hidden'}" data-details-for="${job.job_id}">
@@ -3369,11 +3379,10 @@ function renderQueuePanel(data) {
                 <div class="queue-item-main">
                   <div class="queue-item-badges">
                     <span class="queue-badge status-${status}">${escapeHtml(statusText)}${pos ? ` ${escapeHtml(pos)}` : ''}</span>
-                    <span class="queue-badge mode-${escapeHtml(mode)}">${escapeHtml(mode)}</span>
+                    <span class="queue-badge mode-${escapeHtml(mode)}">${escapeHtml(modeLabel)}</span>
                   </div>
                   <div class="queue-item-title">${title}</div>
-                  <div class="queue-item-meta">${escapeHtml(dims)} | steps ${escapeHtml(String(steps))} | cfg ${escapeHtml(String(cfg))} | batch ${escapeHtml(String(batch))}</div>
-                  <div class="queue-item-meta">${model} | ${scheduler} | ${escapeHtml(startedAt)}</div>
+                  ${metaHtml}
                   ${detailsHtml}
                 </div>
                 <div class="queue-item-actions">
@@ -3578,6 +3587,7 @@ function formatQueueTime(unixSeconds) {
 
 function normalizeQueueThumbUrl(src) {
     if (!src || typeof src !== 'string') return null;
-    if (!src.startsWith('/inputs/')) return null;
-    return src;
+    if (src.startsWith('/inputs/') || src.startsWith('/outputs/')) return src;
+    if (src.startsWith('inputs/') || src.startsWith('outputs/')) return `/${src}`;
+    return null;
 }

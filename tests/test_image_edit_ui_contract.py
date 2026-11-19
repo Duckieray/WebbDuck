@@ -25,6 +25,7 @@ API = (ROOT / "ui" / "core" / "api.js").read_text(encoding="utf-8")
 EVENTS = (ROOT / "ui" / "core" / "events.js").read_text(encoding="utf-8")
 MAIN = (ROOT / "ui" / "app_main.js").read_text(encoding="utf-8")
 APP = (ROOT / "server" / "app.py").read_text(encoding="utf-8")
+WORKER = (ROOT / "core" / "worker.py").read_text(encoding="utf-8")
 CSS = (ROOT / "ui" / "styles" / "components" / "overlays.css").read_text(encoding="utf-8")
 
 
@@ -178,6 +179,57 @@ def test_editor_exposes_the_documented_controls():
         "image-editor-cancel",
     ):
         assert control in EDITOR, f"editor is missing {control!r}"
+
+
+def test_editor_exposes_the_erase_tool_controls():
+    for control in (
+        "image-editor-tools",
+        "image-editor-erase-group",
+        "image-editor-brush",
+        "image-editor-feather",
+        "image-editor-erase-model",
+        "image-editor-erase-prompt",
+        "image-editor-erase-negative",
+        "image-editor-mask-clear",
+        "image-editor-erase",
+    ):
+        assert control in EDITOR, f"editor is missing {control!r}"
+    assert 'data-tool="crop"' in EDITOR
+    assert 'data-tool="erase"' in EDITOR
+    assert "renderMaskExport()" in EDITOR
+    assert "eraseImage(" in EDITOR
+    assert "postForm('/image/erase'" in API
+    # The mask canvas must stay transparent so the red preview tints only painted
+    # strokes; an opaque black fill makes `source-in` cover the whole image.
+    assert "maskCtx.clearRect" in EDITOR
+    assert "maskCtx.fillRect" not in EDITOR
+
+
+def test_editor_restores_the_saved_session_for_the_same_image():
+    """Reopening an image must restore its mask, crop, model, and prompts."""
+    assert "getEditSession(" in EDITOR
+    assert "saveEditSession(" in EDITOR
+    assert "_snapshotSession()" in EDITOR
+    assert "_restoreMask(" in EDITOR
+    assert "edit-session" in API
+    assert "@app.get(\"/image/edit-session\")" in APP
+    assert "@app.post(\"/image/edit-session\")" in APP
+    assert "edit_sessions" in APP
+    assert "edit_sessions" in (ROOT / "server" / "storage.py").read_text(encoding="utf-8")
+
+
+def test_erase_is_a_front_of_queue_gpu_job_saved_beside_the_source():
+    """Erase must not run in the request handler, and it copies like a crop."""
+    assert "@app.post(\"/image/erase\")" in APP
+    assert "'/image/erase'" in API
+    # Queued at the front, matching the gallery upscale behavior.
+    erase_body = APP[APP.index('@app.post("/image/erase")'):]
+    erase_body = erase_body[:erase_body.index("return result") + len("return result")]
+    assert "front=True" in erase_body
+    assert '"type": "erase"' in erase_body
+    # The worker stores the result as a new `_edit` copy beside the source.
+    assert "save_erased_images(" in WORKER
+    assert 'job.get("type") == "erase"' in WORKER
 
 
 def test_editor_aspect_presets_are_offered():
