@@ -1,6 +1,6 @@
 # WebbDuck Repo Overview
 
-WebbDuck is a local-first image generation studio with a FastAPI backend, a queue-first GPU worker, and a zero-build browser UI. Generation is model-first and architecture-agnostic: the selected checkpoint drives backend resolution, and architecture-specific code lives in `core/backends/` (SDXL, FLUX, Krea 2, Qwen image).
+WebbDuck is a local-first image generation studio with a FastAPI backend, a queue-first GPU worker, and a zero-build browser UI. Generation is model-first and architecture-agnostic: the selected checkpoint drives backend resolution, and architecture-specific code lives in `core/backends/` (SDXL, FLUX, Krea 2, Qwen image, MOSS Image).
 
 ## Runtime Flow
 
@@ -18,7 +18,7 @@ WebbDuck is a local-first image generation studio with a FastAPI backend, a queu
 | --- | --- |
 | `server/` | API routes, WebSocket, queue entrypoints, gallery APIs, thumbnails, model-catalog/provider/runtime-readiness routers |
 | `core/` | worker loop, generation orchestration, runtime routing, pipeline lifecycle, runtime helpers, plugins |
-| `core/backends/` | architecture-specific generation backends (SDXL, FLUX, Krea 2, Qwen) behind the contract in `core/backends/base.py` |
+| `core/backends/` | architecture-specific generation backends (SDXL, FLUX, Krea 2, Qwen, MOSS Image) behind the contract in `core/backends/base.py` |
 | `models/` | checkpoint, LoRA, embedding, descriptor, and upscaler discovery |
 | `modes/` | text2img, img2img, inpaint, outpaint, and two-pass execution |
 | `prompt/` | SDXL long-prompt conditioning and prompt utilities |

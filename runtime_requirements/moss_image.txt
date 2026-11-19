@@ -1,0 +1,22 @@
+# MOSS-Image isolated runtime
+#
+# Install PyTorch separately for the target CUDA stack, then install this file
+# in a backend-specific environment and set WEBBDUCK_MOSS_IMAGE_PYTHON to that
+# Python. MOSS-Image ships a remote Diffusers pipeline (pipeline_moss_image.py)
+# and uses these runtime classes directly:
+#   - diffusers.AutoencoderKLFlux2 (FLUX.2 VAE)
+#   - transformers.Qwen3_5Model (Qwen3.5-9B text encoder)
+#   - accelerate.init_empty_weights (meta-device transformer scaffold)
+#
+# The upstream model card targets diffusers>=0.38 / transformers>=5.3, but
+# AutoencoderKLFlux2 landed in 0.39, so pin the same release as the other
+# isolated image runtimes.
+diffusers==0.39.0
+transformers>=5.3.0,<6
+accelerate>=1.10.0,<2
+safetensors>=0.6.0
+huggingface-hub>=0.36.0
+sentencepiece>=0.2.0
+protobuf>=5.29.0
+pillow>=11.0.0
+numpy>=2.0.0

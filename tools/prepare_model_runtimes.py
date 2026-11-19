@@ -34,6 +34,7 @@ RUNTIMES = {
     "flux": ("WEBBDUCK_FLUX_PYTHON", ROOT / "runtime_requirements" / "flux.txt"),
     "krea2": ("WEBBDUCK_KREA2_PYTHON", ROOT / "runtime_requirements" / "krea2.txt"),
     "qwen_image": ("WEBBDUCK_QWEN_IMAGE_PYTHON", ROOT / "runtime_requirements" / "qwen_image.txt"),
+    "moss_image": ("WEBBDUCK_MOSS_IMAGE_PYTHON", ROOT / "runtime_requirements" / "moss_image.txt"),
 }
 
 ENV_FILE_NAME = "webbduck_runtime.env"

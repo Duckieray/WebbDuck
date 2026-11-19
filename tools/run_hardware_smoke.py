@@ -204,6 +204,7 @@ def _rows(args, readiness_items: list[dict], source: Path, mask: Path) -> list[d
     krea = _find_model(readiness_items, args.krea_model, ("krea-2", "turbo"))
     dark = _find_model(readiness_items, args.dark_beast_model, ("dark", "beast"))
     qwen = _find_model(readiness_items, args.qwen_model, ("qwen-image-2512",))
+    moss = _find_model(readiness_items, args.moss_model, ("moss",))
 
     def row(name, model, fields, files=None, optional=False):
         return {"row": name, "model": model, "fields": fields, "files": files or {}, "optional": optional}
@@ -250,6 +251,12 @@ def _rows(args, readiness_items: list[dict], source: Path, mask: Path) -> list[d
         rows.append(row("qwen-image-2512", qwen, _base_fields(str(qwen["name"]), width=int(defaults.get("width") or 1328), height=int(defaults.get("height") or 1328), steps=int(defaults.get("steps") or 50), cfg=float(defaults.get("cfg", 4.0)))))
     else:
         rows.append(row("qwen-image-2512", None, {}))
+
+    if moss:
+        defaults = moss.get("defaults") or {}
+        rows.append(row("moss-image-t2i", moss, _base_fields(str(moss["name"]), width=int(defaults.get("width") or 1024), height=int(defaults.get("height") or 1024), steps=int(defaults.get("steps") or 50), cfg=float(defaults.get("cfg", 3.0)))))
+    else:
+        rows.append(row("moss-image-t2i", None, {}, optional=True))
     return rows
 
 
@@ -263,6 +270,7 @@ def main() -> int:
     parser.add_argument("--krea-model", help="Override auto-detected Krea model name.")
     parser.add_argument("--dark-beast-model", help="Exact public name for the local Dark Beast 3 FP8 checkpoint.")
     parser.add_argument("--qwen-model", help="Override auto-detected Qwen Image model name.")
+    parser.add_argument("--moss-model", help="Override auto-detected MOSS-Image model name.")
     parser.add_argument("--lora", help="Known-good SDXL LoRA name for the optional asset row.")
     parser.add_argument("--refiner", help="Known-good SDXL second-pass/refiner model name for the optional asset row.")
     parser.add_argument("--timeout", type=float, default=7200.0)

@@ -156,7 +156,7 @@ mkdir checkpoint\sdxl, lora, embeddings, outputs, weights
 
 ### Step 9: Install WebbDuck's generation engine
 
-WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen) inside its own private mini-environment,
+WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen, MOSS Image) inside its own private mini-environment,
 so one engine can never break the others. Even your first SDXL image needs this step.
 
 ```
@@ -316,7 +316,7 @@ mkdir -p checkpoint/sdxl lora embeddings outputs weights
 
 ### Step 9: Install WebbDuck's generation engine
 
-WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen) inside its own private mini-environment,
+WebbDuck runs each AI "engine" (SDXL, FLUX, Krea 2, Qwen, MOSS Image) inside its own private mini-environment,
 so one engine can never break the others. Even your first SDXL image needs this step.
 
 ```

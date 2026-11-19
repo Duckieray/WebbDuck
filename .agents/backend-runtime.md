@@ -78,6 +78,25 @@ headroom. `core/backends/flux.py` forwards `strength` in the worker payload.
 Note: `enable_sequential_cpu_offload` is incompatible with GGUF-quantized
 transformers and is auto-guarded to the diffusers path.
 
+## MOSS-Image Single-File Backend
+
+`core/backends/moss_image.py` resolves MOSS-Image support components (default
+`OpenMOSS-Team/MOSS-Image-Base`, overridable with
+`WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL`) and launches `moss_image_worker.py` in the
+`moss_image` isolated runtime. MOSS-Image's pipeline is a remote Diffusers file
+(`pipeline_moss_image.py`), not a class shipped in `diffusers`, so the worker
+imports it from the component repository instead of vendoring a copy.
+
+Single-file ComfyUI checkpoints contain only the 5B DiT. The worker builds a
+meta-device `MOSSImageTransformer` scaffold from the component
+`transformer/config.json` and streams the checkpoint into it: fused
+`layers.N.proj.qkv.weight` tensors are split into `proj.q/k/v`, the shared
+prefix is stripped, and the derived `rope.bands` buffer is rebuilt in fp32.
+Quantized (FP8/INT8) MOSS files are rejected before launch. Capabilities are
+text-to-image plus negative prompt only; LoRA and editing variants are not
+advertised. `_configure_memory()` uses sequential CPU offload below ~22 GB VRAM
+and model offload above it.
+
 ## Krea 2 Identity Edit (krea2_identity_edit)
 
 `core/backends/krea2_identity.py` is the pure-Python contract layer for the

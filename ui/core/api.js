@@ -68,7 +68,7 @@ export async function postForm(url, formData) {
 
 // Architecture groups for the checkpoint dropdown. Order defines both the
 // dropdown group order and the within-catalog sort preference.
-const ARCH_ORDER = ['sdxl', 'flux', 'flux1', 'flux2', 'krea2', 'qwen_image'];
+const ARCH_ORDER = ['sdxl', 'flux', 'flux1', 'flux2', 'krea2', 'qwen_image', 'moss_image'];
 const ARCH_LABELS = {
     sdxl: 'SDXL',
     flux: 'FLUX',
@@ -76,6 +76,7 @@ const ARCH_LABELS = {
     flux2: 'FLUX',
     krea2: 'Krea 2',
     qwen_image: 'Qwen Image',
+    moss_image: 'MOSS Image',
 };
 
 function architectureGroup(item) {

@@ -84,6 +84,13 @@ Click an image to inspect it full size.
 
 ## Core Generation Controls
 
+### Checkpoint Families
+
+WebbDuck routes each checkpoint to the right runtime automatically: SDXL, FLUX /
+FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints currently run
+text-to-image with 50 steps and CFG 3 by default, and dimensions must be
+multiples of 16. Negative prompts are supported.
+
 ### Prompt and Token Count
 
 - Prompt length is checked by the backend tokenizer.
