@@ -47,10 +47,10 @@ def _worker_environment() -> dict[str, str]:
     if token:
         env["HF_TOKEN"] = token
         env["HUGGING_FACE_HUB_TOKEN"] = token
-    # The FLUX runtime allocates large attention buffers during identity
-    # conditioning; keep the allocator fragmentation-friendly. The worker also
-    # sets this itself, so this only matters if a future runtime ignores it.
-    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    # Opt-in only: the CUDA VMM path behind expandable_segments has been linked
+    # to MMU faults on Blackwell. The worker applies the same policy itself.
+    if os.getenv("WEBBDUCK_EXPANDABLE_SEGMENTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     return env
 
 

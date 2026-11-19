@@ -26,10 +26,11 @@ except ModuleNotFoundError:
     _sys.path.insert(0, str(Path(__file__).resolve().parent))
     from flux_lora import apply_flux_loras
 
-# FLUX.2 image/identity conditioning allocates transient attention buffers that
-# can fragment VRAM and OOM at tight headroom. Use the expandable-segments
-# allocator by default while preserving an explicit operator/user override.
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# FLUX.2 image/identity conditioning can fragment VRAM at tight headroom.
+# expandable_segments is opt-in because its CUDA VMM path has been linked to
+# MMU faults on Blackwell; an explicit user override still wins.
+if os.getenv("WEBBDUCK_EXPANDABLE_SEGMENTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 _DEFAULT_FLUX2_9B_COMPONENT_MODEL = "black-forest-labs/FLUX.2-klein-9B"

@@ -63,7 +63,7 @@ def test_native_forward_has_no_per_layer_host_sync():
     assert "use_fast_accum=True" in source
 
 
-def test_adaptive_worker_enables_allocator_and_native_kernel_before_generation():
+def test_adaptive_worker_gates_allocator_and_enables_native_kernel_before_generation():
     source = (
         Path(__file__).resolve().parents[1]
         / "core"
@@ -73,6 +73,8 @@ def test_adaptive_worker_enables_allocator_and_native_kernel_before_generation()
 
     allocator = 'os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")'
     assert allocator in source
+    assert "WEBBDUCK_EXPANDABLE_SEGMENTS" in source
+    assert source.index("WEBBDUCK_EXPANDABLE_SEGMENTS") < source.index(allocator)
     assert source.index(allocator) < source.index("import torch")
     assert "native_fp8.enable_for_hardware(hardware, safe.base)" in source
     assert 'runtime["native_fp8"] = native_fp8.stats()' in source

@@ -23,8 +23,8 @@ logging.basicConfig(
 import argparse
 import os
 
-if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+if os.getenv("WEBBDUCK_EXPANDABLE_SEGMENTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 RLIMIT_AS_GB = int(os.getenv("WEBBDUCK_RLIMIT_AS_GB", "0"))
 if RLIMIT_AS_GB > 0:

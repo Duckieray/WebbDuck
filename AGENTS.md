@@ -186,7 +186,7 @@ Isolated backend runtimes (see `runtime_requirements/*.txt` and `docs/DEVELOPMEN
 
 Other:
 
-- `WEBBDUCK_RUNTIME_HOME`, `WEBBDUCK_CREDENTIALS_FILE`, `WEBBDUCK_HF_CONFIG_DIR`, `WEBBDUCK_LEASE_IDLE_TIMEOUT`, `WEBBDUCK_RLIMIT_AS_GB` (disabled by default)
+- `WEBBDUCK_RUNTIME_HOME`, `WEBBDUCK_CREDENTIALS_FILE`, `WEBBDUCK_HF_CONFIG_DIR`, `WEBBDUCK_LEASE_IDLE_TIMEOUT`, `WEBBDUCK_RLIMIT_AS_GB` (disabled by default), `WEBBDUCK_EXPANDABLE_SEGMENTS` (opt-in; off by default)
 
 ## 7. WSL/Linux Commands
 

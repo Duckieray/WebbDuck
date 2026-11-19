@@ -228,6 +228,7 @@ Use `tests/README.md` to pick the narrowest suite that still covers your change.
 - `WEBBDUCK_STRICT_DEVICE`
 - `WEBBDUCK_GPU_LEASE_WAIT_SECONDS` (default `180`)
 - `WEBBDUCK_LEASE_IDLE_TIMEOUT`
+- `WEBBDUCK_EXPANDABLE_SEGMENTS` (opt-in `expandable_segments:True`; off by default to avoid the CUDA VMM path on Blackwell)
 - `WEBBDUCK_USE_IPC_COLLECT`
 - `WEBBDUCK_SMART_EXTEND_DEBUG`
 - `WEBBDUCK_SMART_EXTEND_DEBUG_DIR`

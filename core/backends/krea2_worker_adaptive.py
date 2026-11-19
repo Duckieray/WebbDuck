@@ -28,9 +28,11 @@ from pathlib import Path
 from typing import Any
 
 # Fragmentation can become visible during Krea's text-encoder -> transformer ->
-# VAE phase transitions. Set the PyTorch allocator policy before importing torch
-# while preserving an explicit operator/user override.
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# VAE phase transitions. expandable_segments is opt-in because its CUDA VMM
+# path has been linked to MMU faults on Blackwell; an explicit user override
+# still wins.
+if os.getenv("WEBBDUCK_EXPANDABLE_SEGMENTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 
