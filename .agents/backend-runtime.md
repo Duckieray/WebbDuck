@@ -94,8 +94,20 @@ meta-device `MOSSImageTransformer` scaffold from the component
 prefix is stripped, and the derived `rope.bands` buffer is rebuilt in fp32.
 Quantized (FP8/INT8) MOSS files are rejected before launch. Capabilities are
 text-to-image plus negative prompt only; LoRA and editing variants are not
-advertised. `_configure_memory()` uses sequential CPU offload below ~22 GB VRAM
-and model offload above it.
+advertised.
+
+Before launching, the worker resolves a repo id to a complete local snapshot by
+scanning the configured Hugging Face cache and the default
+`~/.cache/huggingface/hub`. This prevents a first run with an empty external
+`--hf-cache` from re-downloading the ~16 GB Qwen3.5 text encoder (which otherwise
+sits at the `Loading MOSS-Image text encoder` stage).
+
+`_configure_memory()` picks the placement strategy: model offload at 22 GB+
+VRAM, `split` at 14-22 GB, and sequential offload below 14 GB. `split` encodes
+the prompt with the text encoder streamed through the GPU, drops the encoder,
+then keeps the 5B DiT resident for denoising (about 1 s/step at 896x1344 on a
+16 GB card instead of per-block transfers on every step). Override with
+`WEBBDUCK_MOSS_IMAGE_OFFLOAD=model|split|sequential|none`.
 
 ## Krea 2 Identity Edit (krea2_identity_edit)
 

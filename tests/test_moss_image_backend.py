@@ -11,6 +11,8 @@ from safetensors.torch import save_file
 from core.backends.moss_image import MossImageDiffusersBackend
 from core.backends.moss_image_worker import (
     _configure_memory,
+    _resolve_component_source,
+    _snapshot_is_complete,
     map_moss_transformer_key,
     overlay_single_file_transformer,
 )
@@ -276,11 +278,111 @@ class _FakePipe:
         self.mode = str(device)
 
 
-def test_moss_worker_uses_sequential_offload_on_16gb_gpu(monkeypatch):
+def test_encode_prompt_texts_pads_rows_and_keeps_true_length_masks():
+    from types import SimpleNamespace
+
+    from core.backends.moss_image_worker import _encode_prompt_texts
+
+    class _Tokenizer:
+        def apply_chat_template(self, messages, **_kwargs):
+            return messages[0]["content"]
+
+        def __call__(self, text, **_kwargs):
+            return {"input_ids": torch.tensor([[1 if text == "short" else 3]])}
+
+    class _TextEncoder(nn.Module):
+        def forward(self, input_ids, **_kwargs):
+            length = int(input_ids[0, 0].item())
+            return SimpleNamespace(
+                last_hidden_state=torch.ones(1, length, 4)
+            )
+
+    pipe = SimpleNamespace(tokenizer=_Tokenizer(), text_encoder=_TextEncoder())
+    embeds, mask = _encode_prompt_texts(pipe, ["long", "short"], 4096)
+
+    assert embeds.shape == (2, 3, 4)
+    assert mask.tolist() == [[True, True, True], [True, False, False]]
+    assert torch.all(embeds[1, 1:] == 0)
+
+
+def test_moss_worker_uses_split_placement_on_16gb_gpu(monkeypatch):
     monkeypatch.setenv("WEBBDUCK_MOSS_IMAGE_OFFLOAD", "auto")
+    pipe = _FakePipe()
+    assert _configure_memory(pipe, "cuda", 16.0) == "split"
+    assert pipe.mode is None
+
+
+def test_moss_worker_falls_back_to_sequential_on_small_gpu(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_MOSS_IMAGE_OFFLOAD", "auto")
+    pipe = _FakePipe()
+    assert _configure_memory(pipe, "cuda", 10.0) == "sequential"
+    assert pipe.mode == "sequential"
+
+
+def test_moss_worker_accepts_explicit_sequential_override(monkeypatch):
+    monkeypatch.setenv("WEBBDUCK_MOSS_IMAGE_OFFLOAD", "sequential")
     pipe = _FakePipe()
     assert _configure_memory(pipe, "cuda", 16.0) == "sequential"
     assert pipe.mode == "sequential"
+
+
+def _write_component_snapshot(root: Path, *, shards: bool = True) -> None:
+    (root / "text_encoder").mkdir(parents=True)
+    (root / "transformer").mkdir()
+    (root / "tokenizer").mkdir()
+    (root / "vae").mkdir()
+    (root / "pipeline_moss_image.py").write_text("", encoding="utf-8")
+    (root / "transformer" / "config.json").write_text("{}", encoding="utf-8")
+    (root / "tokenizer" / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (root / "vae" / "config.json").write_text("{}", encoding="utf-8")
+    (root / "vae" / "diffusion_pytorch_model.safetensors").write_bytes(b"")
+    weight_map = {"a": "model-00001-of-00004.safetensors"}
+    if shards:
+        weight_map["b"] = "model-00002-of-00004.safetensors"
+    (root / "text_encoder" / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": weight_map}), encoding="utf-8"
+    )
+    for shard in set(weight_map.values()):
+        (root / "text_encoder" / shard).write_bytes(b"")
+
+
+def test_component_resolution_skips_incomplete_cache_for_complete_one(
+    tmp_path, monkeypatch
+):
+    primary = tmp_path / "external-hub"
+    incomplete = (
+        primary
+        / "models--OpenMOSS-Team--MOSS-Image-Base"
+        / "snapshots"
+        / "incomplete"
+    )
+    incomplete.mkdir(parents=True)
+    (incomplete / "pipeline_moss_image.py").write_text("", encoding="utf-8")
+
+    home = tmp_path / "home"
+    complete = (
+        home
+        / ".cache/huggingface/hub/models--OpenMOSS-Team--MOSS-Image-Base/snapshots/complete"
+    )
+    _write_component_snapshot(complete)
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(primary))
+    monkeypatch.setenv("HOME", str(home))
+    for env in ("HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "HF_HOME"):
+        monkeypatch.delenv(env, raising=False)
+
+    assert _snapshot_is_complete(complete) is True
+    assert _snapshot_is_complete(incomplete) is False
+    assert _resolve_component_source("OpenMOSS-Team/MOSS-Image-Base") == str(complete)
+    assert _resolve_component_source(str(complete)) == str(complete)
+
+
+def test_component_snapshot_requires_every_text_encoder_shard(tmp_path):
+    snapshot = tmp_path / "snapshots" / "broken"
+    _write_component_snapshot(snapshot)
+    (snapshot / "text_encoder" / "model-00002-of-00004.safetensors").unlink()
+
+    assert _snapshot_is_complete(snapshot) is False
 
 
 def test_moss_worker_uses_model_offload_when_components_fit(monkeypatch):

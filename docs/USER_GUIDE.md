@@ -89,7 +89,9 @@ Click an image to inspect it full size.
 WebbDuck routes each checkpoint to the right runtime automatically: SDXL, FLUX /
 FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints currently run
 text-to-image with 50 steps and CFG 3 by default, and dimensions must be
-multiples of 16. Negative prompts are supported.
+multiples of 16. Negative prompts are supported. On a 16 GB card, MOSS-Image
+tunes itself automatically: the text encoder is used once for the prompt and then
+freed, and the image model stays resident on the GPU for denoising.
 
 ### Prompt and Token Count
 

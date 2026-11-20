@@ -173,6 +173,102 @@ def _load_pipeline_module(component_source: str) -> Any:
     return module
 
 
+_COMPONENT_SNAPSHOT_MARKERS = (
+    PIPELINE_FILE,
+    "transformer/config.json",
+    "tokenizer/tokenizer.json",
+    "vae/config.json",
+)
+
+
+def _hf_cache_roots() -> list[Path]:
+    """Return candidate Hugging Face hub caches, most specific first."""
+    roots: list[Path] = []
+    for env_name in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE"):
+        value = str(os.getenv(env_name) or "").strip()
+        if value:
+            roots.append(Path(value).expanduser())
+    hf_home = str(os.getenv("HF_HOME") or "").strip()
+    if hf_home:
+        roots.append(Path(hf_home).expanduser() / "hub")
+    roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def _snapshot_is_complete(snapshot: Path) -> bool:
+    """Check that a cached component snapshot has every file the worker needs."""
+    if not snapshot.is_dir():
+        return False
+    if any(not (snapshot / marker).is_file() for marker in _COMPONENT_SNAPSHOT_MARKERS):
+        return False
+
+    text_encoder = snapshot / "text_encoder"
+    index_path = text_encoder / "model.safetensors.index.json"
+    if index_path.is_file():
+        try:
+            weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
+        except Exception:
+            return False
+        shards = {str(name) for name in weight_map.values()}
+        if not shards or any(not (text_encoder / shard).is_file() for shard in shards):
+            return False
+    elif not any(text_encoder.glob("*.safetensors")):
+        return False
+
+    if not any((snapshot / "vae").glob("*.safetensors")):
+        return False
+    return True
+
+
+def _resolve_component_source(component_source: str) -> str:
+    """Prefer a complete local snapshot over re-downloading component weights.
+
+    The configured Hugging Face cache can differ from the one that already holds
+    the MOSS-Image components (for example, a large external drive cache that is
+    empty on first run while the default ``~/.cache/huggingface/hub`` is
+    populated). Downloading the ~16 GB Qwen3.5 text encoder again is slow and
+    looks like a stalled job, so scan known caches for a usable snapshot first.
+    """
+    root = Path(component_source).expanduser()
+    if root.is_dir():
+        return str(root)
+    if component_source.startswith(("/", "~", ".")) or "/" not in component_source:
+        return component_source
+
+    repo_dir = "models--" + component_source.replace("/", "--")
+    for cache_root in _hf_cache_roots():
+        repo_root = cache_root / repo_dir
+        snapshots = repo_root / "snapshots"
+        if not snapshots.is_dir():
+            continue
+
+        candidates: list[Path] = []
+        ref_path = repo_root / "refs" / "main"
+        if ref_path.is_file():
+            ref = ref_path.read_text(encoding="utf-8").strip()
+            if ref:
+                candidates.append(snapshots / ref)
+        candidates.extend(
+            sorted(
+                (path for path in snapshots.iterdir() if path.is_dir()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        )
+        for candidate in candidates:
+            if _snapshot_is_complete(candidate):
+                return str(candidate)
+    return component_source
+
+
 def _local_files_only() -> bool:
     return str(os.getenv("WEBBDUCK_MOSS_IMAGE_LOCAL_ONLY") or "").strip().lower() in {
         "1",
@@ -293,11 +389,16 @@ def overlay_single_file_transformer(
 
 
 def _configure_memory(pipe: Any, device: str, total_vram_gb: float) -> str:
-    """Place the pipeline according to available VRAM.
+    """Choose where the two large models live.
 
-    The 5B DiT and the 9B text encoder together exceed consumer-card memory, so
-    automatic mode falls back to sequential offload below ~22 GB. Both the
-    transformer and text encoder are still usable on a 16 GB card, just slower.
+    The 5B DiT and the 9B text encoder cannot co-reside on consumer cards. The
+    default for mid-size cards (roughly 14-22 GB) is ``split``: encode the prompt
+    with the text encoder streamed through the GPU, drop it, then keep the DiT
+    resident for denoising. That avoids per-block transfers on every sampling
+    step, which makes sequential offload an order of magnitude slower.
+
+    Cards below ~14 GB keep the fully sequential fallback because the resident
+    DiT alone would not fit.
     """
     if device != "cuda":
         pipe.to("cpu")
@@ -305,8 +406,16 @@ def _configure_memory(pipe: Any, device: str, total_vram_gb: float) -> str:
 
     mode = str(os.getenv("WEBBDUCK_MOSS_IMAGE_OFFLOAD", "auto")).strip().lower()
     if mode == "auto":
-        mode = "model" if total_vram_gb >= 22.0 else "sequential"
+        if total_vram_gb >= 22.0:
+            mode = "model"
+        elif total_vram_gb >= 14.0:
+            mode = "split"
+        else:
+            mode = "sequential"
 
+    if mode in {"split", "swap", "encode"}:
+        # Placement is deferred until the prompt embeddings exist.
+        return "split"
     if mode in {"sequential", "seq"}:
         pipe.enable_sequential_cpu_offload(device="cuda")
         return "sequential"
@@ -316,6 +425,106 @@ def _configure_memory(pipe: Any, device: str, total_vram_gb: float) -> str:
 
     pipe.to("cuda")
     return "none"
+
+
+def _encode_prompt_texts(
+    pipe: Any, prompts: list[str], max_sequence_length: int
+) -> tuple[Any, Any]:
+    """Tokenize and encode like ``MOSSImagePipeline.encode_prompt``.
+
+    The pipeline's own helper sends inputs to ``self._execution_device``. With
+    only the text encoder hooked for streaming that property resolves to
+    ``meta`` (the encoder weights are meta between forwards), so keep the
+    inputs on CPU and let Accelerate's hooks move each layer instead.
+    """
+    import torch
+
+    tokenizer = pipe.tokenizer
+    text_encoder = pipe.text_encoder
+    if tokenizer is None or text_encoder is None:
+        raise RuntimeError("MOSS-Image text encoder/tokenizer are required for prompts")
+
+    rows = []
+    with torch.no_grad():
+        for value in prompts:
+            formatted = tokenizer.apply_chat_template(
+                [{"role": "user", "content": value}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
+            )
+            inputs = tokenizer(
+                formatted,
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_sequence_length,
+            )
+            output = text_encoder(**inputs, use_cache=False, return_dict=True)
+            rows.append(output.last_hidden_state[0])
+
+    length = max(row.shape[0] for row in rows)
+    embeds = rows[0].new_zeros(len(rows), length, rows[0].shape[-1])
+    mask = torch.zeros(len(rows), length, device=embeds.device, dtype=torch.bool)
+    for index, row in enumerate(rows):
+        embeds[index, : row.shape[0]] = row
+        mask[index, : row.shape[0]] = True
+    return embeds, mask
+
+
+def _encode_prompt_embeds(
+    pipe: Any,
+    prompt: str,
+    negative_prompt: str,
+    guidance_scale: float,
+    max_sequence_length: int,
+    progress_path: Path | None = None,
+) -> tuple[Any, Any, Any, Any]:
+    """Encode prompts with the text encoder streamed through the GPU, then free it."""
+    import gc
+
+    import torch
+    from accelerate import cpu_offload
+    from accelerate.hooks import remove_hook_from_module
+
+    text_encoder = getattr(pipe, "text_encoder", None)
+    if text_encoder is None:
+        raise RuntimeError("MOSS-Image text encoder is required for text prompts")
+
+    _write_progress(progress_path, "Encoding MOSS-Image prompt", 0.46)
+    cpu_offload(text_encoder, execution_device=torch.device("cuda"))
+    try:
+        positive, positive_mask = _encode_prompt_texts(
+            pipe, [prompt], max_sequence_length
+        )
+        negative = negative_mask = None
+        if float(guidance_scale) != 1.0:
+            negative, negative_mask = _encode_prompt_texts(
+                pipe, [negative_prompt], max_sequence_length
+            )
+    finally:
+        remove_hook_from_module(text_encoder, recurse=True)
+
+    # Drop the ~17 GB text encoder so the DiT can stay resident on the GPU.
+    pipe.text_encoder = None
+    pipe.tokenizer = None
+    del text_encoder
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return positive, positive_mask, negative, negative_mask
+
+
+def _move_split_models_to_gpu(pipe: Any, progress_path: Path | None = None) -> None:
+    """Place the DiT and VAE on the GPU after prompt encoding is complete."""
+    import gc
+
+    import torch
+
+    _write_progress(progress_path, "Moving MOSS-Image models to GPU", 0.49)
+    pipe.transformer.to("cuda")
+    pipe.vae.to("cuda")
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def _attach_step_progress(pipe: Any, progress_path: Path | None) -> None:
@@ -344,9 +553,9 @@ def _load_pipeline(request: dict, dtype: Any, progress_path: Path | None) -> tup
     from diffusers import AutoencoderKLFlux2
     from transformers import AutoModel, AutoTokenizer
 
-    component_source = str(
-        request.get("component_model") or DEFAULT_COMPONENT_MODEL
-    ).strip()
+    component_source = _resolve_component_source(
+        str(request.get("component_model") or DEFAULT_COMPONENT_MODEL).strip()
+    )
     model_path = Path(str(request["model_path"])).expanduser()
     model_format = str(request.get("model_format") or "").lower()
     local_files_only = _local_files_only()
@@ -475,23 +684,45 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
     except Exception:
         pass
 
+    prompt_embeds = None
+    if offload == "split":
+        prompt_embeds = _encode_prompt_embeds(
+            pipe,
+            prompt,
+            negative_prompt,
+            cfg,
+            max_sequence_length,
+            progress_path,
+        )
+        _move_split_models_to_gpu(pipe, progress_path)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     _attach_step_progress(pipe, progress_path)
     saved: list[str] = []
     for index in range(num_images):
-        _write_progress(progress_path, "Encoding MOSS-Image prompt", 0.50)
         generator = torch.Generator("cpu").manual_seed(seed + index)
-        result = pipe(
-            prompt,
-            height=height,
-            width=width,
-            num_inference_steps=steps,
-            guidance_scale=cfg,
-            negative_prompt=negative_prompt,
-            generator=generator,
-            uncond_skip_layers=uncond_skip_layers,
-            max_sequence_length=max_sequence_length,
-        )
+        call_kwargs: dict[str, Any] = {
+            "height": height,
+            "width": width,
+            "num_inference_steps": steps,
+            "guidance_scale": cfg,
+            "generator": generator,
+            "uncond_skip_layers": uncond_skip_layers,
+            "max_sequence_length": max_sequence_length,
+        }
+        if prompt_embeds is not None:
+            positive, positive_mask, negative, negative_mask = prompt_embeds
+            call_kwargs.update(
+                prompt_embeds=positive,
+                prompt_attention_mask=positive_mask,
+                negative_prompt_embeds=negative,
+                negative_prompt_attention_mask=negative_mask,
+            )
+        else:
+            if index == 0:
+                _write_progress(progress_path, "Encoding MOSS-Image prompt", 0.50)
+            call_kwargs.update(prompt=prompt, negative_prompt=negative_prompt)
+        result = pipe(**call_kwargs)
         image = result.images[0]
         path = output_dir / f"moss_image_{index:03d}.png"
         image.save(path)

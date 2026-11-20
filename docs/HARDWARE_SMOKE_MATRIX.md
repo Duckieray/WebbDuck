@@ -125,15 +125,19 @@ The download is roughly 19 GB. The transformer is excluded because a local
 single-file DiT supplies it. Drop any MOSS-Image-based ComfyUI single-file
 checkpoint under the architecture-neutral checkpoint root (for example
 `checkpoint/moss/`); WebbDuck recognizes it from its tensor layout and overlays it
-on the shared components. Override the component source with
-`WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL` when using a local snapshot or a different
-MOSS-Image release. Quantized (FP8/INT8) MOSS files are detected but not runnable
+on the shared components. `WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL` can pin a local
+snapshot or a different MOSS-Image release. If the configured Hugging Face cache
+only has a partial copy, the worker also checks the default
+`~/.cache/huggingface/hub` for a complete snapshot instead of downloading the
+text encoder again. Quantized (FP8/INT8) MOSS files are detected but not runnable
 yet. Set `WEBBDUCK_MOSS_IMAGE_LOCAL_ONLY=1` to resolve every component from the
 local Hugging Face cache (offline/air-gapped runs).
 
-On a 16 GB card the worker automatically uses sequential CPU offload; a 22 GB+
-card uses model offload. Set `WEBBDUCK_MOSS_IMAGE_OFFLOAD` to `sequential`,
-`model`, or `none` to override.
+On a 16 GB card the worker automatically uses `split` placement: prompt encoding
+streams the Qwen3.5 text encoder through the GPU, then the DiT stays resident for
+denoising. A 22 GB+ card uses model offload, and cards below ~14 GB fall back to
+sequential offload. Set `WEBBDUCK_MOSS_IMAGE_OFFLOAD` to `model`, `split`,
+`sequential`, or `none` to override.
 
 ### SDXL
 
