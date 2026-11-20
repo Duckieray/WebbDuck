@@ -41,6 +41,89 @@ def _snap(value: int, multiple: int = DIMENSION_MULTIPLE) -> int:
     return max(multiple, int(round(float(value) / multiple) * multiple))
 
 
+_MOSS_LORA_ARCHES = {"moss", "moss_image", "moss_image_diffusers"}
+
+
+def _resolve_loras(raw_loras: Any) -> list[dict[str, Any]]:
+    """Resolve Studio LoRA names to files the isolated worker can load.
+
+    Studio submits LoRAs by registry name, exactly like the SDXL/FLUX paths. Keep
+    that contract and send explicit paths/weights so the worker does not depend
+    on the host registry.
+    """
+    if not isinstance(raw_loras, list) or not raw_loras:
+        return []
+
+    from models.registry import LORA_REGISTRY
+
+    resolved: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_loras):
+        if isinstance(raw, str):
+            name = raw.strip()
+            requested_weight = None
+        elif isinstance(raw, dict):
+            name = str(raw.get("name") or raw.get("model") or "").strip()
+            requested_weight = raw.get("weight", raw.get("strength"))
+        else:
+            raise ValueError(f"Invalid LoRA entry at index {index}: expected name or object")
+
+        if not name:
+            raise ValueError(f"Invalid LoRA entry at index {index}: missing name")
+        registry_entry = LORA_REGISTRY.get(name)
+        if registry_entry is None:
+            raise ValueError(f"Unknown LoRA: {name}")
+
+        arch = str(registry_entry.get("arch") or "").strip().lower()
+        # Unclassified adapters are allowed through; the worker validates the
+        # adapter against the DiT tensor layout and fails with the real cause.
+        if arch and arch not in _MOSS_LORA_ARCHES:
+            raise ValueError(
+                f"LoRA '{name}' targets {arch}, not MOSS-Image."
+            )
+
+        path = Path(str(registry_entry.get("path") or "")).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"LoRA file not found for '{name}': {path}")
+
+        weight_raw = requested_weight
+        if weight_raw is None:
+            weight_raw = registry_entry.get("weight", 1.0)
+        try:
+            weight = float(weight_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid LoRA weight for '{name}': {weight_raw!r}") from exc
+
+        resolved.append(
+            {
+                "name": name,
+                "path": str(path),
+                "weight": weight,
+                "trigger": str(registry_entry.get("trigger") or "").strip() or None,
+            }
+        )
+    return resolved
+
+
+def _inject_lora_triggers(prompt: str, loras: list[dict[str, Any]]) -> str:
+    """Append trigger words from selected LoRAs to the text prompt.
+
+    MOSS-Image conditions on a Qwen3.5 text encoder, so plain words work;
+    ``(token:weight)`` syntax does not and would only feed punctuation to the
+    encoder. The Studio weight slider controls the adapter strength separately.
+    """
+    prompt = str(prompt or "").strip()
+    triggers: list[str] = []
+    for entry in loras:
+        trigger = str(entry.get("trigger") or "").strip()
+        if trigger and trigger not in triggers:
+            triggers.append(trigger)
+    missing = [trigger for trigger in triggers if trigger not in prompt]
+    if not missing:
+        return prompt
+    suffix = ", ".join(missing)
+    return f"{prompt}, {suffix}" if prompt else suffix
+
+
 def _report_progress(
     callback: Any,
     stage: str,
@@ -128,6 +211,9 @@ class MossImageDiffusersBackend(GenerationBackend):
         if not prompt:
             raise ValueError("Prompt is required.")
 
+        resolved_loras = _resolve_loras(settings.get("loras", []))
+        prompt = _inject_lora_triggers(prompt, resolved_loras)
+
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
         seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
@@ -148,6 +234,7 @@ class MossImageDiffusersBackend(GenerationBackend):
             ),
             "num_images": max(1, int(settings.get("num_images") or 1)),
             "seed": seed,
+            "loras": resolved_loras,
         }
 
         python_exe = resolve_runtime_python("moss_image", "WEBBDUCK_MOSS_IMAGE_PYTHON")

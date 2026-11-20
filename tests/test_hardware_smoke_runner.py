@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -92,3 +93,28 @@ def test_moss_image_row_uses_model_defaults_and_is_optional():
     missing_rows = [row for row in missing if row["row"] == "moss-image-t2i"]
     assert missing_rows[0]["model"] is None
     assert missing_rows[0]["optional"] is True
+
+
+def test_moss_lora_row_appears_only_when_named():
+    item = {
+        "name": "moss/Dirty-MossV2",
+        "ready": True,
+        "defaults": {"width": 1024, "height": 1024, "steps": 50, "cfg": 3.0},
+    }
+    rows = smoke._rows(
+        _smoke_args(moss_lora="charref_v2"),
+        [item],
+        Path("/tmp/source.png"),
+        Path("/tmp/mask.png"),
+    )
+    lora_rows = [row for row in rows if row["row"] == "moss-image-lora"]
+    assert len(lora_rows) == 1
+    assert lora_rows[0]["model"]["name"] == "moss/Dirty-MossV2"
+    assert json.loads(lora_rows[0]["fields"]["loras"]) == [
+        {"name": "charref_v2", "weight": 1.0}
+    ]
+
+    without = smoke._rows(
+        _smoke_args(), [item], Path("/tmp/source.png"), Path("/tmp/mask.png")
+    )
+    assert [row for row in without if row["row"] == "moss-image-lora"] == []

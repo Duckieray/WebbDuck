@@ -135,6 +135,7 @@ def _lora_namespace_arch(lora_path: Path) -> str | None:
     return {
         "krea": "krea2",
         "ltx": "ltx25",
+        "moss": "moss_image",
     }.get(relative.parts[0].lower())
 
 
@@ -265,6 +266,8 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         return "sdxl"
     if "sd_1_5" in base_version or "sd15" in base_version or "sd_1.5" in base_version:
         return "sd15"
+    if "moss" in base_version:
+        return "moss_image"
     if "flux" in base_version or "klein" in base_version:
         # Kohya/ai-toolkit record the base model explicitly (flux1-dev,
         # flux1-schnell, flux2_klein_9b, flux_2_klein_9b). Favor the declared
@@ -277,6 +280,13 @@ def detect_lora_arch(lora_path: Path) -> str | None:
         return _detect_flux_lora_version(lora_path, keys)
 
     joined = " ".join(keys).lower()
+    # MOSS-Image's DiT uses ``layers.N.proj.{q,k,v,o,ffn_down,ffn_up_gate}``.
+    # ``proj.ffn_up_gate`` is distinctive enough to separate it from SDXL/FLUX
+    # adapters, which name their feed-forwards differently.
+    moss_markers = ("proj.ffn_up_gate", "proj.ffn_down", "proj.qkv")
+    if "layers." in joined and any(marker in joined for marker in moss_markers):
+        return "moss_image"
+
     flux_markers = (
         "flux",
         "lora_unet_double_blocks",

@@ -388,6 +388,173 @@ def overlay_single_file_transformer(
     }
 
 
+_LORA_LEAF_SUFFIXES = (
+    ".lora_A.weight",
+    ".lora_B.weight",
+    ".lora_down.weight",
+    ".lora_up.weight",
+    ".alpha",
+    ".dora_scale",
+)
+_LORA_WRAPPER_PREFIXES = ("base_model.model.",)
+
+
+def _split_lora_leaf(key: str) -> tuple[str | None, str | None]:
+    for suffix in _LORA_LEAF_SUFFIXES:
+        if key.endswith(suffix):
+            return key[: -len(suffix)], suffix
+    return None, None
+
+
+def _normalize_lora_module(module: str) -> str:
+    """Map a LoRA module path onto the scaffold's transformer module names."""
+    value = str(module)
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _LORA_WRAPPER_PREFIXES:
+            if value.startswith(prefix):
+                value = value[len(prefix) :]
+                changed = True
+    return strip_moss_transformer_prefix(value)
+
+
+def _lora_delta(pair: dict[str, Any], weight: float) -> Any:
+    """Build ``B @ A * (alpha / rank) * weight`` for one adapter module."""
+    import torch
+
+    down = pair.get(".lora_A.weight")
+    if down is None:
+        down = pair.get(".lora_down.weight")
+    up = pair.get(".lora_B.weight")
+    if up is None:
+        up = pair.get(".lora_up.weight")
+    if down is None or up is None:
+        return None
+
+    rank = int(down.shape[0]) if down.ndim else 1
+    alpha = pair.get(".alpha")
+    scale = 1.0
+    if alpha is not None and rank:
+        try:
+            scale = float(alpha.item()) / float(rank)
+        except (AttributeError, TypeError, ValueError):
+            scale = 1.0
+    return (up.to(torch.float32) @ down.to(torch.float32)) * (float(weight) * scale)
+
+
+def apply_moss_loras(
+    transformer: Any,
+    loras: list[dict[str, Any]],
+    *,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Merge LoRA deltas into the MOSS-Image DiT before it moves to the GPU.
+
+    ai-toolkit MOSS adapters use ``diffusion_model.layers.N.proj.*`` module paths
+    with PEFT ``lora_A``/``lora_B`` leaves, which map directly onto the scaffold
+    this worker builds. Kohya ``lora_down``/``lora_up`` leaves and fused
+    ``proj.qkv`` adapters are normalized here as well. Fusing is intentional:
+    the worker process exits after one job, so there is nothing to unload, and
+    merging avoids a PEFT dependency plus per-forward adapter dispatch.
+    """
+    import torch
+    from safetensors import safe_open
+
+    modules = dict(transformer.named_modules())
+    applied: list[dict[str, Any]] = []
+    total = len(loras)
+
+    for index, entry in enumerate(loras):
+        path = Path(str(entry.get("path") or "")).expanduser()
+        name = str(entry.get("name") or path.stem or f"lora_{index}")
+        weight = float(entry.get("weight", 1.0))
+        if not path.is_file():
+            raise RuntimeError(f"MOSS-Image LoRA file does not exist: {path}")
+        if progress_callback is not None:
+            try:
+                progress_callback(index + 1, total, name)
+            except Exception:
+                pass
+
+        pairs: dict[str, dict[str, Any]] = {}
+        ignored: list[str] = []
+        with safe_open(str(path), framework="pt", device="cpu") as handle:
+            for key in handle.keys():
+                module, suffix = _split_lora_leaf(key)
+                if module is None or suffix == ".dora_scale":
+                    ignored.append(key)
+                    continue
+                pairs.setdefault(_normalize_lora_module(module), {})[suffix] = (
+                    handle.get_tensor(key)
+                )
+
+        touched = 0
+        unmatched: list[str] = []
+        fused = 0
+        with torch.no_grad():
+            for module_name, pair in pairs.items():
+                if module_name.endswith(".proj.qkv"):
+                    base = module_name[: -len(".proj.qkv")]
+                    targets = [f"{base}.proj.{leaf}" for leaf in ("q", "k", "v")]
+                    fused += 1
+                else:
+                    targets = [module_name]
+
+                delta = _lora_delta(pair, weight)
+                if delta is None:
+                    unmatched.append(module_name)
+                    continue
+                if len(targets) > 1 and int(delta.shape[0]) % len(targets) != 0:
+                    raise RuntimeError(
+                        f"MOSS-Image LoRA {name!r} has a fused adapter for {module_name!r} "
+                        f"with {int(delta.shape[0])} output rows, which cannot be split "
+                        f"into {len(targets)} projections."
+                    )
+
+                chunks = delta.chunk(len(targets), dim=0) if len(targets) > 1 else [delta]
+                for target, chunk in zip(targets, chunks):
+                    module = modules.get(target)
+                    parameter = getattr(module, "weight", None)
+                    if parameter is None or not isinstance(parameter, torch.Tensor):
+                        unmatched.append(target)
+                        continue
+                    if bool(getattr(parameter, "is_meta", False)):
+                        raise RuntimeError(
+                            f"MOSS-Image LoRA {name!r} targets {target!r} before the "
+                            "checkpoint overlay populated it."
+                        )
+                    parameter.add_(chunk.to(parameter.dtype))
+                    touched += 1
+                del delta
+
+        if touched == 0:
+            preview = ", ".join(sorted(ignored)[:5]) or ", ".join(sorted(unmatched)[:5])
+            raise RuntimeError(
+                f"MOSS-Image LoRA {name!r} does not match this checkpoint's DiT layout "
+                f"({len(pairs)} adapter modules, {len(ignored)} ignored keys). "
+                f"Expected keys like 'diffusion_model.layers.0.proj.q.lora_A.weight'. "
+                f"Sample keys: {preview or 'none'}"
+            )
+
+        applied.append(
+            {
+                "name": name,
+                "weight": weight,
+                "modules": touched,
+                "fused_qkv_modules": fused,
+                "unmatched_modules": len(unmatched),
+            }
+        )
+        print(
+            f"[moss] applied LoRA {name} at weight={weight} to {touched} modules "
+            f"({fused} fused qkv, {len(unmatched)} unmatched)",
+            flush=True,
+        )
+
+    return applied
+
+
 def _configure_memory(pipe: Any, device: str, total_vram_gb: float) -> str:
     """Choose where the two large models live.
 
@@ -563,6 +730,13 @@ def _load_pipeline(request: dict, dtype: Any, progress_path: Path | None) -> tup
     _write_progress(progress_path, "Loading MOSS-Image pipeline", 0.08)
     module = _load_pipeline_module(component_source)
 
+    # Validate adapter paths before paying for the 10 GB checkpoint overlay.
+    loras = request.get("loras") or []
+    for entry in loras:
+        lora_path = Path(str(entry.get("path") or "")).expanduser()
+        if not lora_path.is_file():
+            raise RuntimeError(f"MOSS-Image LoRA file does not exist: {lora_path}")
+
     scheduler = module.MOSSImageScheduler()
 
     if model_format == "diffusers" and model_path.is_dir():
@@ -606,6 +780,19 @@ def _load_pipeline(request: dict, dtype: Any, progress_path: Path | None) -> tup
             "component_source": component_source,
             "mapped_tensors": overlay["mapped_tensors"],
         }
+
+    if loras:
+        def lora_progress(current: int, total: int, name: str) -> None:
+            fraction = float(current) / float(max(1, total))
+            _write_progress(
+                progress_path,
+                f"Loading MOSS-Image LoRA {current}/{total}: {name}",
+                0.30 + (0.03 * fraction),
+            )
+
+        runtime["loras"] = apply_moss_loras(
+            transformer, loras, progress_callback=lora_progress
+        )
 
     _write_progress(progress_path, "Loading MOSS-Image text encoder", 0.34)
     tokenizer = AutoTokenizer.from_pretrained(

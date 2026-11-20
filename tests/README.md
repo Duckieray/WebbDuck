@@ -59,7 +59,7 @@ Tests are grouped by subsystem. Shared fixtures and helpers live in `tests/conft
 | `tests/test_sdxl_isolated_runtime.py` | SDXL isolated-runtime wiring |
 | `tests/test_model_runtime_bridge.py` | model descriptor → runtime resolution |
 | `tests/test_qwen_image_backend.py` | Qwen image backend payloads and worker environment |
-| `tests/test_moss_image_backend.py` | MOSS-Image detection, descriptor defaults, key overlay, payload, component-cache resolution, and placement policy |
+| `tests/test_moss_image_backend.py` | MOSS-Image detection, descriptor defaults, key overlay, LoRA resolution/merge, component-cache resolution, and placement policy |
 
 ### FLUX backends
 

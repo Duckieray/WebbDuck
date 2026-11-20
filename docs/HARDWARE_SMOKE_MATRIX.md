@@ -139,6 +139,19 @@ denoising. A 22 GB+ card uses model offload, and cards below ~14 GB fall back to
 sequential offload. Set `WEBBDUCK_MOSS_IMAGE_OFFLOAD` to `model`, `split`,
 `sequential`, or `none` to override.
 
+Measured wall-clock timings on a 16 GB card with `split` placement: 1024x1024 /
+50 steps finished in 115.6 s and 896x1344 / 50 steps in about 2 min 11 s,
+including checkpoint overlay. A 512x512 / 2-step pass takes roughly 30 s.
+
+MOSS-Image LoRAs are merged into the DiT before placement. Drop them in
+`lora/moss/` (or rely on the `ss_base_model_version: moss_image` metadata) so the
+catalog classifies them as `moss_image`; otherwise they will not appear in the
+LoRA list for a MOSS checkpoint. PEFT (`lora_A`/`lora_B`), Kohya
+(`lora_down`/`lora_up`) and fused `proj.qkv` adapters are supported. Note that
+reference-image LoRAs such as community CharRef adapters need the edit path MOSS
+does not expose yet, so they load without identity conditioning; style and
+step-distillation LoRAs work as-is.
+
 ### SDXL
 
 Use one existing known-good local SDXL checkpoint plus the currently configured
@@ -163,6 +176,7 @@ previous process has released the GPU lease and CUDA memory.
 | 8 | Dark Beast 3 FP8 | T2I | 1024x1024, model defaults, seed 0 | single-file FP8 overlay is complete and generates |
 | 9 | Qwen-Image-2512 | T2I | model default resolution, seed 0 | sequential-offload run completes |
 | 10 | MOSS-Image single-file | T2I | 1024x1024, 50 steps, CFG 3, seed 0 | single-file DiT overlay is complete and generates |
+| 11 | MOSS-Image single-file | LoRA | one known MOSS adapter | adapter merges into the DiT and generation completes |
 
 ## 4. API-driven runner
 
@@ -183,7 +197,9 @@ Rows whose runtime/weights are ready print `READY`; missing required targets are
 `BLOCKED`. The optional SDXL asset row is skipped unless `--lora` or `--refiner`
 is supplied. The MOSS-Image row (`moss-image-t2i`) is optional too: it only
 appears as required coverage when a MOSS checkpoint is discovered or
-`--moss-model` names one. The `/runtime-readiness` probe can take a few minutes
+`--moss-model` names one. Add `--moss-lora "<registry name>"` to append the
+`moss-image-lora` row and verify adapter loading end to end. The
+`/runtime-readiness` probe can take a few minutes
 on a cold runtime set; `--readiness-timeout` (default 300 seconds) controls that
 probe.
 

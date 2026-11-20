@@ -89,9 +89,16 @@ Click an image to inspect it full size.
 WebbDuck routes each checkpoint to the right runtime automatically: SDXL, FLUX /
 FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints currently run
 text-to-image with 50 steps and CFG 3 by default, and dimensions must be
-multiples of 16. Negative prompts are supported. On a 16 GB card, MOSS-Image
-tunes itself automatically: the text encoder is used once for the prompt and then
-freed, and the image model stays resident on the GPU for denoising.
+multiples of 16. Negative prompts and LoRAs are supported. On a 16 GB card,
+MOSS-Image tunes itself automatically: the text encoder is used once for the
+prompt and then freed, and the image model stays resident on the GPU for
+denoising.
+
+MOSS-Image LoRA picker entries come from the catalog, which classifies adapters
+as `moss_image` from their training metadata or tensor layout. Put MOSS LoRAs in
+`lora/moss/` if detection cannot tell them apart. Reference-image "CharRef" LoRAs
+from the community are designed for a ComfyUI edit path that MOSS-Image does not
+expose in WebbDuck yet, so they will not reproduce a reference face on their own.
 
 ### Prompt and Token Count
 

@@ -139,9 +139,10 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     # checkpoint-specific capabilities rather than borrowing generic pipeline
     # classes and overclaiming editing support for 2512.
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
-    # MOSS-Image ships a text-to-image pipeline. LoRA/editing variants need
-    # runtime paths this backend does not implement yet, so do not advertise them.
-    "moss_image": ModelCapabilities(text2img=True, negative_prompt=True),
+    # MOSS-Image ships a text-to-image pipeline. DiT LoRAs are merged into the
+    # single-file overlay; editing/reference-image variants still need runtime
+    # paths this backend does not implement, so do not advertise them.
+    "moss_image": ModelCapabilities(text2img=True, negative_prompt=True, lora=True),
 }
 
 _BACKENDS: dict[str, str] = {

@@ -93,8 +93,19 @@ meta-device `MOSSImageTransformer` scaffold from the component
 `layers.N.proj.qkv.weight` tensors are split into `proj.q/k/v`, the shared
 prefix is stripped, and the derived `rope.bands` buffer is rebuilt in fp32.
 Quantized (FP8/INT8) MOSS files are rejected before launch. Capabilities are
-text-to-image plus negative prompt only; LoRA and editing variants are not
-advertised.
+text-to-image, negative prompt, and LoRA. MOSS-Image has no reference-image
+input, so community "CharRef"/edit LoRAs (trained with ai-toolkit `edit: true` +
+reference latents) load but stay inert without reference conditioning; style and
+step-distillation adapters work normally.
+
+`apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.
+ai-toolkit/PEFT (`lora_A`/`lora_B`), Kohya (`lora_down`/`lora_up` + `alpha`), and
+fused `proj.qkv` adapters are all normalized; keys must resolve to
+`layers.N.proj.*`. `models/registry.py` classifies MOSS adapters from
+`ss_base_model_version` metadata or the `proj.ffn_up_gate` key marker, so
+`/model-catalog/{model}/loras` lists only compatible files. Trigger text from the
+registry is appended to the prompt, since the Qwen3.5 encoder has no
+`(token:weight)` syntax.
 
 Before launching, the worker resolves a repo id to a complete local snapshot by
 scanning the configured Hugging Face cache and the default

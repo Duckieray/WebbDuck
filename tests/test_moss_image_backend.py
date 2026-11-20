@@ -390,3 +390,200 @@ def test_moss_worker_uses_model_offload_when_components_fit(monkeypatch):
     pipe = _FakePipe()
     assert _configure_memory(pipe, "cuda", 32.0) == "model"
     assert pipe.mode == "model"
+
+
+class _TinyProj(nn.Module):
+    def __init__(self, dim: int = 8, hidden: int = 12):
+        super().__init__()
+        self.q = nn.Linear(dim, dim, bias=False)
+        self.k = nn.Linear(dim, dim, bias=False)
+        self.v = nn.Linear(dim, dim, bias=False)
+        self.o = nn.Linear(dim, dim, bias=False)
+        self.ffn_down = nn.Linear(dim, hidden, bias=False)
+        self.ffn_up_gate = nn.Linear(hidden, hidden, bias=False)
+
+
+class _LoraTransformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.ModuleList([nn.Module()])
+        self.layers[0].proj = _TinyProj()
+
+
+def _lora_delta(down: torch.Tensor, up: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
+    return (up.float() @ down.float()) * scale
+
+
+def test_apply_moss_loras_merges_scaled_delta(tmp_path):
+    from core.backends.moss_image_worker import apply_moss_loras
+
+    torch.manual_seed(0)
+    transformer = _LoraTransformer()
+    before = transformer.layers[0].proj.q.weight.detach().clone()
+    down = torch.randn(2, 8)
+    up = torch.randn(8, 2)
+    path = tmp_path / "moss.safetensors"
+    save_file(
+        {
+            "diffusion_model.layers.0.proj.q.lora_A.weight": down,
+            "diffusion_model.layers.0.proj.q.lora_B.weight": up,
+        },
+        str(path),
+    )
+
+    applied = apply_moss_loras(
+        transformer, [{"name": "tiny", "path": str(path), "weight": 0.5}]
+    )
+
+    expected = before + _lora_delta(down, up, 0.5)
+    assert torch.allclose(transformer.layers[0].proj.q.weight, expected, atol=1e-6)
+    assert applied[0]["modules"] == 1
+    assert applied[0]["weight"] == 0.5
+
+
+def test_apply_moss_loras_honours_kohya_alpha(tmp_path):
+    from core.backends.moss_image_worker import apply_moss_loras
+
+    torch.manual_seed(1)
+    transformer = _LoraTransformer()
+    before = transformer.layers[0].proj.o.weight.detach().clone()
+    down = torch.randn(4, 8)
+    up = torch.randn(8, 4)
+    path = tmp_path / "kohya.safetensors"
+    save_file(
+        {
+            "diffusion_model.layers.0.proj.o.lora_down.weight": down,
+            "diffusion_model.layers.0.proj.o.lora_up.weight": up,
+            "diffusion_model.layers.0.proj.o.alpha": torch.tensor(2.0),
+        },
+        str(path),
+    )
+
+    apply_moss_loras(transformer, [{"name": "kohya", "path": str(path), "weight": 1.0}])
+
+    expected = before + _lora_delta(down, up, 2.0 / 4.0)
+    assert torch.allclose(transformer.layers[0].proj.o.weight, expected, atol=1e-6)
+
+
+def test_apply_moss_loras_splits_fused_qkv_adapters(tmp_path):
+    from core.backends.moss_image_worker import apply_moss_loras
+
+    torch.manual_seed(2)
+    transformer = _LoraTransformer()
+    proj = transformer.layers[0].proj
+    before = {
+        leaf: getattr(proj, leaf).weight.detach().clone() for leaf in ("q", "k", "v")
+    }
+    down = torch.randn(2, 8)
+    up = torch.randn(24, 2)
+    path = tmp_path / "fused.safetensors"
+    save_file(
+        {
+            "diffusion_model.layers.0.proj.qkv.lora_A.weight": down,
+            "diffusion_model.layers.0.proj.qkv.lora_B.weight": up,
+        },
+        str(path),
+    )
+
+    applied = apply_moss_loras(
+        transformer, [{"name": "fused", "path": str(path), "weight": 1.0}]
+    )
+
+    delta = _lora_delta(down, up)
+    for offset, leaf in enumerate(("q", "k", "v")):
+        expected = before[leaf] + delta.chunk(3, dim=0)[offset]
+        assert torch.allclose(getattr(proj, leaf).weight, expected, atol=1e-6)
+    assert applied[0]["modules"] == 3
+    assert applied[0]["fused_qkv_modules"] == 1
+
+
+def test_apply_moss_loras_rejects_unrelated_layout(tmp_path):
+    import pytest
+
+    from core.backends.moss_image_worker import apply_moss_loras
+
+    path = tmp_path / "sdxl.safetensors"
+    save_file(
+        {
+            "lora_unet_down_blocks_0_attn1_to_q.lora_down.weight": torch.randn(4, 8),
+            "lora_unet_down_blocks_0_attn1_to_q.lora_up.weight": torch.randn(8, 4),
+        },
+        str(path),
+    )
+
+    with pytest.raises(RuntimeError, match="does not match this checkpoint"):
+        apply_moss_loras(
+            _LoraTransformer(), [{"name": "sdxl", "path": str(path), "weight": 1.0}]
+        )
+
+
+def test_detect_lora_arch_reads_moss_metadata(tmp_path):
+    from models.registry import detect_lora_arch
+
+    path = tmp_path / "moss-meta.safetensors"
+    save_file(
+        {"diffusion_model.layers.0.proj.q.lora_A.weight": torch.zeros(2, 8)},
+        str(path),
+        metadata={"ss_base_model_version": "moss_image"},
+    )
+    assert detect_lora_arch(path) == "moss_image"
+
+
+def test_detect_lora_arch_recognizes_moss_key_layout(tmp_path):
+    from models.registry import detect_lora_arch
+
+    path = tmp_path / "moss-keys.safetensors"
+    save_file(
+        {"diffusion_model.layers.0.proj.ffn_up_gate.lora_A.weight": torch.zeros(2, 12)},
+        str(path),
+    )
+    assert detect_lora_arch(path) == "moss_image"
+
+
+def test_moss_descriptor_advertises_lora_capability():
+    caps = capabilities_for_architecture("moss_image")
+    assert caps.text2img is True
+    assert caps.lora is True
+
+
+def test_moss_backend_rejects_foreign_lora_architecture(tmp_path, monkeypatch):
+    import pytest
+
+    import models.registry as registry
+    from core.backends.moss_image import _resolve_loras
+
+    lora = tmp_path / "foreign.safetensors"
+    lora.write_bytes(b"")
+    monkeypatch.setattr(
+        registry,
+        "LORA_REGISTRY",
+        {"sdxl-lora": {"path": str(lora), "arch": "sdxl"}},
+    )
+
+    with pytest.raises(ValueError, match="not MOSS-Image"):
+        _resolve_loras([{"name": "sdxl-lora", "weight": 1.0}])
+
+
+def test_moss_backend_resolves_lora_and_injects_trigger(tmp_path, monkeypatch):
+    import models.registry as registry
+    from core.backends.moss_image import _inject_lora_triggers, _resolve_loras
+
+    lora = tmp_path / "moss.safetensors"
+    lora.write_bytes(b"")
+    monkeypatch.setattr(
+        registry,
+        "LORA_REGISTRY",
+        {
+            "moss-lora": {
+                "path": str(lora),
+                "arch": "moss_image",
+                "trigger": "mossref",
+            }
+        },
+    )
+
+    resolved = _resolve_loras([{"name": "moss-lora", "weight": 0.7}])
+    assert resolved[0]["path"] == str(lora)
+    assert resolved[0]["weight"] == 0.7
+    assert _inject_lora_triggers("a red fox", resolved) == "a red fox, mossref"
+    assert _inject_lora_triggers("a mossref fox", resolved) == "a mossref fox"
