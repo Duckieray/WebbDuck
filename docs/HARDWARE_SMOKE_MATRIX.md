@@ -140,8 +140,9 @@ sequential offload. Set `WEBBDUCK_MOSS_IMAGE_OFFLOAD` to `model`, `split`,
 `sequential`, or `none` to override.
 
 Measured wall-clock timings on a 16 GB card with `split` placement: 1024x1024 /
-50 steps finished in 115.6 s and 896x1344 / 50 steps in about 2 min 11 s,
-including checkpoint overlay. A 512x512 / 2-step pass takes roughly 30 s.
+50 steps takes about 116 s inside the worker, or 130-140 s end to end through
+the API once queueing, load and metadata are included. 896x1344 / 50 steps takes
+about 2 min 11 s. A 512x512 / 2-step pass takes roughly 30 s.
 
 MOSS-Image LoRAs are merged into the DiT before placement. Drop them in
 `lora/moss/` (or rely on the `ss_base_model_version: moss_image` metadata) so the
