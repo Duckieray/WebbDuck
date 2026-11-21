@@ -67,6 +67,11 @@ class ModelDescriptor:
             quantization = str(self.detection.get("quantization") or "none").lower()
             if quantization in {"unsupported", "unknown"}:
                 return False
+        if self.architecture == "moss_image" and self.format == "single":
+            # The single-file overlay only accepts dense transformer weights.
+            quantization = str(self.detection.get("quantization") or "none").lower()
+            if quantization not in {"none", "bf16", "fp16", "fp32"}:
+                return False
         return True
 
     def to_internal_dict(self) -> dict[str, Any]:
@@ -134,6 +139,10 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     # checkpoint-specific capabilities rather than borrowing generic pipeline
     # classes and overclaiming editing support for 2512.
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
+    # MOSS-Image ships a text-to-image pipeline. DiT LoRAs are merged into the
+    # single-file overlay; editing/reference-image variants still need runtime
+    # paths this backend does not implement, so do not advertise them.
+    "moss_image": ModelCapabilities(text2img=True, negative_prompt=True, lora=True),
 }
 
 _BACKENDS: dict[str, str] = {
@@ -143,6 +152,7 @@ _BACKENDS: dict[str, str] = {
     "flux2": "flux_diffusers",
     "krea2": "krea2_diffusers",
     "qwen_image": "qwen_image_diffusers",
+    "moss_image": "moss_image_diffusers",
 }
 
 _IMPLEMENTED_BACKENDS = {
@@ -150,6 +160,7 @@ _IMPLEMENTED_BACKENDS = {
     "flux_diffusers",
     "krea2_diffusers",
     "qwen_image_diffusers",
+    "moss_image_diffusers",
 }
 
 _CONSTRAINTS: dict[str, dict[str, Any]] = {
@@ -159,6 +170,7 @@ _CONSTRAINTS: dict[str, dict[str, Any]] = {
     "flux2": {"dimension_multiple": 8},
     "krea2": {"dimension_multiple": 16},
     "qwen_image": {"dimension_multiple": 16},
+    "moss_image": {"dimension_multiple": 16},
 }
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
@@ -197,6 +209,14 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "height": 1328,
         "steps": 50,
         "cfg": 4.0,
+    },
+    # Official MOSS-Image settings: 50 steps, CFG 3, flow-matching Euler with
+    # shift 5, and a 1024px square default (dimensions must be multiples of 16).
+    "moss_image": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 50,
+        "cfg": 3.0,
     },
 }
 
@@ -319,6 +339,10 @@ def detect_diffusers_architecture(path: Path) -> tuple[str, dict[str, Any]]:
         return "krea2", {"method": "config_class", "confidence": "high", "variant": variant}
     if "qwenimage" in tokens or "qwen_image" in tokens or "qwen-image" in tokens:
         return "qwen_image", {"method": "config_class", "confidence": "high"}
+    # Check MOSS before the generic "flux" token: component configs may mention
+    # FLUX.2 VAE classes, and the pipeline class itself is the stronger signal.
+    if "mossimage" in tokens or "moss_image" in tokens or "moss-image" in tokens:
+        return "moss_image", {"method": "config_class", "confidence": "high"}
     if "flux" in tokens:
         return "flux", {"method": "config_class", "confidence": "high"}
     if "stablediffusionxl" in tokens or "stable_diffusion_xl" in tokens:

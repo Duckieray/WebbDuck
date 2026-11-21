@@ -7,6 +7,8 @@ WebbDuck is a local-first SDXL image generation studio built for fast iteration,
 - FastAPI backend with queue-based generation and WebSocket status updates.
 - Zero-build web UI in `ui/` with Studio, Queue, Gallery, Lightbox, and plugin tabs.
 - Text-to-image, img2img, inpaint, outpaint, two-pass refinement, and upscaling.
+- Checkpoint-driven model families in isolated runtimes: SDXL, FLUX / FLUX.2, Krea 2,
+  Qwen-Image, and MOSS-Image (text-to-image with negative prompts and LoRAs).
 - Identity / Persona workflows across architectures: IP-Adapter FaceID (SDXL), native FLUX.2 reference conditioning, and Krea Identity editing (`krea2_identity_edit`).
 - LoRA and embedding discovery with live catalog refresh.
 - Manifest-backed gallery search and thumbnail serving.
