@@ -2502,6 +2502,11 @@ def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
     adapter_cfg.setdefault("fit_mode", preset.get("fit_mode", "fit"))
     adapter_cfg.setdefault("lora_scale", preset.get("lora_scale", 1.0))
     adapter_cfg.setdefault("lora_rank", preset.get("lora_rank"))
+    # MOSS-Image edit conditioning keeps its single-reference sampling policy.
+    adapter_cfg.setdefault(
+        "isolate_references", bool(preset.get("isolate_references", True))
+    )
+    adapter_cfg.setdefault("reference_pixels", preset.get("reference_pixels", 512 * 512))
     return adapter_cfg
 
 @app.get("/ip-adapter/refs")
@@ -2558,6 +2563,9 @@ class PresetData(BaseModel):
     grounding_px: int = 768
     fit_mode: str = "fit"
     lora_rank: str | None = None
+    # MOSS-Image edit conditioning policy (single reference, cached ref K/V).
+    isolate_references: bool = True
+    reference_pixels: int = 512 * 512
 
 @app.post("/ip-adapter/presets")
 async def save_preset(data: PresetData):
@@ -2579,6 +2587,8 @@ async def save_preset(data: PresetData):
         "grounding_px": data.grounding_px,
         "fit_mode": data.fit_mode,
         "lora_rank": data.lora_rank,
+        "isolate_references": data.isolate_references,
+        "reference_pixels": data.reference_pixels,
     }
     PRESETS_FILE.write_text(json.dumps(presets, indent=2))
     return {"ok": True}

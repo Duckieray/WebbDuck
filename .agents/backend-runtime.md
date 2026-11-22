@@ -93,10 +93,29 @@ meta-device `MOSSImageTransformer` scaffold from the component
 `layers.N.proj.qkv.weight` tensors are split into `proj.q/k/v`, the shared
 prefix is stripped, and the derived `rope.bands` buffer is rebuilt in fp32.
 Quantized (FP8/INT8) MOSS files are rejected before launch. Capabilities are
-text-to-image, negative prompt, and LoRA. MOSS-Image has no reference-image
-input, so community "CharRef"/edit LoRAs (trained with ai-toolkit `edit: true` +
-reference latents) load but stay inert without reference conditioning; style and
-step-distillation adapters work normally.
+text-to-image, negative prompt, LoRA, and reference-image identity conditioning.
+
+Reference conditioning follows the ai-toolkit `edit` training layout that
+community CharRef/Edit-HQ adapters expect (not the ComfyUI graph):
+
+- the reference is downscaled to <=384^2 pixels and read by the Qwen3.5 vision
+  tower through a `Picture 1: <|vision_start|>...<|vision_end|>` prompt block;
+- the same image is VAE-encoded, 2x2 packed and `vae.bn`-normalized into the DiT
+  latent space (default budget 512^2 pixels, `identity_adapter.reference_pixels`);
+- reference tokens are appended after the text tokens with t=0 modulation and a
+  dedicated RoPE index (`r=1`);
+- with `isolate_references` (default) reference queries only attend to reference
+  keys, so per-block reference K/V are computed once and reused. This is both
+  faster (about 88 s vs 109 s for 50 steps at 1024^2) and visually cleaner.
+
+The sampler (`_sample_with_refs`) mirrors the vendor pipeline loop so positive
+and negative branches hold separate K/V caches; it is used only when a job has
+references, so the vendor `pipe(...)` text-to-image path stays byte-identical.
+1024^2 VAE decoding does not fit beside the resident 5B DiT on 16 GB cards, so
+the reference path parks the DiT on CPU for the decode (the worker exits after
+the job). The provider id is `moss_image_reference`; the backend accepts one
+reference per job and prepends `Same person as Picture 1.` unless
+`identity_adapter.prompt_prefix` overrides it.
 
 `apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.
 ai-toolkit/PEFT (`lora_A`/`lora_B`), Kohya (`lora_down`/`lora_up` + `alpha`), and

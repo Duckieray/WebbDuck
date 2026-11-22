@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -11,6 +12,7 @@ from safetensors.torch import save_file
 from core.backends.moss_image import MossImageDiffusersBackend
 from core.backends.moss_image_worker import (
     _configure_memory,
+    _reference_paths,
     _resolve_component_source,
     _snapshot_is_complete,
     map_moss_transformer_key,
@@ -82,6 +84,7 @@ def test_generic_discovery_finds_moss_single_file_outside_family_folder(tmp_path
     assert payload["supported"] is True
     assert payload["defaults"] == {"width": 1024, "height": 1024, "steps": 50, "cfg": 3.0}
     assert payload["constraints"]["dimension_multiple"] == 16
+    assert payload["capabilities"]["identity_adapter"] is True
 
 
 def test_detects_moss_diffusers_pipeline_and_transformer_config(tmp_path):
@@ -224,6 +227,140 @@ def test_moss_backend_serializes_single_file_t2i_request(monkeypatch):
     assert payload["guidance_scale"] == 3.0
     assert payload["negative_prompt"] == "blurry"
     assert payload["seed"] == 0
+
+
+def test_moss_backend_serializes_identity_reference_payload(monkeypatch, tmp_path):
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (64, 64), "white").save(reference)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        process = _FakeProcess(cmd, **kwargs)
+        captured["payload"] = process.payload
+        return process
+
+    monkeypatch.setattr("core.backends.moss_image.subprocess.Popen", fake_popen)
+    settings = {
+        "prompt": "a woman standing on a rooftop at sunset",
+        "seed": 7,
+        "identity_adapter": {
+            "enabled": True,
+            "type": "moss_image_reference",
+            "reference_images": [str(reference)],
+        },
+    }
+    MossImageDiffusersBackend().generate(_descriptor(), settings)
+
+    payload = captured["payload"]
+    assert payload["reference_images"] == [str(reference.resolve())]
+    assert payload["reference_pixels"] == 512 * 512
+    assert payload["isolate_references"] is True
+    assert payload["prompt"].startswith("Same person as Picture 1.")
+    assert payload["prompt"].endswith("a woman standing on a rooftop at sunset")
+    debug = settings["identity_adapter_debug"]
+    assert debug["provider"] == "moss_image_reference"
+    assert debug["reference_images_resolved"] == 1
+
+
+def test_moss_backend_identity_prompt_prefix_override(monkeypatch, tmp_path):
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (64, 64), "white").save(reference)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        process = _FakeProcess(cmd, **kwargs)
+        captured["payload"] = process.payload
+        return process
+
+    monkeypatch.setattr("core.backends.moss_image.subprocess.Popen", fake_popen)
+    prefix = "Same character and art style as Picture 1."
+    MossImageDiffusersBackend().generate(
+        _descriptor(),
+        {
+            "prompt": "in a park",
+            "seed": 1,
+            "identity_adapter": {
+                "enabled": True,
+                "type": "moss_image_reference",
+                "prompt_prefix": prefix,
+                "reference_images": [str(reference)],
+            },
+        },
+    )
+    assert captured["payload"]["prompt"] == f"{prefix} in a park"
+
+
+def test_moss_backend_identity_does_not_duplicate_prompt_prefix(monkeypatch, tmp_path):
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (64, 64), "white").save(reference)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        process = _FakeProcess(cmd, **kwargs)
+        captured["payload"] = process.payload
+        return process
+
+    monkeypatch.setattr("core.backends.moss_image.subprocess.Popen", fake_popen)
+    MossImageDiffusersBackend().generate(
+        _descriptor(),
+        {
+            "prompt": "Same person as Picture 1. in a park",
+            "seed": 1,
+            "identity_adapter": {
+                "enabled": True,
+                "type": "moss_image_reference",
+                "reference_images": [str(reference)],
+            },
+        },
+    )
+    assert captured["payload"]["prompt"] == "Same person as Picture 1. in a park"
+
+
+def test_moss_backend_rejects_multiple_identity_references(tmp_path):
+    refs = []
+    for index in range(2):
+        path = tmp_path / f"person-{index}.png"
+        Image.new("RGB", (32, 32), "white").save(path)
+        refs.append(str(path))
+
+    with pytest.raises(ValueError, match="at most 1 reference image"):
+        MossImageDiffusersBackend().generate(
+            _descriptor(),
+            {
+                "prompt": "portrait",
+                "identity_adapter": {
+                    "enabled": True,
+                    "type": "moss_image_reference",
+                    "reference_images": refs,
+                },
+            },
+        )
+
+
+def test_moss_backend_identity_rejects_missing_reference(tmp_path):
+    missing = tmp_path / "missing.png"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        MossImageDiffusersBackend().generate(
+            _descriptor(),
+            {
+                "prompt": "portrait",
+                "identity_adapter": {
+                    "enabled": True,
+                    "type": "moss_image_reference",
+                    "reference_images": [str(missing)],
+                },
+            },
+        )
+
+
+def test_moss_worker_reference_paths_validates_and_caps(tmp_path):
+    path = tmp_path / "person.png"
+    Image.new("RGB", (32, 32), "white").save(path)
+    assert _reference_paths({"reference_images": [str(path)]}) == [path]
+    with pytest.raises(FileNotFoundError):
+        _reference_paths({"reference_images": [str(tmp_path / "missing.png")]})
+    with pytest.raises(ValueError, match="at most 4"):
+        _reference_paths({"reference_images": [str(path)] * 5})
 
 
 def test_readiness_probes_isolated_runtime_and_component_source(monkeypatch):

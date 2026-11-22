@@ -140,9 +140,14 @@ _CAPABILITIES: dict[str, ModelCapabilities] = {
     # classes and overclaiming editing support for 2512.
     "qwen_image": ModelCapabilities(text2img=True, negative_prompt=True),
     # MOSS-Image ships a text-to-image pipeline. DiT LoRAs are merged into the
-    # single-file overlay; editing/reference-image variants still need runtime
-    # paths this backend does not implement, so do not advertise them.
-    "moss_image": ModelCapabilities(text2img=True, negative_prompt=True, lora=True),
+    # single-file overlay, and reference-image ("photo of this person") editing
+    # follows the ai-toolkit edit layout implemented by the isolated worker.
+    "moss_image": ModelCapabilities(
+        text2img=True,
+        negative_prompt=True,
+        lora=True,
+        identity_adapter=True,
+    ),
 }
 
 _BACKENDS: dict[str, str] = {

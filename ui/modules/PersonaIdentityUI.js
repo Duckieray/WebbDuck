@@ -11,8 +11,10 @@ const PROVIDERS = Object.freeze({
     sdxl: 'faceid_sdxl',
     krea2: 'krea2_identity_edit',
     flux2: 'flux2_native',
+    moss: 'moss_image_reference',
 });
 
+let activeProfile = null;
 let serverRefs = [];
 let presets = {};
 let renderingGrid = false;
@@ -23,6 +25,14 @@ function byId(id) {
 }
 
 function selectedModelFamily() {
+    // The runtime catalog profile is authoritative (checkpoint names are free
+    // text), with the legacy name heuristics kept as a fallback for the first
+    // paint before the profile event arrives.
+    const arch = String(activeProfile?.arch || '').toLowerCase();
+    if (arch === 'moss_image') return 'moss';
+    if (arch === 'krea2') return 'krea2';
+    if (arch === 'flux' || arch === 'flux1' || arch === 'flux2') return 'flux2';
+
     const value = String(byId('base_model')?.value || '').toLowerCase();
     if (value.includes('krea')) return 'krea2';
     if (value.includes('klein') || /flux[._\s-]*2(?:\b|[._\s-])/.test(value)) return 'flux2';
@@ -37,8 +47,12 @@ function isKrea() {
     return selectedModelFamily() === 'krea2';
 }
 
+function isMoss() {
+    return selectedModelFamily() === 'moss';
+}
+
 function maxReferenceCount() {
-    if (isKrea()) return 1;
+    if (isKrea() || isMoss()) return 1;
     if (selectedModelFamily() === 'flux2') return 5;
     return Number.POSITIVE_INFINITY;
 }
@@ -118,6 +132,7 @@ function setProviderControls() {
 
     const krea = provider === PROVIDERS.krea2;
     const flux = provider === PROVIDERS.flux2;
+    const moss = provider === PROVIDERS.moss;
 
     for (const el of document.querySelectorAll('.krea2-only')) {
         el.classList.toggle('hidden', !krea);
@@ -147,7 +162,7 @@ function setProviderControls() {
     }
 
     const uploadInput = byId('ip-adapter-refs-upload-input');
-    if (uploadInput) uploadInput.multiple = !krea;
+    if (uploadInput) uploadInput.multiple = !(krea || moss);
 
     const currentRefs = readSelectedRefs();
     writeSelectedRefs(currentRefs);
@@ -156,6 +171,8 @@ function setProviderControls() {
     if (hint) {
         if (krea) {
             hint.textContent = 'Krea 2 uses one Krea Identity reference. Selecting another image replaces the current anchor automatically.';
+        } else if (moss) {
+            hint.textContent = 'MOSS-Image uses one reference photo for edit conditioning. Selecting another image replaces the current reference automatically.';
         } else if (flux) {
             hint.textContent = 'FLUX.2 uses Native References automatically and supports up to 5 selected references.';
         } else {
@@ -322,7 +339,7 @@ function handleGridClick(event) {
 
     if (selected) {
         refs = refs.filter(value => value !== url);
-    } else if (isKrea()) {
+    } else if (isKrea() || isMoss()) {
         refs = [url];
     } else {
         refs.push(url);
@@ -340,7 +357,7 @@ async function handleUploads(event) {
     const input = byId('ip-adapter-refs-upload-input');
     let files = Array.from(input?.files || []);
     if (!files.length) return;
-    if (isKrea()) files = files.slice(-1);
+    if (isKrea() || isMoss()) files = files.slice(-1);
 
     let refs = readSelectedRefs();
     let uploaded = 0;
@@ -353,7 +370,7 @@ async function handleUploads(event) {
             const data = await response.json();
             if (!data?.url) continue;
             uploaded += 1;
-            if (isKrea()) refs = [data.url];
+            if (isKrea() || isMoss()) refs = [data.url];
             else if (!refs.includes(data.url)) refs.push(data.url);
         } catch (error) {
             console.error('Identity reference upload failed:', error);
@@ -416,6 +433,12 @@ function applyPreset(event) {
         return;
     }
 
+    if (provider === PROVIDERS.moss) {
+        // MOSS-Image exposes no user-tunable identity knobs; the reference
+        // resolution is fixed by the backend contract.
+        return;
+    }
+
     if (preset.adapter_scale != null && byId('ip-adapter-scale')) {
         byId('ip-adapter-scale').value = String(preset.adapter_scale);
         if (byId('ip-adapter-scale-value')) byId('ip-adapter-scale-value').textContent = Number(preset.adapter_scale).toFixed(2);
@@ -454,7 +477,10 @@ async function savePreset(event) {
         refs: readSelectedRefs(),
     };
 
-    if (provider === PROVIDERS.krea2) {
+    if (provider === PROVIDERS.moss) {
+        payload.isolate_references = true;
+        payload.reference_pixels = 512 * 512;
+    } else if (provider === PROVIDERS.krea2) {
         payload.ref_boost = 4.0;
         payload.lora_scale = 1.0;
         payload.grounding_px = parseInt(byId('ip-adapter-grounding-px')?.value || '768', 10);
@@ -564,7 +590,10 @@ function initialize() {
     bindOwnedManager();
 
     byId('base_model')?.addEventListener('change', () => setTimeout(syncForModel, 0));
-    window.addEventListener(PROFILE_EVENT, () => setTimeout(syncForModel, 0));
+    window.addEventListener(PROFILE_EVENT, event => {
+        if (event?.detail) activeProfile = event.detail;
+        setTimeout(syncForModel, 0);
+    });
 
     void Promise.all([
         refreshServerRefs({ rerender: false }),

@@ -87,18 +87,24 @@ Click an image to inspect it full size.
 ### Checkpoint Families
 
 WebbDuck routes each checkpoint to the right runtime automatically: SDXL, FLUX /
-FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints currently run
+FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints run
 text-to-image with 50 steps and CFG 3 by default, and dimensions must be
-multiples of 16. Negative prompts and LoRAs are supported. On a 16 GB card,
-MOSS-Image tunes itself automatically: the text encoder is used once for the
-prompt and then freed, and the image model stays resident on the GPU for
+multiples of 16. Negative prompts, LoRAs, and reference-image identity
+conditioning are supported. On a 16 GB card, MOSS-Image tunes itself
+automatically: the text encoder is used once for the prompt and reference
+images and then freed, and the image model stays resident on the GPU for
 denoising.
 
 MOSS-Image LoRA picker entries come from the catalog, which classifies adapters
 as `moss_image` from their training metadata or tensor layout. Put MOSS LoRAs in
-`lora/moss/` if detection cannot tell them apart. Reference-image "CharRef" LoRAs
-from the community are designed for a ComfyUI edit path that MOSS-Image does not
-expose in WebbDuck yet, so they will not reproduce a reference face on their own.
+`lora/moss/` if detection cannot tell them apart. Community "CharRef" and edit
+LoRAs trained with the ai-toolkit `edit` layout work with Identity / Persona
+reference conditioning: enable the section, pick one reference photo, and prompt
+the new scene. WebbDuck reads the reference through the Qwen3.5 vision tower,
+appends its latent after the text tokens, and prepends `Same person as
+Picture 1.` to the prompt. MOSS-Image uses a single reference; selecting another
+photo replaces it. A custom `prompt_prefix` can be supplied through the API for
+adapters trained with different wording.
 
 ### Prompt and Token Count
 

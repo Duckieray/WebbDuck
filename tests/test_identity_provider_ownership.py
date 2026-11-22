@@ -175,11 +175,51 @@ def test_architecture_without_identity_support_rejects_adapter():
         )
 
 
+def test_moss_replaces_stale_faceid_provider_and_keeps_one_reference():
+    settings = {
+        "identity_adapter": {
+            "enabled": True,
+            "type": "faceid_sdxl",
+            "reference_images": ["/refs/a.png", "/refs/b.png"],
+            "adapter_scale": 1.0,
+            "embedder": "buffalo_l",
+        }
+    }
+    model_runtime._normalize_identity_adapter_for_descriptor(
+        _descriptor("moss_image", "moss_image_diffusers"), settings
+    )
+    cfg = settings["identity_adapter"]
+    assert cfg["type"] == "moss_image_reference"
+    assert cfg["reference_images"] == ["/refs/b.png"]
+    assert cfg["isolate_references"] is True
+    assert cfg["reference_pixels"] == 512 * 512
+    assert "embedder" not in cfg
+    assert "adapter_scale" not in cfg
+
+
+def test_moss_correct_provider_preserves_explicit_tuning():
+    settings = {
+        "identity_adapter": {
+            "enabled": True,
+            "type": "moss_image_reference",
+            "reference_images": ["/refs/person.png"],
+            "isolate_references": False,
+            "reference_pixels": 262144,
+        }
+    }
+    model_runtime._normalize_identity_adapter_for_descriptor(
+        _descriptor("moss_image", "moss_image_diffusers"), settings
+    )
+    cfg = settings["identity_adapter"]
+    assert cfg["isolate_references"] is False
+    assert cfg["reference_pixels"] == 262144
+
+
 def test_persona_ui_hides_provider_choice_and_owns_stable_reference_selection():
     source = Path("ui/modules/PersonaIdentityUI.js").read_text(encoding="utf-8")
     assert "installHiddenProviderField" in source
     assert "row.replaceWith(hidden)" in source
-    assert "if (isKrea()) return 1" in source
+    assert "if (isKrea() || isMoss()) return 1" in source
     assert "event.stopImmediatePropagation()" in source
     assert "does not refetch/rebuild the entire reference gallery" in source
     assert "const showLegacyScales = provider === PROVIDERS.sdxl" in source

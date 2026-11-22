@@ -4,6 +4,10 @@ MOSS-Image support components (Qwen3.5-9B text encoder + FLUX.2 VAE + the
 remote ``pipeline_moss_image`` module) come from a Diffusers repository. Any
 MOSS-Image-based single-file DiT can be overlaid on those components, so the
 backend never hardcodes one published checkpoint.
+
+Reference-image identity conditioning is implemented in the worker with the
+ai-toolkit ``edit`` layout (vision-token prompt + VAE reference latents), which
+is what community CharRef/Edit-HQ adapters are trained on.
 """
 
 from __future__ import annotations
@@ -27,6 +31,15 @@ from models.model_descriptor import ModelDescriptor
 
 DEFAULT_COMPONENT_MODEL = "OpenMOSS-Team/MOSS-Image-Base"
 DIMENSION_MULTIPLE = 16
+
+# The ai-toolkit ``edit`` recipe that community MOSS-Image identity adapters
+# (CharRef, Edit-HQ) are trained on uses one reference per prompt. Extra
+# references tend to blend identities, so keep the contract to a single
+# portrait until multi-reference adapters are proven.
+MAX_IDENTITY_REFERENCES = 1
+IDENTITY_PROMPT_PREFIX = "Same person as Picture 1."
+DEFAULT_REFERENCE_PIXELS = 512 * 512
+IDENTITY_PROVIDER = "moss_image_reference"
 
 
 def _component_model(descriptor: ModelDescriptor) -> str:
@@ -124,6 +137,75 @@ def _inject_lora_triggers(prompt: str, loras: list[dict[str, Any]]) -> str:
     return f"{prompt}, {suffix}" if prompt else suffix
 
 
+def _resolve_moss_identity(
+    settings: dict[str, Any],
+) -> tuple[list[str], dict[str, Any] | None]:
+    """Resolve WebbDuck identity references for MOSS-Image edit conditioning.
+
+    Studio stores references as web paths (``/outputs/refs/...``) while API
+    clients may submit absolute paths. Both are converted to real files before
+    the isolated worker starts so failures are immediate and actionable.
+    """
+    adapter = settings.get("identity_adapter")
+    if not isinstance(adapter, dict) or not bool(adapter.get("enabled")):
+        return [], None
+
+    raw_refs = adapter.get("reference_images") or []
+    if not isinstance(raw_refs, list):
+        raise ValueError("MOSS-Image identity reference_images must be a list.")
+    if len([raw for raw in raw_refs if str(raw or "").strip()]) > MAX_IDENTITY_REFERENCES:
+        raise ValueError(
+            "MOSS-Image identity supports at most "
+            f"{MAX_IDENTITY_REFERENCES} reference image."
+        )
+
+    resolved: list[str] = []
+    for index, raw in enumerate(raw_refs):
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if value.startswith("/outputs/") or value.startswith("outputs/"):
+            # Lazy import keeps the standalone backend import surface independent
+            # from server initialization while reusing the safe output resolver.
+            from server.storage import resolve_web_path
+
+            path = resolve_web_path(value)
+        else:
+            path = Path(value).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"MOSS-Image identity reference image {index + 1} does not exist: {value}"
+            )
+        resolved.append(str(path.resolve()))
+
+    if not resolved:
+        return [], None
+
+    # Normalize the generic identity contract to the provider this backend owns
+    # so presets saved under SDXL FaceID remain reusable as persona image sets.
+    adapter["type"] = IDENTITY_PROVIDER
+    adapter["provider"] = IDENTITY_PROVIDER
+    adapter["resolved_reference_images"] = list(resolved)
+    return resolved, adapter
+
+
+def _prepend_identity_prefix(prompt: str, adapter: dict[str, Any]) -> str:
+    """Reference ``Picture 1`` in the text prompt, as the edit recipe expects."""
+    prefix = str(adapter.get("prompt_prefix") or IDENTITY_PROMPT_PREFIX).strip()
+    if not prefix or prompt.startswith(prefix):
+        return prompt
+    return f"{prefix} {prompt}".strip()
+
+
+def _reference_pixels(adapter: dict[str, Any]) -> int:
+    raw = adapter.get("reference_pixels")
+    try:
+        pixels = int(raw) if raw is not None else DEFAULT_REFERENCE_PIXELS
+    except (TypeError, ValueError):
+        pixels = DEFAULT_REFERENCE_PIXELS
+    return max(16 * 16, pixels)
+
+
 def _report_progress(
     callback: Any,
     stage: str,
@@ -214,6 +296,10 @@ class MossImageDiffusersBackend(GenerationBackend):
         resolved_loras = _resolve_loras(settings.get("loras", []))
         prompt = _inject_lora_triggers(prompt, resolved_loras)
 
+        reference_images, identity_adapter = _resolve_moss_identity(settings)
+        if reference_images and identity_adapter is not None:
+            prompt = _prepend_identity_prefix(prompt, identity_adapter)
+
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
         seed = int(raw_seed) if raw_seed is not None else int(time.time_ns() & 0xFFFFFFFF)
@@ -236,6 +322,29 @@ class MossImageDiffusersBackend(GenerationBackend):
             "seed": seed,
             "loras": resolved_loras,
         }
+
+        if reference_images:
+            assert identity_adapter is not None
+            payload["reference_images"] = list(reference_images)
+            payload["reference_pixels"] = _reference_pixels(identity_adapter)
+            payload["isolate_references"] = bool(
+                identity_adapter.get("isolate_references", True)
+            )
+            settings["identity_adapter_debug"] = {
+                "provider": IDENTITY_PROVIDER,
+                "persona_name": str(
+                    identity_adapter.get("persona_name")
+                    or identity_adapter.get("preset_name")
+                    or ""
+                ).strip()
+                or None,
+                "reference_images_requested": len(
+                    identity_adapter.get("reference_images") or []
+                ),
+                "reference_images_resolved": len(reference_images),
+                "reference_pixels": payload["reference_pixels"],
+                "isolate_references": payload["isolate_references"],
+            }
 
         python_exe = resolve_runtime_python("moss_image", "WEBBDUCK_MOSS_IMAGE_PYTHON")
         worker = Path(__file__).with_name("moss_image_worker.py")

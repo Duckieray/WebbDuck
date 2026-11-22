@@ -140,8 +140,8 @@ Backends wrap architecture/runtime-specific behavior behind the contract in `cor
 | `sdxl_worker.py` | SDXL worker entrypoints |
 | `qwen_image.py` | Qwen-Image-2512 backend in an isolated Diffusers runtime |
 | `qwen_image_worker.py` | Qwen image worker entrypoint |
-| `moss_image.py` | MOSS-Image backend: component resolution, single-file DiT overlay, progress/cancel |
-| `moss_image_worker.py` | MOSS-Image worker: remote pipeline module, meta-scaffold overlay, T2I loop |
+| `moss_image.py` | MOSS-Image backend: component resolution, single-file DiT overlay, identity reference resolution, progress/cancel |
+| `moss_image_worker.py` | MOSS-Image worker: remote pipeline module, meta-scaffold overlay, T2I loop, reference-conditioned sampler |
 | `krea2.py` | Krea 2 isolated-runtime backend: identity payload normalization, component resolution, worker launch |
 | `krea2_host_impl.py` | Krea 2 image backend entrypoint for an isolated Python runtime |
 | `krea2_worker.py` | Krea phased GPU worker; identity edit run, FP8 LoRA residuals, OOM demotion |

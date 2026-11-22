@@ -21,6 +21,7 @@ _IDENTITY_PROVIDER_BY_ARCHITECTURE = {
     "flux": "flux2_native",
     "flux2": "flux2_native",
     "krea2": "krea2_identity_edit",
+    "moss_image": "moss_image_reference",
 }
 
 
@@ -96,6 +97,11 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
             "flux2_anchor_dup": False,
             "face_focus": False,
         }
+    if provider == "moss_image_reference":
+        return {
+            "isolate_references": True,
+            "reference_pixels": 512 * 512,
+        }
     return {
         "embedder": "buffalo_l",
         "adapter_scale": 1.0,
@@ -120,6 +126,10 @@ def _canonicalize_provider_fields(provider: str, cfg: dict[str, Any]) -> None:
             deduped = deduped[-1:]
         elif provider == "flux2_native" and len(deduped) > 5:
             deduped = deduped[-5:]
+        elif provider == "moss_image_reference" and len(deduped) > 1:
+            # MOSS-Image edit adapters are single-reference; keep the anchor the
+            # user selected last, matching the Krea one-anchor behavior.
+            deduped = deduped[-1:]
         cfg["reference_images"] = deduped
         cfg.pop("refs", None)
 

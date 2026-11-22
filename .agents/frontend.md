@@ -37,7 +37,7 @@ WebbDuck's frontend is a zero-build web app built from plain HTML, ES modules, a
   editor closes onto it. On open the editor fetches `/image/edit-session` and restores the saved
   mask, crop/rotation, brush/feather, model, and prompts for that image; on close it snapshots the
   same state back (with a per-source in-memory cache so an immediate reopen does not race the save).
-- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section (IP-Adapter FaceID is the SDXL `faceid_sdxl` provider).
+- `ui/modules/PersonaIdentityUI.js`: Identity / Persona presentation; provider switch (`faceid_sdxl` / `flux2_native` / `krea2_identity_edit` / `moss_image_reference`), persona hints, Krea-only controls, and per-provider slider defaults for the identity section (IP-Adapter FaceID is the SDXL `faceid_sdxl` provider; MOSS-Image is single-reference).
 - `ui/modules/PersonaIdentityUI_impl.js`: implementation details behind `PersonaIdentityUI.js`.
 - `ui/modules/ProviderCredentialsSettings.js`: optional Hugging Face/Civitai credential controls injected into Settings; token values are never persisted in browser state.
 
