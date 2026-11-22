@@ -1058,8 +1058,11 @@ def _ref_attention(q, k, v, rope, heads, split, isolate, kv_reuse, kv_capture):
 
     if split is not None and isolate:
         if kv_capture is not None:
+            # Reference K/V is reused on every later step. Keep it in host
+            # memory: at 640^2 it is about 2 GB, which does not fit beside the
+            # resident DiT on 16 GB cards once outputs get large.
             kv_capture.append(
-                (key[:, :, split:].clone(), value[:, :, split:].clone())
+                (key[:, :, split:].to("cpu"), value[:, :, split:].to("cpu"))
             )
         out = torch.cat(
             (
@@ -1071,8 +1074,8 @@ def _ref_attention(q, k, v, rope, heads, split, isolate, kv_reuse, kv_capture):
     else:
         if kv_reuse is not None:
             cached_key, cached_value = kv_reuse
-            key = torch.cat((key, cached_key), 2)
-            value = torch.cat((value, cached_value), 2)
+            key = torch.cat((key, cached_key.to(key.device)), 2)
+            value = torch.cat((value, cached_value.to(value.device)), 2)
         out = attend(query, key, value)
     return out.transpose(1, 2).flatten(2)
 
