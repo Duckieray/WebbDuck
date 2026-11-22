@@ -479,7 +479,7 @@ async function savePreset(event) {
 
     if (provider === PROVIDERS.moss) {
         payload.isolate_references = true;
-        payload.reference_pixels = 512 * 512;
+        payload.reference_pixels = 640 * 640;
     } else if (provider === PROVIDERS.krea2) {
         payload.ref_boost = 4.0;
         payload.lora_scale = 1.0;

@@ -192,7 +192,7 @@ def test_moss_replaces_stale_faceid_provider_and_keeps_one_reference():
     assert cfg["type"] == "moss_image_reference"
     assert cfg["reference_images"] == ["/refs/b.png"]
     assert cfg["isolate_references"] is True
-    assert cfg["reference_pixels"] == 512 * 512
+    assert cfg["reference_pixels"] == 640 * 640
     assert "embedder" not in cfg
     assert "adapter_scale" not in cfg
 

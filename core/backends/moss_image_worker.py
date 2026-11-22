@@ -784,7 +784,17 @@ def _move_split_models_to_gpu(pipe: Any, progress_path: Path | None = None) -> N
 #    once. Adapters trained with ai-toolkit's ``kv_cache: true`` expect this.
 
 REFERENCE_VLM_PIXELS = 384 * 384
-REFERENCE_LATENT_PIXELS = 512 * 512
+REFERENCE_LATENT_PIXELS = 640 * 640
+# 640^2 reference latents fit beside the resident DiT on a 16 GB card; below
+# this VRAM size fall back to 512^2 instead of running out of memory.
+REFERENCE_LATENT_PIXELS_LOW_VRAM = 512 * 512
+LOW_VRAM_GB = 15.0
+
+
+def _effective_reference_pixels(requested: int, total_vram_gb: float) -> int:
+    if 0.0 < total_vram_gb < LOW_VRAM_GB:
+        return min(requested, REFERENCE_LATENT_PIXELS_LOW_VRAM)
+    return requested
 MAX_REFERENCE_IMAGES = 4
 
 
@@ -1572,6 +1582,9 @@ def _run(request: dict, output_dir: Path, progress_path: Path | None = None) -> 
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         except Exception:
             total_vram_gb = 0.0
+
+    if use_references:
+        reference_pixels = _effective_reference_pixels(reference_pixels, total_vram_gb)
 
     _write_progress(progress_path, "Preparing MOSS-Image runtime", 0.04)
     pipe, runtime = _load_pipeline(request, dtype, progress_path)

@@ -1362,7 +1362,7 @@ function collectFormData() {
                 if (rank && rank !== 'auto') payload.lora_rank = rank;
             } else if (adapterType === 'moss_image_reference') {
                 payload.isolate_references = true;
-                payload.reference_pixels = 512 * 512;
+                payload.reference_pixels = 640 * 640;
             } else {
                 payload.repo = 'h94/IP-Adapter-FaceID';
                 payload.adapter_weight = 'ip-adapter-faceid_sdxl.bin';

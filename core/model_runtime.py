@@ -100,7 +100,7 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
     if provider == "moss_image_reference":
         return {
             "isolate_references": True,
-            "reference_pixels": 512 * 512,
+            "reference_pixels": 640 * 640,
         }
     return {
         "embedder": "buffalo_l",

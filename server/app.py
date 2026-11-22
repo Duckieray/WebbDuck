@@ -2506,7 +2506,7 @@ def _resolve_identity_adapter_preset(adapter_cfg: dict) -> dict:
     adapter_cfg.setdefault(
         "isolate_references", bool(preset.get("isolate_references", True))
     )
-    adapter_cfg.setdefault("reference_pixels", preset.get("reference_pixels", 512 * 512))
+    adapter_cfg.setdefault("reference_pixels", preset.get("reference_pixels", 640 * 640))
     return adapter_cfg
 
 @app.get("/ip-adapter/refs")
@@ -2565,7 +2565,7 @@ class PresetData(BaseModel):
     lora_rank: str | None = None
     # MOSS-Image edit conditioning policy (single reference, cached ref K/V).
     isolate_references: bool = True
-    reference_pixels: int = 512 * 512
+    reference_pixels: int = 640 * 640
 
 @app.post("/ip-adapter/presets")
 async def save_preset(data: PresetData):
