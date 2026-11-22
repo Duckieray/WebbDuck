@@ -29,6 +29,14 @@ from models.model_descriptor import (
 from models.single_file_inspection import inspect_single_image_checkpoint
 
 
+@pytest.fixture(autouse=True)
+def _isolated_lora_registry(monkeypatch):
+    """Keep identity tests independent of LoRAs installed on the host."""
+    import models.registry as registry
+
+    monkeypatch.setattr(registry, "LORA_REGISTRY", {})
+
+
 def _descriptor() -> ModelDescriptor:
     return ModelDescriptor(
         name="Dirty-MossV2",
@@ -361,6 +369,93 @@ def test_moss_worker_reference_paths_validates_and_caps(tmp_path):
         _reference_paths({"reference_images": [str(tmp_path / "missing.png")]})
     with pytest.raises(ValueError, match="at most 4"):
         _reference_paths({"reference_images": [str(path)] * 5})
+
+
+def _identity_request(monkeypatch, tmp_path, *, loras=None, adapter_extra=None):
+    import models.registry as registry
+
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (64, 64), "white").save(reference)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        process = _FakeProcess(cmd, **kwargs)
+        captured["payload"] = process.payload
+        return process
+
+    monkeypatch.setattr("core.backends.moss_image.subprocess.Popen", fake_popen)
+    adapter = {
+        "enabled": True,
+        "type": "moss_image_reference",
+        "reference_images": [str(reference)],
+    }
+    adapter.update(adapter_extra or {})
+    settings = {
+        "prompt": "a woman in a park",
+        "seed": 3,
+        "loras": loras or [],
+        "identity_adapter": adapter,
+    }
+    MossImageDiffusersBackend().generate(_descriptor(), settings)
+    return captured["payload"], settings
+
+
+def _armv5_registry(monkeypatch, tmp_path):
+    import models.registry as registry
+
+    lora_path = tmp_path / "armV5.safetensors"
+    lora_path.write_bytes(b"")
+    entry = {"path": str(lora_path), "arch": "moss_image", "weight": 1.0, "trigger": None}
+    monkeypatch.setattr(registry, "LORA_REGISTRY", {"armV5": entry})
+
+
+def test_moss_identity_auto_attaches_installed_edit_adapter(monkeypatch, tmp_path):
+    _armv5_registry(monkeypatch, tmp_path)
+    payload, settings = _identity_request(monkeypatch, tmp_path)
+
+    assert [entry["name"] for entry in payload["loras"]] == ["armV5"]
+    assert payload["loras"][0]["weight"] == 1.0
+    assert payload["prompt"] == "Keep the same person from Picture 1. a woman in a park"
+    debug = settings["identity_adapter_debug"]
+    assert debug["edit_adapter"] == "armV5"
+    assert debug["edit_adapter_source"] == "auto"
+
+
+def test_moss_identity_does_not_duplicate_selected_edit_adapter(monkeypatch, tmp_path):
+    _armv5_registry(monkeypatch, tmp_path)
+    payload, settings = _identity_request(
+        monkeypatch, tmp_path, loras=[{"name": "armV5", "weight": 0.8}]
+    )
+
+    assert [entry["name"] for entry in payload["loras"]] == ["armV5"]
+    assert payload["loras"][0]["weight"] == 0.8
+    assert settings["identity_adapter_debug"]["edit_adapter_source"] == "selected"
+
+
+def test_moss_identity_can_disable_edit_adapter(monkeypatch, tmp_path):
+    _armv5_registry(monkeypatch, tmp_path)
+    payload, settings = _identity_request(
+        monkeypatch, tmp_path, adapter_extra={"edit_adapter": "none"}
+    )
+
+    assert payload["loras"] == []
+    assert payload["prompt"] == "Same person as Picture 1. a woman in a park"
+    assert settings["identity_adapter_debug"]["edit_adapter"] is None
+
+
+def test_moss_identity_reports_missing_edit_adapter(monkeypatch, tmp_path):
+    payload, settings = _identity_request(monkeypatch, tmp_path)
+
+    assert payload["loras"] == []
+    assert payload["prompt"] == "Same person as Picture 1. a woman in a park"
+    assert settings["identity_adapter_debug"]["edit_adapter"] is None
+
+
+def test_moss_identity_rejects_unknown_explicit_edit_adapter(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="Unknown identity edit adapter"):
+        _identity_request(
+            monkeypatch, tmp_path, adapter_extra={"edit_adapter": "missing_adapter"}
+        )
 
 
 def test_readiness_probes_isolated_runtime_and_component_source(monkeypatch):

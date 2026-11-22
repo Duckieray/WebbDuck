@@ -114,7 +114,11 @@ references, so the vendor `pipe(...)` text-to-image path stays byte-identical.
 1024^2 VAE decoding does not fit beside the resident 5B DiT on 16 GB cards, so
 the reference path parks the DiT on CPU for the decode (the worker exits after
 the job). The provider id is `moss_image_reference`; the backend accepts one
-reference per job and prepends `Same person as Picture 1.` unless
+reference per job. An edit adapter is attached by registry name: a LoRA the user
+selected (`EDIT_ADAPTERS` in `core/backends/moss_image.py`), else `armV5` when
+installed (`DEFAULT_EDIT_ADAPTER`); `identity_adapter.edit_adapter` can be `none`
+or another LoRA name. The prompt prefix comes from the adapter entry (armV5:
+`Keep the same person from Picture 1.`), defaulting to `Same person as Picture 1.` unless
 `identity_adapter.prompt_prefix` overrides it.
 
 `apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.

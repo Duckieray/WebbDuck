@@ -38,6 +38,16 @@ DIMENSION_MULTIPLE = 16
 # portrait until multi-reference adapters are proven.
 MAX_IDENTITY_REFERENCES = 1
 IDENTITY_PROMPT_PREFIX = "Same person as Picture 1."
+# Known reference-conditioning LoRAs, keyed by registry name (file stem). Each
+# entry carries the prompt wording its authors trained with. Only the edit
+# adapters that keep the reference's face are listed here.
+EDIT_ADAPTERS: dict[str, dict[str, str]] = {
+    # ai-toolkit edit adapter (Apache-2.0), instruction-style prompts.
+    "armV5": {"prompt_prefix": "Keep the same person from Picture 1."},
+    # 7err4/MOSS-Image-CharRef v2 (anime-trained): documented wording.
+    "charref_v2": {"prompt_prefix": "Same character and art style as Picture 1."},
+}
+DEFAULT_EDIT_ADAPTER = "armV5"
 DEFAULT_REFERENCE_PIXELS = 512 * 512
 IDENTITY_PROVIDER = "moss_image_reference"
 
@@ -189,9 +199,54 @@ def _resolve_moss_identity(
     return resolved, adapter
 
 
-def _prepend_identity_prefix(prompt: str, adapter: dict[str, Any]) -> str:
-    """Reference ``Picture 1`` in the text prompt, as the edit recipe expects."""
-    prefix = str(adapter.get("prompt_prefix") or IDENTITY_PROMPT_PREFIX).strip()
+_EDIT_ADAPTER_DISABLED = {"none", "off", "false", "0", "disabled"}
+
+
+def _attach_edit_adapter(
+    resolved_loras: list[dict[str, Any]],
+    adapter: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Pick the MOSS edit adapter that conditions the reference.
+
+    A LoRA the user already selected wins. Otherwise ``DEFAULT_EDIT_ADAPTER`` is
+    attached automatically when it is installed; ``identity_adapter.edit_adapter``
+    can name another registry LoRA or disable the attach with ``none``.
+    Returns ``(name, source)`` where source is ``selected``, ``auto``, or ``None``.
+    """
+    from models.registry import LORA_REGISTRY
+
+    requested = str(adapter.get("edit_adapter") or "auto").strip()
+    if requested.lower() in _EDIT_ADAPTER_DISABLED:
+        return None, None
+
+    for entry in resolved_loras:
+        if entry["name"] in EDIT_ADAPTERS:
+            return entry["name"], "selected"
+
+    if requested.lower() == "auto":
+        if DEFAULT_EDIT_ADAPTER not in LORA_REGISTRY:
+            return None, None
+        name = DEFAULT_EDIT_ADAPTER
+    else:
+        if requested not in LORA_REGISTRY:
+            raise ValueError(f"Unknown identity edit adapter: {requested}")
+        name = requested
+
+    weight = adapter.get("edit_adapter_weight", 1.0)
+    resolved_loras.extend(_resolve_loras([{"name": name, "weight": weight}]))
+    return name, "auto"
+
+
+def _prepend_identity_prefix(
+    prompt: str,
+    adapter: dict[str, Any],
+    edit_adapter: str | None,
+) -> str:
+    """Reference ``Picture 1`` in the text prompt, using the adapter's wording."""
+    edit_prefix = EDIT_ADAPTERS.get(edit_adapter or "", {}).get("prompt_prefix")
+    prefix = str(
+        adapter.get("prompt_prefix") or edit_prefix or IDENTITY_PROMPT_PREFIX
+    ).strip()
     if not prefix or prompt.startswith(prefix):
         return prompt
     return f"{prefix} {prompt}".strip()
@@ -294,11 +349,14 @@ class MossImageDiffusersBackend(GenerationBackend):
             raise ValueError("Prompt is required.")
 
         resolved_loras = _resolve_loras(settings.get("loras", []))
-        prompt = _inject_lora_triggers(prompt, resolved_loras)
-
         reference_images, identity_adapter = _resolve_moss_identity(settings)
+        edit_adapter: str | None = None
+        edit_source: str | None = None
         if reference_images and identity_adapter is not None:
-            prompt = _prepend_identity_prefix(prompt, identity_adapter)
+            edit_adapter, edit_source = _attach_edit_adapter(resolved_loras, identity_adapter)
+        prompt = _inject_lora_triggers(prompt, resolved_loras)
+        if reference_images and identity_adapter is not None:
+            prompt = _prepend_identity_prefix(prompt, identity_adapter, edit_adapter)
 
         defaults = descriptor.defaults or {}
         raw_seed = settings.get("seed")
@@ -344,6 +402,8 @@ class MossImageDiffusersBackend(GenerationBackend):
                 "reference_images_resolved": len(reference_images),
                 "reference_pixels": payload["reference_pixels"],
                 "isolate_references": payload["isolate_references"],
+                "edit_adapter": edit_adapter,
+                "edit_adapter_source": edit_source,
             }
 
         python_exe = resolve_runtime_python("moss_image", "WEBBDUCK_MOSS_IMAGE_PYTHON")

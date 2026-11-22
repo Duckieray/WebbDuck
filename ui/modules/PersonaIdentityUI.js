@@ -172,7 +172,7 @@ function setProviderControls() {
         if (krea) {
             hint.textContent = 'Krea 2 uses one Krea Identity reference. Selecting another image replaces the current anchor automatically.';
         } else if (moss) {
-            hint.textContent = 'MOSS-Image uses one reference photo for edit conditioning. Selecting another image replaces the current reference automatically.';
+            hint.textContent = 'MOSS-Image uses one reference photo. The armV5 edit adapter is attached automatically when it is installed in lora/moss; without it, faces are not kept reliably.';
         } else if (flux) {
             hint.textContent = 'FLUX.2 uses Native References automatically and supports up to 5 selected references.';
         } else {
