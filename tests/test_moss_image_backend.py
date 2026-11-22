@@ -35,6 +35,7 @@ def _isolated_lora_registry(monkeypatch):
     import models.registry as registry
 
     monkeypatch.setattr(registry, "LORA_REGISTRY", {})
+    monkeypatch.setattr("core.backends.moss_identity_face._largest_face", lambda _img: None)
 
 
 def _descriptor() -> ModelDescriptor:
@@ -464,6 +465,90 @@ def test_moss_identity_rejects_unknown_explicit_edit_adapter(monkeypatch, tmp_pa
     with pytest.raises(ValueError, match="Unknown identity edit adapter"):
         _identity_request(
             monkeypatch, tmp_path, adapter_extra={"edit_adapter": "missing_adapter"}
+        )
+
+
+def test_moss_face_reference_masks_outside_face(monkeypatch, tmp_path):
+    import numpy as np
+
+    from core.backends import moss_identity_face as face
+
+    source = tmp_path / "photo.png"
+    rng = np.random.default_rng(0)
+    Image.fromarray(rng.integers(0, 255, (800, 600, 3), dtype=np.uint8)).save(source)
+    monkeypatch.setenv("WEBBDUCK_OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setattr(face, "_largest_face", lambda _img: (200, 250, 200, 260))
+
+    prepared, masked = face.prepare_face_reference(source)
+    assert masked is True
+    out = np.asarray(Image.open(prepared).convert("RGB"))
+    assert out.shape == (1024, 1024, 3)
+    # Corners are outside the oval, so they are the neutral gray fill.
+    assert np.all(np.abs(out[:20, :20].astype(int) - 128) <= 2)
+
+    again, _ = face.prepare_face_reference(source)
+    assert again == prepared
+
+
+def test_moss_face_reference_falls_back_when_no_face(monkeypatch, tmp_path):
+    from core.backends import moss_identity_face as face
+
+    source = tmp_path / "scenery.png"
+    Image.new("RGB", (300, 300), "green").save(source)
+    monkeypatch.setenv("WEBBDUCK_OUTPUT_DIR", str(tmp_path / "out"))
+
+    path, masked = face.prepare_face_reference(source)
+    assert masked is False
+    assert path == str(source.resolve())
+
+
+def test_moss_identity_uses_face_reference_by_default_and_full_on_request(monkeypatch, tmp_path):
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (400, 400), "white").save(reference)
+    monkeypatch.setenv("WEBBDUCK_OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setattr(
+        "core.backends.moss_identity_face._largest_face", lambda _img: (100, 100, 200, 200)
+    )
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        process = _FakeProcess(cmd, **kwargs)
+        captured["payload"] = process.payload
+        return process
+
+    monkeypatch.setattr("core.backends.moss_image.subprocess.Popen", fake_popen)
+
+    def run(extra):
+        adapter = {"enabled": True, "type": "moss_image_reference", "reference_images": [str(reference)]}
+        adapter.update(extra)
+        MossImageDiffusersBackend().generate(
+            _descriptor(), {"prompt": "a woman", "seed": 2, "identity_adapter": adapter}
+        )
+        return captured["payload"]["reference_images"][0], adapter
+
+    face_path, face_adapter = run({})
+    assert face_path.endswith(".png") and ".moss_identity_cache" in face_path
+    assert face_adapter["reference_face_masked"] is True
+
+    full_path, _ = run({"reference_crop": "full"})
+    assert full_path == str(reference.resolve())
+
+
+def test_moss_identity_rejects_unknown_reference_crop(tmp_path):
+    reference = tmp_path / "person.png"
+    Image.new("RGB", (64, 64), "white").save(reference)
+    with pytest.raises(ValueError, match="reference_crop"):
+        MossImageDiffusersBackend().generate(
+            _descriptor(),
+            {
+                "prompt": "portrait",
+                "identity_adapter": {
+                    "enabled": True,
+                    "type": "moss_image_reference",
+                    "reference_images": [str(reference)],
+                    "reference_crop": "torso",
+                },
+            },
         )
 
 

@@ -23,6 +23,11 @@ from typing import Any
 from PIL import Image
 
 from core.backends.base import GenerationBackend, backend_resolver
+from core.backends.moss_identity_face import (
+    DEFAULT_FACE_CROP as DEFAULT_REFERENCE_CROP,
+    FACE_CROP_MODES,
+    prepare_face_reference,
+)
 from core.backends.runtime_probe import probe_python_runtime
 from core.backends.runtime_utils import resolve_runtime_python
 from core.exceptions import GenerationCancelledError
@@ -190,6 +195,18 @@ def _resolve_moss_identity(
 
     if not resolved:
         return [], None
+
+    crop_mode = str(adapter.get("reference_crop") or DEFAULT_REFERENCE_CROP).strip().lower()
+    if crop_mode not in FACE_CROP_MODES:
+        raise ValueError(
+            f"MOSS-Image reference_crop must be one of {', '.join(FACE_CROP_MODES)}"
+        )
+    if crop_mode == "face":
+        # The adapter copies everything it can see; keep only the face so the
+        # costume, background and pose of the photo are not reproduced.
+        resolved_path, masked = prepare_face_reference(resolved[0])
+        resolved = [resolved_path]
+        adapter["reference_face_masked"] = masked
 
     # Normalize the generic identity contract to the provider this backend owns
     # so presets saved under SDXL FaceID remain reusable as persona image sets.

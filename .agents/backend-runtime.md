@@ -118,8 +118,15 @@ reference per job. An edit adapter is attached by registry name: a LoRA the user
 selected (`EDIT_ADAPTERS` in `core/backends/moss_image.py`), else `armV5` when
 installed (`DEFAULT_EDIT_ADAPTER`); `identity_adapter.edit_adapter` can be `none`
 or another LoRA name. The prompt prefix comes from the adapter entry (armV5:
-`Keep the same person from Picture 1.`), defaulting to `Same person as Picture 1.` unless
-`identity_adapter.prompt_prefix` overrides it.
+`Keep the same person from Picture 1.`), defaulting to `Same person as Picture 1.`
+unless `identity_adapter.prompt_prefix` overrides it.
+
+The reference is face-only by default. `core/backends/moss_identity_face.py` crops to
+the detected face (InsightFace via `flux_identity._detect_face`) and grays everything
+outside a soft oval, cached under `.moss_identity_cache`. The adapter copies whatever
+it sees, so the full photo reproduces the costume and background.
+`identity_adapter.reference_crop` is `face` (default) or `full`; `reference_face_masked`
+reports whether a face was found, and photos with no detectable face pass through.
 
 `apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.
 ai-toolkit/PEFT (`lora_A`/`lora_B`), Kohya (`lora_down`/`lora_up` + `alpha`), and

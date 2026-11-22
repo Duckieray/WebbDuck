@@ -107,7 +107,12 @@ and it is attached automatically whenever a reference is used and no other edit
 adapter is selected. Enable the section, pick one reference photo, and prompt the
 new scene. WebbDuck reads the reference through the Qwen3.5 vision tower, appends
 its latent after the text tokens, and prefixes the prompt with the adapter's
-wording (`Keep the same person from Picture 1.` for armV5). MOSS-Image uses a
+wording (`Keep the same person from Picture 1.` for armV5). By default only the
+face of the reference photo is used: the photo is cropped around the detected
+face and the area outside a soft oval is grayed out, so the costume, background
+and pose are not copied. Long hair that falls outside the oval is not carried
+over. Set `identity_adapter.reference_crop` to `full` to use the whole photo
+instead. Photos with no detectable face are used unchanged. MOSS-Image uses a
 single reference; selecting another photo replaces it. The debug panel reports
 which edit adapter was used (`edit_adapter`, `edit_adapter_source`). The API
 accepts `identity_adapter.edit_adapter` (`auto`, `none`, or a registry LoRA name)
