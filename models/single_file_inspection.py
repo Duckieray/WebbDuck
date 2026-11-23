@@ -111,6 +111,27 @@ def _detect_flux2_klein(normalized_keys: set[str], stem: str, metadata: dict[str
     return {"method": "tensor_keys", "confidence": "high", "family": "flux2"}
 
 
+def _detect_moss_image(normalized_keys: set[str]) -> dict[str, Any] | None:
+    """Recognize a MOSS-Image single-stream DiT checkpoint.
+
+    MOSS-Image is a 42-layer single-stream DiT whose checkpoint layout is very
+    distinctive: a shared 6-way block modulation, a fused image-stream
+    ``proj.qkv``, a two-block text projection, and video-named input/output
+    heads. Requiring the whole skeleton keeps the fingerprint exclusive to the
+    MOSS family (FLUX/FLUX.2 use ``img_in``/``txt_in`` and ``double_blocks``).
+    """
+    required = (
+        "final_linear_video.weight",
+        "video_head_modulation.weight",
+        "shared_block_modulation.weight",
+        "layers.0.proj.qkv.weight",
+        "text_embedder.blocks.0.qkv.weight",
+    )
+    if all(key in normalized_keys for key in required):
+        return {"method": "tensor_keys", "confidence": "high", "family": "moss_image"}
+    return None
+
+
 def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     """Return architecture + internal detection metadata for one safetensors file."""
     path = Path(path)
@@ -132,6 +153,7 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
         and any(key.startswith("blocks.0.attn.wq.") for key in normalized_keys)
         and "first.weight" in normalized_keys
     )
+    is_moss = _detect_moss_image(normalized_keys) is not None
 
     quantization = "none"
     quant_configs = [
@@ -166,6 +188,15 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
         return "krea2", {
             "method": "tensor_keys",
             "confidence": "high",
+            "variant": variant,
+            "quantization": quantization,
+        }
+
+    if is_moss:
+        return "moss_image", {
+            "method": "tensor_keys",
+            "confidence": "high",
+            "family": "moss_image",
             "variant": variant,
             "quantization": quantization,
         }

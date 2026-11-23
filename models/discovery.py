@@ -22,7 +22,7 @@ from models.model_descriptor import (
 from models.single_file_inspection import inspect_single_image_checkpoint
 
 
-IMAGE_ARCHITECTURES = {"sdxl", "flux", "krea2", "qwen_image"}
+IMAGE_ARCHITECTURES = {"sdxl", "flux", "krea2", "qwen_image", "moss_image"}
 
 
 def resolve_hf_cache_root() -> Path:
@@ -72,6 +72,10 @@ def _architecture_hint_from_path(path: Path, root: Path) -> str:
         "krea-2": "krea2",
         "qwen_image": "qwen_image",
         "qwen-image": "qwen_image",
+        "moss": "moss_image",
+        "moss_image": "moss_image",
+        "moss-image": "moss_image",
+        "mossimage": "moss_image",
     }
     for part in reversed(parts):
         if part in aliases:
@@ -189,6 +193,10 @@ def discover_local_image_models(checkpoint_root: Path) -> dict[str, dict[str, An
                 arch = detection.get("family", "flux")
                 if arch not in IMAGE_ARCHITECTURES:
                     arch = "flux"
+                # MOSS-Image GGUF quantization is not supported by the
+                # single-file safetensors overlay, so never route one as runnable.
+                if arch == "moss_image":
+                    continue
                 _register_unique(
                     models,
                     item.stem,

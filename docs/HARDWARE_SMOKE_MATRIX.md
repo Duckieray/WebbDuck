@@ -26,16 +26,17 @@ export WEBBDUCK_SDXL_PYTHON=...
 export WEBBDUCK_FLUX_PYTHON=...
 export WEBBDUCK_KREA2_PYTHON=...
 export WEBBDUCK_QWEN_IMAGE_PYTHON=...
+export WEBBDUCK_MOSS_IMAGE_PYTHON=...
 ```
 
 SDXL is isolated like the other image backends. Its job-scoped worker preserves
 the mature SDXL T2I/I2I/inpaint/outpaint, LoRA, textual-inversion, second-pass
 and identity-adapter paths while keeping Diffusers/model state out of the
 WebbDuck service process. SDXL currently pins the mature Diffusers 0.36.0 stack;
-FLUX, Krea and Qwen Image use their own independent requirement sets.
+FLUX, Krea, Qwen Image and MOSS Image use their own independent requirement sets.
 Runtime preparation never downloads model weights.
 
-For a systemd deployment, add the four `WEBBDUCK_*_PYTHON` values to the service
+For a systemd deployment, add the five `WEBBDUCK_*_PYTHON` values to the service
 environment rather than exporting them only in an interactive shell.
 
 Before loading any model, start WebbDuck and check:
@@ -110,6 +111,48 @@ hf download Qwen/Qwen-Image-2512
 This is a large package (roughly 58 GB) and the runtime intentionally uses
 sequential CPU offload on a 16 GB GPU.
 
+### MOSS-Image
+
+MOSS-Image support components (Qwen3.5-9B text encoder, tokenizer, FLUX.2 VAE,
+scheduler, and the remote `pipeline_moss_image.py`) come from a Diffusers
+repository:
+
+```bash
+hf download OpenMOSS-Team/MOSS-Image-Base --exclude "transformer/*"
+```
+
+The download is roughly 19 GB. The transformer is excluded because a local
+single-file DiT supplies it. Drop any MOSS-Image-based ComfyUI single-file
+checkpoint under the architecture-neutral checkpoint root (for example
+`checkpoint/moss/`); WebbDuck recognizes it from its tensor layout and overlays it
+on the shared components. `WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL` can pin a local
+snapshot or a different MOSS-Image release. If the configured Hugging Face cache
+only has a partial copy, the worker also checks the default
+`~/.cache/huggingface/hub` for a complete snapshot instead of downloading the
+text encoder again. Quantized (FP8/INT8) MOSS files are detected but not runnable
+yet. Set `WEBBDUCK_MOSS_IMAGE_LOCAL_ONLY=1` to resolve every component from the
+local Hugging Face cache (offline/air-gapped runs).
+
+On a 16 GB card the worker automatically uses `split` placement: prompt encoding
+streams the Qwen3.5 text encoder through the GPU, then the DiT stays resident for
+denoising. A 22 GB+ card uses model offload, and cards below ~14 GB fall back to
+sequential offload. Set `WEBBDUCK_MOSS_IMAGE_OFFLOAD` to `model`, `split`,
+`sequential`, or `none` to override.
+
+Measured wall-clock timings on a 16 GB card with `split` placement: 1024x1024 /
+50 steps takes about 116 s inside the worker, or 130-140 s end to end through
+the API once queueing, load and metadata are included. 896x1344 / 50 steps takes
+about 2 min 11 s. A 512x512 / 2-step pass takes roughly 30 s.
+
+MOSS-Image LoRAs are merged into the DiT before placement. Drop them in
+`lora/moss/` (or rely on the `ss_base_model_version: moss_image` metadata) so the
+catalog classifies them as `moss_image`; otherwise they will not appear in the
+LoRA list for a MOSS checkpoint. PEFT (`lora_A`/`lora_B`), Kohya
+(`lora_down`/`lora_up`) and fused `proj.qkv` adapters are supported. Note that
+reference-image LoRAs such as community CharRef adapters need the edit path MOSS
+does not expose yet, so they load without identity conditioning; style and
+step-distillation LoRAs work as-is.
+
 ### SDXL
 
 Use one existing known-good local SDXL checkpoint plus the currently configured
@@ -133,6 +176,8 @@ previous process has released the GPU lease and CUDA memory.
 | 7 | Krea-2-Turbo | T2I | 1024x1024, 8 steps, CFG 0, seed 0 | official checkpoint works |
 | 8 | Dark Beast 3 FP8 | T2I | 1024x1024, model defaults, seed 0 | single-file FP8 overlay is complete and generates |
 | 9 | Qwen-Image-2512 | T2I | model default resolution, seed 0 | sequential-offload run completes |
+| 10 | MOSS-Image single-file | T2I | 1024x1024, 50 steps, CFG 3, seed 0 | single-file DiT overlay is complete and generates |
+| 11 | MOSS-Image single-file | LoRA | one known MOSS adapter | adapter merges into the DiT and generation completes |
 
 ## 4. API-driven runner
 
@@ -151,8 +196,13 @@ python tools/run_hardware_smoke.py \
 
 Rows whose runtime/weights are ready print `READY`; missing required targets are
 `BLOCKED`. The optional SDXL asset row is skipped unless `--lora` or `--refiner`
-is supplied. The `/runtime-readiness` probe can take a few minutes on a cold
-runtime set; `--readiness-timeout` (default 300 seconds) controls that probe.
+is supplied. The MOSS-Image row (`moss-image-t2i`) is optional too: it only
+appears as required coverage when a MOSS checkpoint is discovered or
+`--moss-model` names one. Add `--moss-lora "<registry name>"` to append the
+`moss-image-lora` row and verify adapter loading end to end. The
+`/runtime-readiness` probe can take a few minutes
+on a cold runtime set; `--readiness-timeout` (default 300 seconds) controls that
+probe.
 
 When the preflight is green, explicitly opt into real generation:
 
@@ -169,6 +219,8 @@ Useful controls:
 
 ```text
 --only flux-t2i             run one row
+--only moss-image-t2i       run the optional MOSS-Image T2I row
+--moss-model "<name>"       override auto-detected MOSS-Image checkpoint name
 --only ltx-like-name        invalid here; row names are image rows only
 --timeout 7200              per-generation timeout
 --readiness-timeout 300     /runtime-readiness preflight probe timeout

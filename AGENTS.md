@@ -49,7 +49,7 @@ Key folders:
 
 - `server/` API + websocket + gallery/thumb serving
 - `core/` worker, generation orchestration, runtime routing, pipeline lifecycle
-- `core/backends/` architecture-specific generation backends (SDXL, FLUX, Krea 2, Qwen) behind `base.py`
+- `core/backends/` architecture-specific generation backends (SDXL, FLUX, Krea 2, Qwen, MOSS Image) behind `base.py`
 - `models/` registry/discovery/descriptor for models, LoRAs, embeddings; includes `metastore.py` — the canonical rich-metadata store
 - `modes/` txt2img, img2img, inpaint, outpaint, two-pass mode logic
 - `prompt/` SDXL conditioning + long-prompt chunking
@@ -157,6 +157,7 @@ Isolated backend runtimes (see `runtime_requirements/*.txt` and `docs/DEVELOPMEN
 - `WEBBDUCK_FLUX`, `WEBBDUCK_FLUX_PYTHON`, `WEBBDUCK_FLUX_OFFLOAD`, `WEBBDUCK_FLUX_TIMEOUT_SECONDS`, `WEBBDUCK_FLUX_MAX_SEQUENCE_LENGTH`, `WEBBDUCK_FLUX_IDENTITY_CACHE_DIR`
 - `WEBBDUCK_SDXL_WORKER`, `WEBBDUCK_SDXL_PYTHON`, `WEBBDUCK_SDXL_TIMEOUT_SECONDS`, `WEBBDUCK_SDXL_TOKENIZE_TIMEOUT_SECONDS`
 - `WEBBDUCK_QWEN_IMAGE_PYTHON`, `WEBBDUCK_QWEN_IMAGE_OFFLOAD`, `WEBBDUCK_QWEN_IMAGE_TIMEOUT_SECONDS`
+- `WEBBDUCK_MOSS_IMAGE_PYTHON`, `WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL`, `WEBBDUCK_MOSS_IMAGE_OFFLOAD`, `WEBBDUCK_MOSS_IMAGE_TIMEOUT_SECONDS`, `WEBBDUCK_MOSS_IMAGE_LOCAL_ONLY`
 - `WEBBDUCK_KREA`, `WEBBDUCK_KREA2_COMPONENT_MODEL`, `WEBBDUCK_KREA2_TURBO_COMPONENT_MODEL`, `WEBBDUCK_KREA2_BASE_COMPONENT_MODEL`, `WEBBDUCK_KREA2_OFFLOAD`, `WEBBDUCK_KREA2_BLOCKS_PER_GROUP`, `WEBBDUCK_KREA2_GROUP_LOW_CPU_MEM`
 - Krea realism decoder: `WEBBDUCK_KREA2_DECODER` (`stock`|`realism`), `WEBBDUCK_KREA2_DECODER_OUTPUT` (`requested`|`2x`), `WEBBDUCK_KREA2_REALISM_DECODER`, `WEBBDUCK_KREA2_REALISM_DECODER_SUBFOLDER` (see `docs/KREA2_PERFORMANCE.md`)
 - Krea 2 face/skin detailer: `WEBBDUCK_KREA2_FACE_DETECTOR` (YuNet ONNX path override; default `weights/faces/`, downloaded from `opencv/opencv_zoo`), `WEBBDUCK_KREA2_FACE_SCORE`, `WEBBDUCK_KREA2_FACE_NMS`, `WEBBDUCK_KREA2_FACE_TOP_K`

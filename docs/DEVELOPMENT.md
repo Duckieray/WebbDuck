@@ -314,7 +314,7 @@ Krea 2 (see `docs/KREA2_PERFORMANCE.md`):
 
 ## Runtime Requirements Files
 
-Optional per-backend dependency lists live in `runtime_requirements/` (`flux.txt`, `krea2.txt`, `qwen_image.txt`, `sdxl.txt`) for isolated runtimes whose dependencies may differ from WebbDuck's stable environment. Tools under `tools/` (`prepare_model_runtimes.py`, `run_hardware_smoke.py`) help set up and probe those environments; results are tracked in `docs/HARDWARE_SMOKE_MATRIX.md`.
+Optional per-backend dependency lists live in `runtime_requirements/` (`flux.txt`, `krea2.txt`, `qwen_image.txt`, `moss_image.txt`, `sdxl.txt`) for isolated runtimes whose dependencies may differ from WebbDuck's stable environment. Tools under `tools/` (`prepare_model_runtimes.py`, `run_hardware_smoke.py`) help set up and probe those environments; results are tracked in `docs/HARDWARE_SMOKE_MATRIX.md`.
 
 ## Documentation Update Checklist
 

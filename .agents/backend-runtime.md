@@ -78,6 +78,78 @@ headroom. `core/backends/flux.py` forwards `strength` in the worker payload.
 Note: `enable_sequential_cpu_offload` is incompatible with GGUF-quantized
 transformers and is auto-guarded to the diffusers path.
 
+## MOSS-Image Single-File Backend
+
+`core/backends/moss_image.py` resolves MOSS-Image support components (default
+`OpenMOSS-Team/MOSS-Image-Base`, overridable with
+`WEBBDUCK_MOSS_IMAGE_COMPONENT_MODEL`) and launches `moss_image_worker.py` in the
+`moss_image` isolated runtime. MOSS-Image's pipeline is a remote Diffusers file
+(`pipeline_moss_image.py`), not a class shipped in `diffusers`, so the worker
+imports it from the component repository instead of vendoring a copy.
+
+Single-file ComfyUI checkpoints contain only the 5B DiT. The worker builds a
+meta-device `MOSSImageTransformer` scaffold from the component
+`transformer/config.json` and streams the checkpoint into it: fused
+`layers.N.proj.qkv.weight` tensors are split into `proj.q/k/v`, the shared
+prefix is stripped, and the derived `rope.bands` buffer is rebuilt in fp32.
+Quantized (FP8/INT8) MOSS files are rejected before launch. Capabilities are
+text-to-image, negative prompt, LoRA, and reference-image identity conditioning.
+
+Reference conditioning follows the ai-toolkit `edit` training layout that
+community CharRef/Edit-HQ adapters expect (not the ComfyUI graph):
+
+- the reference is downscaled to <=384^2 pixels and read by the Qwen3.5 vision
+  tower through a `Picture 1: <|vision_start|>...<|vision_end|>` prompt block;
+- the same image is VAE-encoded, 2x2 packed and `vae.bn`-normalized into the DiT
+  latent space (default budget 768^2 pixels, clamped to 512^2 below 15 GB VRAM; `identity_adapter.reference_pixels`);
+- reference tokens are appended after the text tokens with t=0 modulation and a
+  dedicated RoPE index (`r=1`);
+- with `isolate_references` (default) reference queries only attend to reference
+  keys, so per-block reference K/V are computed once and reused. This is both
+  faster (about 88 s vs 109 s for 50 steps at 1024^2) and visually cleaner.
+
+The sampler (`_sample_with_refs`) mirrors the vendor pipeline loop so positive
+and negative branches hold separate K/V caches; it is used only when a job has
+references, so the vendor `pipe(...)` text-to-image path stays byte-identical.
+1024^2 VAE decoding does not fit beside the resident 5B DiT on 16 GB cards, so
+the reference path parks the DiT on CPU for the decode (the worker exits after
+the job). The provider id is `moss_image_reference`; the backend accepts one
+reference per job. An edit adapter is attached by registry name: a LoRA the user
+selected (`EDIT_ADAPTERS` in `core/backends/moss_image.py`), else `armV5` when
+installed (`DEFAULT_EDIT_ADAPTER`); `identity_adapter.edit_adapter` can be `none`
+or another LoRA name. The prompt prefix comes from the adapter entry (armV5:
+`Keep the same person from Picture 1.`), defaulting to `Same person as Picture 1.`
+unless `identity_adapter.prompt_prefix` overrides it.
+
+The reference is face-only by default. `core/backends/moss_identity_face.py` crops to
+the detected face (InsightFace via `flux_identity._detect_face`) and grays everything
+outside a soft oval, cached under `.moss_identity_cache`. The adapter copies whatever
+it sees, so the full photo reproduces the costume and background.
+`identity_adapter.reference_crop` is `face` (default) or `full`; `reference_face_masked`
+reports whether a face was found, and photos with no detectable face pass through.
+
+`apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.
+ai-toolkit/PEFT (`lora_A`/`lora_B`), Kohya (`lora_down`/`lora_up` + `alpha`), and
+fused `proj.qkv` adapters are all normalized; keys must resolve to
+`layers.N.proj.*`. `models/registry.py` classifies MOSS adapters from
+`ss_base_model_version` metadata or the `proj.ffn_up_gate` key marker, so
+`/model-catalog/{model}/loras` lists only compatible files. Trigger text from the
+registry is appended to the prompt, since the Qwen3.5 encoder has no
+`(token:weight)` syntax.
+
+Before launching, the worker resolves a repo id to a complete local snapshot by
+scanning the configured Hugging Face cache and the default
+`~/.cache/huggingface/hub`. This prevents a first run with an empty external
+`--hf-cache` from re-downloading the ~16 GB Qwen3.5 text encoder (which otherwise
+sits at the `Loading MOSS-Image text encoder` stage).
+
+`_configure_memory()` picks the placement strategy: model offload at 22 GB+
+VRAM, `split` at 14-22 GB, and sequential offload below 14 GB. `split` encodes
+the prompt with the text encoder streamed through the GPU, drops the encoder,
+then keeps the 5B DiT resident for denoising (about 1 s/step at 896x1344 on a
+16 GB card instead of per-block transfers on every step). Override with
+`WEBBDUCK_MOSS_IMAGE_OFFLOAD=model|split|sequential|none`.
+
 ## Krea 2 Identity Edit (krea2_identity_edit)
 
 `core/backends/krea2_identity.py` is the pure-Python contract layer for the

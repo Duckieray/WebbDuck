@@ -84,6 +84,43 @@ Click an image to inspect it full size.
 
 ## Core Generation Controls
 
+### Checkpoint Families
+
+WebbDuck routes each checkpoint to the right runtime automatically: SDXL, FLUX /
+FLUX.2, Krea 2, Qwen-Image, and MOSS-Image. MOSS-Image checkpoints run
+text-to-image with 50 steps and CFG 3 by default, and dimensions must be
+multiples of 16. Negative prompts, LoRAs, and reference-image identity
+conditioning are supported. On a 16 GB card, MOSS-Image tunes itself
+automatically: the text encoder is used once for the prompt and reference
+images and then freed, and the image model stays resident on the GPU for
+denoising.
+
+MOSS-Image LoRA picker entries come from the catalog, which classifies adapters
+as `moss_image` from their training metadata or tensor layout. Put MOSS LoRAs in
+`lora/moss/` if detection cannot tell them apart.
+
+Identity / Persona reference conditioning on MOSS-Image needs an edit adapter.
+The recommended one is `armV5` (Apache-2.0, from
+[akhaliq/MOSS-Image-Edit-HQ](https://huggingface.co/akhaliq/MOSS-Image-Edit-HQ),
+file `weights/armV5/armV5.safetensors`). Save it as `lora/moss/armV5.safetensors`
+and it is attached automatically whenever a reference is used and no other edit
+adapter is selected. Enable the section, pick one reference photo, and prompt the
+new scene. WebbDuck reads the reference through the Qwen3.5 vision tower, appends
+its latent after the text tokens, and prefixes the prompt with the adapter's
+wording (`Keep the same person from Picture 1.` for armV5). By default only the
+face of the reference photo is used: the photo is cropped around the detected
+face and the area outside a soft oval is grayed out, so the costume, background
+and pose are not copied. Long hair that falls outside the oval is not carried
+over. Set `identity_adapter.reference_crop` to `full` to use the whole photo
+instead. Photos with no detectable face are used unchanged. MOSS-Image uses a
+single reference; selecting another photo replaces it. The debug panel reports
+which edit adapter was used (`edit_adapter`, `edit_adapter_source`). The API
+accepts `identity_adapter.edit_adapter` (`auto`, `none`, or a registry LoRA name)
+and `identity_adapter.prompt_prefix` to override.
+
+CharRef v2 (`charref_v2`) is also recognized, but it was trained on anime art and
+does not keep photographic faces reliably.
+
 ### Prompt and Token Count
 
 - Prompt length is checked by the backend tokenizer.

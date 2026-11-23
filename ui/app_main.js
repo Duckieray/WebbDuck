@@ -1360,6 +1360,9 @@ function collectFormData() {
                 payload.lora_scale = parseFloat(byId('ip-adapter-lora-scale')?.value || 1.0);
                 const rank = byId('ip-adapter-lora-rank')?.value;
                 if (rank && rank !== 'auto') payload.lora_rank = rank;
+            } else if (adapterType === 'moss_image_reference') {
+                payload.isolate_references = true;
+                payload.reference_pixels = 768 * 768;
             } else {
                 payload.repo = 'h94/IP-Adapter-FaceID';
                 payload.adapter_weight = 'ip-adapter-faceid_sdxl.bin';
@@ -3003,12 +3006,13 @@ async function refreshQueuePanel() {
 let _ipAdapterRefs = [];
 let _ipAdapterPresets = {};
 
-function kreaIdentityActive() {
-    return byId('ip-adapter-type')?.value === 'krea2_identity_edit';
+function singleAnchorIdentityActive() {
+    const type = byId('ip-adapter-type')?.value;
+    return type === 'krea2_identity_edit' || type === 'moss_image_reference';
 }
 
 function addRefUrl(url) {
-    if (kreaIdentityActive()) {
+    if (singleAnchorIdentityActive()) {
         _ipAdapterRefs = [url];
     } else if (!_ipAdapterRefs.includes(url)) {
         _ipAdapterRefs.push(url);

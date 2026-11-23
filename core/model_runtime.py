@@ -7,6 +7,7 @@ from typing import Any
 from core.backends.base import backend_resolver
 from core.backends.flux import ensure_registered as ensure_flux_registered
 from core.backends.krea2 import ensure_registered as ensure_krea2_registered
+from core.backends.moss_image import ensure_registered as ensure_moss_image_registered
 from core.backends.qwen_image import ensure_registered as ensure_qwen_image_registered
 from core.backends.sdxl import ensure_registered as ensure_sdxl_registered
 from models.catalog import descriptor_for_model
@@ -20,6 +21,7 @@ _IDENTITY_PROVIDER_BY_ARCHITECTURE = {
     "flux": "flux2_native",
     "flux2": "flux2_native",
     "krea2": "krea2_identity_edit",
+    "moss_image": "moss_image_reference",
 }
 
 
@@ -95,6 +97,11 @@ def _provider_defaults(provider: str) -> dict[str, Any]:
             "flux2_anchor_dup": False,
             "face_focus": False,
         }
+    if provider == "moss_image_reference":
+        return {
+            "isolate_references": True,
+            "reference_pixels": 768 * 768,
+        }
     return {
         "embedder": "buffalo_l",
         "adapter_scale": 1.0,
@@ -119,6 +126,10 @@ def _canonicalize_provider_fields(provider: str, cfg: dict[str, Any]) -> None:
             deduped = deduped[-1:]
         elif provider == "flux2_native" and len(deduped) > 5:
             deduped = deduped[-5:]
+        elif provider == "moss_image_reference" and len(deduped) > 1:
+            # MOSS-Image edit adapters are single-reference; keep the anchor the
+            # user selected last, matching the Krea one-anchor behavior.
+            deduped = deduped[-1:]
         cfg["reference_images"] = deduped
         cfg.pop("refs", None)
 
@@ -185,6 +196,7 @@ def register_installed_backends() -> None:
     ensure_flux_registered()
     ensure_krea2_registered()
     ensure_qwen_image_registered()
+    ensure_moss_image_registered()
 
 
 def run_selected_model(settings: dict[str, Any], cancel_event=None, progress_callback=None):
