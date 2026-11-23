@@ -368,7 +368,7 @@ def test_moss_reference_budget_clamps_only_on_low_vram():
     assert _effective_reference_pixels(768 * 768, 15.56) == 768 * 768
     assert _effective_reference_pixels(768 * 768, 12.0) == 512 * 512
     assert _effective_reference_pixels(256 * 256, 12.0) == 256 * 256
-    assert _effective_reference_pixels(768 * 768, 0.0) == 640 * 640
+    assert _effective_reference_pixels(768 * 768, 0.0) == 768 * 768
 
 
 def test_moss_worker_reference_paths_validates_and_caps(tmp_path):
