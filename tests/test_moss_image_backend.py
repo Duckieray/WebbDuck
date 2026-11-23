@@ -485,6 +485,9 @@ def test_moss_face_reference_masks_outside_face(monkeypatch, tmp_path):
     assert out.shape == (1024, 1024, 3)
     # Corners are outside the oval, so they are the neutral gray fill.
     assert np.all(np.abs(out[:20, :20].astype(int) - 128) <= 2)
+    # The oval stops below the chin, so the shoulders (bottom center) stay gray
+    # instead of carrying clothing into the reference.
+    assert np.all(np.abs(out[1000:, 470:560].astype(int) - 128) <= 2)
 
     again, _ = face.prepare_face_reference(source)
     assert again == prepared

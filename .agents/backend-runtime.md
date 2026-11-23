@@ -123,10 +123,20 @@ unless `identity_adapter.prompt_prefix` overrides it.
 
 The reference is face-only by default. `core/backends/moss_identity_face.py` crops to
 the detected face (InsightFace via `flux_identity._detect_face`) and grays everything
-outside a soft oval, cached under `.moss_identity_cache`. The adapter copies whatever
-it sees, so the full photo reproduces the costume and background.
+outside a head-shaped oval that stops just below the chin, cached under
+`.moss_identity_cache`. The adapter copies whatever it sees, so the full photo
+reproduces the costume and background, and a wider oval (past the chin) carries the
+clothing in.
 `identity_adapter.reference_crop` is `face` (default) or `full`; `reference_face_masked`
 reports whether a face was found, and photos with no detectable face pass through.
+
+Prompt content is the dominant identity lever (measured, three seeds each): short
+portrait prompts score 0.71-0.74 face similarity; adding a held prop or an action
+(`holding a coffee cup`) drops it to 0.02 because the model re-composes to a full
+figure and invents a face; long descriptive prose collapses it the same way, while
+equally long quality-tag spam does not (0.692). CFG above 3, edit-adapter weights
+other than 1.0, a negative prompt, and 1024^2 vision detail all measured neutral or
+worse. 1024^2 reference latents OOM on a 16 GB card; 768^2 is the ceiling.
 
 `apply_moss_loras()` merges adapter deltas into the DiT on CPU before placement.
 ai-toolkit/PEFT (`lora_A`/`lora_B`), Kohya (`lora_down`/`lora_up` + `alpha`), and

@@ -6,8 +6,15 @@ useful signal is the face, so by default the reference is cropped around the
 detected face and everything outside a soft oval is replaced with neutral gray.
 Images with no detectable face are passed through unchanged.
 
-Measured on Dirty-MossV2 (768^2, 50 steps, seed 1234, armV5): full photo 0.602
-face similarity with the costume copied; masked face 0.681 with the costume gone.
+Measured on Dirty-MossV2 (768^2 output, 50 steps, CFG 3, armV5, face-similarity
+harness): the full photo scores 0.602 and copies the costume; this oval scores
+0.707 mean over three seeds with the costume, background and pose gone. A wider
+oval that reaches past the chin scores 0.737, but it carries the halter top, the
+ear headband and a strip of background into every render.
+
+The adapter follows the reference framing: prompts that imply a wider shot
+(full body, hands holding props) make it regenerate the whole figure, face
+included. Portrait prompts keep the likeness even when they name a species.
 """
 
 from __future__ import annotations
@@ -24,6 +31,11 @@ FACE_CROP_MODES = ("face", "full")
 DEFAULT_FACE_CROP = "face"
 FACE_FILL = 0.60
 OUTPUT_SIDE = 1024
+# Head-shaped oval in crop coordinates. The bottom edge stops just below the
+# chin so clothing on the shoulders stays out of the reference.
+MASK_CENTER = (0.50, 0.43)
+MASK_AXES = (0.28, 0.32)
+_CACHE_VERSION = "v2"
 _GRAY = 128
 
 
@@ -40,7 +52,7 @@ def _cache_dir() -> Path:
 
 def _cache_path(src: Path) -> Path:
     stat = src.stat()
-    payload = f"v1|{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{FACE_FILL}|{OUTPUT_SIDE}"
+    payload = f"{_CACHE_VERSION}|{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{FACE_FILL}|{OUTPUT_SIDE}|{MASK_CENTER}|{MASK_AXES}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
     return _cache_dir() / f"{digest}.png"
 
@@ -72,8 +84,8 @@ def _face_only(img_bgr: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarra
     ch, cw = crop.shape[:2]
     cv2.ellipse(
         mask,
-        (int(cw * 0.50), int(ch * 0.46)),
-        (int(cw * 0.34), int(ch * 0.42)),
+        (int(cw * MASK_CENTER[0]), int(ch * MASK_CENTER[1])),
+        (int(cw * MASK_AXES[0]), int(ch * MASK_AXES[1])),
         0,
         0,
         360,

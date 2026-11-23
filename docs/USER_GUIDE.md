@@ -118,6 +118,17 @@ which edit adapter was used (`edit_adapter`, `edit_adapter_source`). The API
 accepts `identity_adapter.edit_adapter` (`auto`, `none`, or a registry LoRA name)
 and `identity_adapter.prompt_prefix` to override.
 
+The reference only controls the result while the prompt stays close to a portrait
+of that person. Measured on Dirty-MossV2, a short portrait prompt keeps face
+similarity around 0.71-0.74, and a short anthro or clothing tag does not cost it
+(`a cat anthro woman on a rooftop at sunset` scored 0.740). Prompts that imply a
+wider shot or an action regenerate the whole figure and therefore a new face:
+`holding a coffee cup` dropped similarity to 0.019 and produced a medium
+full-figure shot of someone else, and long scene prose collapsed the same way
+(0.067 at 38 words, against 0.692 for 39 words of quality tags). Keep MOSS
+identity prompts short, keep the shot on the face and shoulders, and get
+appearance from LoRAs or one or two short tags rather than a paragraph.
+
 CharRef v2 (`charref_v2`) is also recognized, but it was trained on anime art and
 does not keep photographic faces reliably.
 
