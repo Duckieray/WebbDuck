@@ -784,8 +784,8 @@ def _move_split_models_to_gpu(pipe: Any, progress_path: Path | None = None) -> N
 #    once. Adapters trained with ai-toolkit's ``kv_cache: true`` expect this.
 
 REFERENCE_VLM_PIXELS = 384 * 384
-REFERENCE_LATENT_PIXELS = 640 * 640
-# 640^2 reference latents fit beside the resident DiT on a 16 GB card; below
+REFERENCE_LATENT_PIXELS = 768 * 768
+# 768^2 reference latents fit beside the resident DiT on a 16 GB card; below
 # this VRAM size fall back to 512^2 instead of running out of memory.
 REFERENCE_LATENT_PIXELS_LOW_VRAM = 512 * 512
 LOW_VRAM_GB = 15.0

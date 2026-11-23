@@ -262,7 +262,7 @@ def test_moss_backend_serializes_identity_reference_payload(monkeypatch, tmp_pat
 
     payload = captured["payload"]
     assert payload["reference_images"] == [str(reference.resolve())]
-    assert payload["reference_pixels"] == 640 * 640
+    assert payload["reference_pixels"] == 768 * 768
     assert payload["isolate_references"] is True
     assert payload["prompt"].startswith("Same person as Picture 1.")
     assert payload["prompt"].endswith("a woman standing on a rooftop at sunset")
@@ -365,10 +365,10 @@ def test_moss_backend_identity_rejects_missing_reference(tmp_path):
 def test_moss_reference_budget_clamps_only_on_low_vram():
     from core.backends.moss_image_worker import _effective_reference_pixels
 
-    assert _effective_reference_pixels(640 * 640, 15.56) == 640 * 640
-    assert _effective_reference_pixels(640 * 640, 12.0) == 512 * 512
+    assert _effective_reference_pixels(768 * 768, 15.56) == 768 * 768
+    assert _effective_reference_pixels(768 * 768, 12.0) == 512 * 512
     assert _effective_reference_pixels(256 * 256, 12.0) == 256 * 256
-    assert _effective_reference_pixels(640 * 640, 0.0) == 640 * 640
+    assert _effective_reference_pixels(768 * 768, 0.0) == 640 * 640
 
 
 def test_moss_worker_reference_paths_validates_and_caps(tmp_path):

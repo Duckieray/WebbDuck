@@ -101,7 +101,7 @@ community CharRef/Edit-HQ adapters expect (not the ComfyUI graph):
 - the reference is downscaled to <=384^2 pixels and read by the Qwen3.5 vision
   tower through a `Picture 1: <|vision_start|>...<|vision_end|>` prompt block;
 - the same image is VAE-encoded, 2x2 packed and `vae.bn`-normalized into the DiT
-  latent space (default budget 640^2 pixels, clamped to 512^2 below 15 GB VRAM; `identity_adapter.reference_pixels`);
+  latent space (default budget 768^2 pixels, clamped to 512^2 below 15 GB VRAM; `identity_adapter.reference_pixels`);
 - reference tokens are appended after the text tokens with t=0 modulation and a
   dedicated RoPE index (`r=1`);
 - with `isolate_references` (default) reference queries only attend to reference

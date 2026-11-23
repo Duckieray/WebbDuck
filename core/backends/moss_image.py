@@ -53,7 +53,7 @@ EDIT_ADAPTERS: dict[str, dict[str, str]] = {
     "charref_v2": {"prompt_prefix": "Same character and art style as Picture 1."},
 }
 DEFAULT_EDIT_ADAPTER = "armV5"
-DEFAULT_REFERENCE_PIXELS = 640 * 640
+DEFAULT_REFERENCE_PIXELS = 768 * 768
 IDENTITY_PROVIDER = "moss_image_reference"
 
 
