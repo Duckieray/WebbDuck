@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 from PIL import Image
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 from core.backends.moss_image import MossImageDiffusersBackend
 from core.backends.moss_image_worker import (
@@ -75,6 +75,34 @@ def test_structural_inspection_detects_moss_image_single_file(tmp_path):
     assert detection["method"] == "tensor_keys"
     assert detection["confidence"] == "high"
     assert detection["quantization"] == "bf16"
+
+
+def test_comfy_attention_metadata_does_not_mark_moss_file_quantized(tmp_path):
+    path = tmp_path / "Jib_Mix_Moss_V3_B_00001_.safetensors"
+    _minimal_moss_file(path)
+    tensors = {
+        "model.diffusion_model.layers.0.comfy_attention.config": torch.ones(
+            (35,), dtype=torch.uint8
+        ),
+    }
+    merged = {**load_file(str(path)), **tensors}
+    save_file(merged, str(path))
+
+    architecture, detection = inspect_single_image_checkpoint(path)
+    assert architecture == "moss_image"
+    assert detection["quantization"] == "bf16"
+
+    descriptor = describe_registry_model(
+        path.stem,
+        {
+            "path": path,
+            "type": "single",
+            "source": "local",
+            "arch": "moss_image",
+            "detection": detection,
+        },
+    )
+    assert descriptor.supported is True
 
 
 def test_generic_discovery_finds_moss_single_file_outside_family_folder(tmp_path):

@@ -16,6 +16,9 @@ from models.quantization import classify_comfy_quant, parse_comfy_quant_payload
 
 UNKNOWN_ARCHITECTURE = "unknown"
 _MAX_HEADER_BYTES = 64 * 1024 * 1024
+# ComfyUI stores per-layer attention metadata as uint8 blobs; they are not weights
+# and must not mark an otherwise dense checkpoint as quantized.
+_NON_WEIGHT_SUFFIXES = (".comfy_attention.config",)
 
 
 def _read_safetensors_header(path: Path) -> dict[str, Any]:
@@ -170,7 +173,11 @@ def inspect_single_image_checkpoint(path: Path) -> tuple[str, dict[str, Any]]:
     elif "unsupported" in quant_kinds:
         quantization = "unsupported"
     else:
-        dtypes = {str(entry.get("dtype") or "").upper() for entry in tensor_entries.values()}
+        dtypes = {
+            str(entry.get("dtype") or "").upper()
+            for key, entry in tensor_entries.items()
+            if not key.endswith(_NON_WEIGHT_SUFFIXES)
+        }
         if any(dtype.startswith("F8") for dtype in dtypes) or "fp8" in stem:
             quantization = "fp8"
         elif any(dtype in {"I8", "U8"} for dtype in dtypes):

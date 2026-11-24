@@ -38,6 +38,7 @@ DERIVED_TRANSFORMER_KEYS = {"rope.bands"}
 # ComfyUI quantization sidecars are not DiT weights. MOSS-Image checkpoints in
 # these formats are detected but not runnable yet, so the overlay fails loudly.
 _IGNORED_SOURCE_SUFFIXES = (
+    ".comfy_attention.config",
     ".comfy_quant",
     ".weight_scale",
     ".weight_scale_2",
